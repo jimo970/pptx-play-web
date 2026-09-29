@@ -412,7 +412,7 @@ try {
     slide: document.querySelector('.slide-position')?.textContent?.replace(/\\s+/g, ' ').trim(),
     transitionEffect: currentHost?.dataset.transitionEffect,
     transitionPreset: currentHost?.dataset.transitionPreset,
-    slideBackground: frame && { image: getComputedStyle(frame).backgroundImage, size: getComputedStyle(frame).backgroundSize, position: getComputedStyle(frame).backgroundPosition },
+    slideBackground: frame && { image: getComputedStyle(frame).backgroundImage, size: getComputedStyle(frame).backgroundSize, position: getComputedStyle(frame).backgroundPosition, repeat: getComputedStyle(frame).backgroundRepeat },
     hostFrame: hostRect && { left: hostRect.left, top: hostRect.top, width: hostRect.width, height: hostRect.height },
     shapes: [...(currentHost?.querySelectorAll('.slide-element') || [])].map(element => {
       const rect = element.getBoundingClientRect()
@@ -1438,6 +1438,7 @@ try {
   const verticalRandomBarTransition = await state()
   const verticalRandomBarFrames = verticalRandomBarTransition.slideTransition?.clipKeyframes || []
   assert(verticalRandomBarTransition.slide?.startsWith('17 / 67') && verticalRandomBarFrames.length === 5 && verticalRandomBarFrames.every(frame => frame.startsWith('path(')) && (verticalRandomBarFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 15, `The vertical random-bar slide transition must animate fifteen stable, interpolable masks: ${JSON.stringify(verticalRandomBarTransition.slideTransition)}`)
+  assert(/^url\(["']?blob:/.test(verticalRandomBarTransition.slideBackground?.image || '') && verticalRandomBarTransition.slideBackground?.repeat === 'repeat' && verticalRandomBarTransition.slideBackground?.size === 'auto' && verticalRandomBarTransition.slideBackground?.position === '0px 0px' && !verticalRandomBarTransition.warnings.some(warning => warning.includes('Tiled slide background')), `A default DrawingML tile fill must repeat its local image at native size without warnings: ${JSON.stringify({ background: verticalRandomBarTransition.slideBackground, warnings: verticalRandomBarTransition.warnings })}`)
   const inheritedParagraph = paragraph(verticalRandomBarTransition, '→Inherited placeholder')
   const inheritedRun = verticalRandomBarTransition.textRuns.find(run => run.text === 'Inherited placeholder')
   assert(shape(verticalRandomBarTransition, 'Inherited paragraph').boxShadow.includes('rgba(0, 0, 0, 0.5)'), `An unoverridden slide placeholder must inherit its layout outer shadow: ${shape(verticalRandomBarTransition, 'Inherited paragraph').boxShadow}`)
