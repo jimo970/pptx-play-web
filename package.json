@@ -1,0 +1,21 @@
+{
+  "name": "ppt-web-play-nuxt",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev --host 127.0.0.1",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "verify:animation": "node scripts/verify-animation.mjs"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.12",
+    "jszip": "^3.10.1",
+    "nuxt": "^4.5.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.3.11"
+  }
+}
