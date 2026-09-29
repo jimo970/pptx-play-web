@@ -285,6 +285,7 @@ export interface PptxTransitionPlayback {
 }
 
 export interface PptxAnimation {
+<<<<<<< HEAD
     targetId: string
     paragraphRange?: {start: number; end: number}
     characterRange?: {start: number; end: number}
@@ -360,6 +361,83 @@ export interface PptxAnimation {
         childOffsetMs: number
         groupEndDelayMs: number
     }
+=======
+  targetId: string
+  paragraphRange?: { start: number; end: number }
+  characterRange?: { start: number; end: number }
+  iteration?: { intervalMs: number; ranges: Array<{ start: number; end: number }>; backwards?: boolean }
+  effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'opacity' | 'media'
+  direction: 'in' | 'out'
+  durationMs: number
+  delayMs: number
+  fillMode?: 'hold' | 'freeze' | 'remove'
+  sequenceKey?: string
+  sequenceOrder?: number
+  repeatCount?: number
+  repeatDurationMs?: number
+  autoReverse?: boolean
+  wipeDirection?: 'right' | 'left' | 'up' | 'down'
+  blindsOrientation?: 'horizontal' | 'vertical'
+  checkerOrientation?: 'horz' | 'vert'
+  randomBarOrientation?: 'horizontal' | 'vertical'
+  stripsDirection?: 'ld' | 'lu' | 'rd' | 'ru'
+  barnOrientation?: 'horizontal' | 'vertical'
+  barnMotion?: 'in' | 'out'
+  shapeFilter?: 'circle' | 'diamond' | 'box' | 'plus'
+  shapeDirection?: 'in' | 'out'
+  slideFrom?: 'left' | 'right' | 'top' | 'bottom'
+  wheelSpokes?: 1 | 2 | 3 | 4 | 8
+  scaleFrom?: [number, number]
+  scaleTo?: [number, number]
+  rotationFrom?: number
+  rotationTo?: number
+  rotationRelative?: boolean
+  colorProperty?: 'fillcolor' | 'style.color' | 'stroke.color' | 'shadow.color'
+  opacityProperty?: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity'
+  colorFrom?: [number, number, number, number]
+  colorTo?: [number, number, number, number]
+  colorSpace?: 'rgb' | 'hsl'
+  colorDirection?: 'cw' | 'ccw'
+  fontSizeFrom?: number
+  fontSizeTo?: number
+  fontSizeKeyframes?: Array<{ offset: number; value: number }>
+  fontSizeKeyframeMode?: 'lin' | 'discrete'
+  fontWeightFrom?: number
+  fontWeightTo?: number
+  fontWeightKeyframes?: Array<{ offset: number; value: number }>
+  fontWeightKeyframeMode?: 'lin' | 'discrete'
+  opacityFrom?: number
+  opacityTo?: number
+  opacityKeyframes?: Array<{ offset: number; value: number }>
+  opacityKeyframeMode?: 'lin' | 'discrete'
+  mediaCommand?: 'play' | 'pause' | 'togglePause' | 'stop'
+  mediaActionKey?: string
+  mediaDurationMs?: number
+  mediaSlideCount?: number
+  mediaWaitForEnd?: boolean
+  mediaWaitForEndKeys?: string[]
+  mediaWaitDelayMs?: number
+  mediaStartSeconds?: number
+  mediaVolume?: number
+  mediaMuted?: boolean
+  motionPath?: Array<{ x: number; y: number; distance: number }>
+  motionPathLength?: number
+  motionPathSamples?: Array<{ progress: number; x: number; y: number }>
+  acceleration?: number
+  deceleration?: number
+  playbackSpeed?: number
+  reversePlayback?: boolean
+  timingWarp?: TimingCurve & {
+    groupOffsetMs: number
+    groupDurationMs: number
+    groupSpeed: number
+    groupReversePlayback: boolean
+    groupAutoReverse: boolean
+    groupPlaybackDurationMs: number
+    childOffsetMs: number
+    groupEndDelayMs: number
+  }
+>>>>>>> a9d7093 (feat: 支持文本字重动画以及 SmartArt 与 OLE 预览回退)
 }
 
 export interface PptxTriggerPlayback {
@@ -1681,6 +1759,104 @@ async function parseOlePreview(frame: Element, rels: Map<string, PptxRelationshi
     }
 }
 
+async function parseSmartArtTextFallback(
+  frame: Element,
+  rels: Map<string, PptxRelationship>,
+  zip: JSZip,
+  theme: Record<string, string>,
+  warnings: Set<string>,
+): Promise<PptxElement | undefined> {
+  const graphicData = firstDescendant(frame, 'graphicData')
+  if (!graphicData?.getAttribute('uri')?.endsWith('/diagram')) return undefined
+
+  const dataId = namespacedAttr(child(graphicData, 'relIds'), 'dm') || ''
+  const relation = rels.get(dataId)
+  let paragraphs: PptxParagraph[] = []
+  if (!relation || relation.external || !relation.type.endsWith('/diagramData')) {
+    warnings.add('SmartArt diagram data is missing or external; its text could not be recovered.')
+  } else {
+    const part = zip.file(relation.target)
+    if (!part) warnings.add('The SmartArt diagram data part is missing; its text could not be recovered.')
+    else {
+      try {
+        const xml = parseXml(await part.async('string'), relation.target)
+        const points = children(firstDescendant(xml.documentElement, 'ptLst'), 'pt')
+          .filter(point => point.getAttribute('type') === 'node')
+        for (const point of points) {
+          const pointText = child(point, 't')
+          if (!pointText) continue
+          const shape = pointText.ownerDocument.createElementNS(PRESENTATION_NS, 'p:sp')
+          const body = pointText.ownerDocument.createElementNS(PRESENTATION_NS, 'p:txBody')
+          for (const node of Array.from(pointText.childNodes)) body.appendChild(node.cloneNode(true))
+          shape.appendChild(body)
+          paragraphs.push(...parseText(shape, theme, warnings).paragraphs)
+        }
+      } catch {
+        warnings.add('The SmartArt diagram data contains invalid XML; its text could not be recovered.')
+      }
+    }
+  }
+
+  if (!paragraphs.some(paragraph => paragraph.runs.some(run => run.text.trim()))) {
+    paragraphs = [{ align: 'left', runs: [{ text: 'SmartArt text unavailable', fontSizePt: 14 }] }]
+  }
+  warnings.add('SmartArt is shown as a plain text list; node layout, hierarchy, connectors, and formatting are not reproduced.')
+  const nonVisual = firstDescendant(frame, 'cNvPr')
+  return {
+    id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
+    name: nonVisual?.getAttribute('name') || 'SmartArt text fallback',
+    kind: 'shape', geometry: 'rect', ...shapeTransform(frame),
+    fill: '#f8fafc', stroke: '#94a3b8', strokeWidth: 12_700,
+    paragraphs,
+    margins: { left: 182_880, right: 182_880, top: 137_160, bottom: 137_160 },
+    verticalAlign: 'top', textWrap: 'square',
+  }
+}
+
+async function parseOlePreview(
+  frame: Element,
+  rels: Map<string, PptxRelationship>,
+  zip: JSZip,
+  theme: Record<string, string>,
+  warnings: Set<string>,
+  urls: string[],
+  imageUrlCache: Map<string, string>,
+): Promise<PptxElement | undefined> {
+  const graphicData = firstDescendant(frame, 'graphicData')
+  const ole = child(graphicData, 'oleObj')
+  if (!ole && graphicData?.getAttribute('uri') !== OLE_GRAPHIC_DATA_URI) return undefined
+
+  const preview = child(ole, 'pic')
+  const previewBlip = preview && firstDescendant(preview, 'blip')
+  const previewRelation = rels.get(namespacedAttr(previewBlip, 'embed') || '')
+  if (preview && previewRelation && !previewRelation.external && zip.file(previewRelation.target)) {
+    const picture = await parsePicture(preview, rels, zip, theme, warnings, urls, imageUrlCache)
+    if (picture.imageUrl) {
+      warnings.add('An OLE object is displayed from its embedded preview image; its embedded or linked content is not opened.')
+      const nonVisual = firstDescendant(frame, 'cNvPr')
+      return {
+        ...picture,
+        id: nonVisual?.getAttribute('id') || picture.id,
+        name: nonVisual?.getAttribute('name') || picture.name,
+        ...shapeTransform(frame),
+      }
+    }
+  }
+
+  warnings.add('An OLE object has no usable embedded preview image; a labeled placeholder is shown.')
+  const nonVisual = firstDescendant(frame, 'cNvPr')
+  const label = ole?.getAttribute('progId') || ole?.getAttribute('name') || nonVisual?.getAttribute('name') || 'Embedded object'
+  return {
+    id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
+    name: nonVisual?.getAttribute('name') || 'OLE object preview',
+    kind: 'shape', geometry: 'rect', ...shapeTransform(frame),
+    fill: '#f8fafc', stroke: '#94a3b8', strokeWidth: 12_700,
+    paragraphs: [{ align: 'center', runs: [{ text: label, fontSizePt: 14, bold: true }] }],
+    margins: { left: 182_880, right: 182_880, top: 137_160, bottom: 137_160 },
+    verticalAlign: 'middle', textWrap: 'square',
+  }
+}
+
 // ChartPart contains a DrawingML chart; cached points are the last chart data saved in OOXML.
 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.packaging.chartpart?view=openxml-3.0.1
 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.numberingcache?view=openxml-3.0.1
@@ -2719,6 +2895,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 }
             }
         }
+<<<<<<< HEAD
         collect(targetGroup)
         groupTargets.set(groupId, ids)
         return ids
@@ -4025,6 +4202,622 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     }
                 }
             })
+=======
+        paragraphOffset += text.length + (paragraphIndex < element.paragraphs.length - 1 ? 1 : 0)
+        if (overflow) break
+      }
+      if (overflow) {
+        warnings.add('Text iteration exceeding 10,000 units was rendered as a single animation.')
+        return undefined
+      }
+      return ranges.length > 1 ? { intervalMs, ranges, backwards } : undefined
+    }
+    const elementIterationActions = (action: PptxAnimation): PptxAnimation[] | undefined => {
+      if (iterate?.getAttribute('type') !== 'el') return undefined
+      const targetIds = groupChildren(action.targetId) || (renderedElementIds.has(action.targetId) ? [action.targetId] : [])
+      if (!targetIds.length) {
+        warnings.add('A shape iteration target has no rendered shapes and was skipped.')
+        return []
+      }
+      if (targetIds.length === 1) return [{ ...action, targetId: targetIds[0]! }]
+      const interval = iterationTiming(action, true)
+      return targetIds.map((targetId, index) => ({
+        ...action,
+        targetId,
+        delayMs: action.delayMs + (interval?.intervalMs || 0) * (interval?.backwards ? targetIds.length - index - 1 : index),
+      }))
+    }
+    const addMediaAction = (node: Element, targetId: string, mediaCommand: NonNullable<PptxAnimation['mediaCommand']>, options: Pick<PptxAnimation, 'mediaStartSeconds' | 'mediaVolume' | 'mediaMuted' | 'mediaDurationMs' | 'mediaSlideCount' | 'mediaWaitForEnd'> = {}) => {
+      const element = elements.find(item => item.id === targetId)
+      if (!element || !['audio', 'video'].includes(element.kind)) {
+        warnings.add('A media timeline action without an embedded audio or video target was skipped.')
+        handledMediaActions.add(node)
+        return
+      }
+      const timeNode = firstDescendant(node, 'cTn')
+      const conditions = children(child(timeNode, 'stCondLst'), 'cond')
+      const condition = conditions[0]
+      const delay = condition?.getAttribute('delay')
+      if (conditions.length > 1 || condition && (Array.from(condition.attributes).some(attribute => attribute.localName !== 'delay') || condition.children.length || delay === 'indefinite' || delay !== null && (!Number.isFinite(Number(delay)) || Number(delay) < 0))) {
+        warnings.add('A media timeline action with event-based or invalid start conditions was skipped.')
+        handledMediaActions.add(node)
+        return
+      }
+      const key = `media:${timeNode?.getAttribute('id') || actions.size}`
+      actions.set(key, {
+        targetId, effect: 'media', direction: 'in', mediaCommand, ...options,
+        durationMs: 0, delayMs: delayMs + milliseconds(delay),
+      })
+      handledMediaActions.add(node)
+    }
+    for (const mediaNode of [...ownedDescendants('audio'), ...ownedDescendants('video')].filter(node => node.namespaceURI === PRESENTATION_NS)) {
+      const media = child(mediaNode, 'cMediaNode')
+      if (!media) {
+        warnings.add('A timed media playback action without a common media node was skipped.')
+        handledMediaActions.add(mediaNode)
+        continue
+      }
+      const animationTarget = target(media)
+      if (!animationTarget.targetId || animationTarget.hasUnsupportedTextRange || animationTarget.paragraphRange || animationTarget.characterRange) {
+        warnings.add('A timed media playback action with an unsupported target was skipped.')
+        handledMediaActions.add(mediaNode)
+        continue
+      }
+      const volumeValue = media.getAttribute('vol')
+      const volume = volumeValue === null ? undefined : Number(volumeValue) / 100_000
+      const muteValue = media.getAttribute('mute')?.toLowerCase()
+      const muted = muteValue === undefined ? undefined : ['1', 'true'].includes(muteValue)
+      const slideCountValue = media.getAttribute('numSld')
+      const parsedSlideCount = slideCountValue === null ? undefined : Number(slideCountValue)
+      const mediaSlideCount = parsedSlideCount !== undefined && Number.isInteger(parsedSlideCount) && parsedSlideCount > 0 && parsedSlideCount <= 0xffff_ffff
+        ? parsedSlideCount
+        : undefined
+      if (volumeValue !== null && (!Number.isFinite(volume) || volume! < 0 || volume! > 1)) warnings.add('An invalid media timeline volume was ignored.')
+      if (muteValue !== undefined && !['0', '1', 'false', 'true'].includes(muteValue)) warnings.add('An invalid media timeline mute value was ignored.')
+      if (slideCountValue !== null && mediaSlideCount === undefined) warnings.add('An invalid media timeline numSld value was ignored.')
+      if (mediaSlideCount && mediaSlideCount > 1 && elements.find(element => element.id === animationTarget.targetId)?.kind === 'video') warnings.add('Cross-slide video playback is not supported; the video stops when leaving its slide.')
+      const mediaTimeNode = firstDescendant(media, 'cTn')
+      const mediaDurationValue = mediaTimeNode?.getAttribute('dur')
+      const endConditions = children(child(mediaTimeNode, 'endCondLst'), 'cond')
+      const hasSupportedEndCondition = elements.find(element => element.id === animationTarget.targetId)?.kind === 'audio' && endConditions.every(condition => {
+        const delay = condition.getAttribute('delay')
+        return condition.getAttribute('evt') === 'onStopAudio'
+          && Boolean(firstDescendant(condition, 'sldTgt'))
+          && (delay === null || /^\d+$/.test(delay) && Number(delay) === 0)
+      })
+      const indefiniteDuration = mediaDurationValue === 'indefinite'
+      const parsedMediaDuration = mediaDurationValue === null || mediaDurationValue === undefined
+        ? 0
+        : /^\d+$/.test(mediaDurationValue) ? Number(mediaDurationValue) : undefined
+      const mediaDurationMs = parsedMediaDuration !== undefined && Number.isFinite(parsedMediaDuration) && parsedMediaDuration <= 2_147_483_625
+        ? parsedMediaDuration
+        : undefined
+      if (parsedMediaDuration !== undefined && mediaDurationMs === undefined) warnings.add('A media timeline duration beyond the supported ST_TLTime range was skipped.')
+      if (mediaDurationValue !== null && mediaDurationValue !== undefined && !indefiniteDuration && parsedMediaDuration === undefined) warnings.add('An invalid media timeline duration was skipped.')
+      if (endConditions.length && !hasSupportedEndCondition) warnings.add('A media timeline end condition other than slide-targeted onStopAudio is not synchronized yet.')
+      addMediaAction(mediaNode, animationTarget.targetId, 'play', {
+        mediaVolume: volume !== undefined && volume >= 0 && volume <= 1 ? volume : undefined,
+        mediaMuted: muteValue === undefined || ['0', '1', 'false', 'true'].includes(muteValue) ? muted : undefined,
+        mediaDurationMs,
+        mediaSlideCount,
+        mediaWaitForEnd: indefiniteDuration && (!endConditions.length || hasSupportedEndCondition),
+      })
+    }
+    for (const command of ownedDescendants('cmd').filter(node => node.namespaceURI === PRESENTATION_NS)) {
+      const animationTarget = target(command)
+      const commandType = command.getAttribute('type')
+      const source = command.getAttribute('cmd')?.trim() || ''
+      const playFrom = /^PlayFrom\(\s*(\d+(?:\.\d+)?)\s*\)$/i.exec(source)
+      const normalizedCommand = source.toLowerCase()
+      const mediaCommand = playFrom ? 'play' : normalizedCommand === 'togglepause' ? 'togglePause'
+        : normalizedCommand === 'pause' ? 'pause' : normalizedCommand === 'stop' ? 'stop' : undefined
+      if (!mediaCommand || commandType !== 'call' || !animationTarget.targetId || animationTarget.hasUnsupportedTextRange || animationTarget.paragraphRange || animationTarget.characterRange) {
+        warnings.add('An unsupported media or object command in the slide timeline was skipped.')
+        handledMediaActions.add(command)
+        continue
+      }
+      const startSeconds = playFrom ? Number(playFrom[1]) : undefined
+      if (startSeconds !== undefined && (!Number.isFinite(startSeconds) || startSeconds > 86_400)) {
+        warnings.add('A PlayFrom media command with an out-of-range start time was skipped.')
+        handledMediaActions.add(command)
+        continue
+      }
+      addMediaAction(command, animationTarget.targetId, mediaCommand, { mediaStartSeconds: startSeconds })
+    }
+    for (const effect of ownedDescendants('animEffect')) {
+      const animationTarget = target(effect)
+      const textElement = elements.find(item => item.id === animationTarget.targetId)
+      const transition = effect.getAttribute('transition')
+      const filter = effect.getAttribute('filter')
+      const wipe = /^wipe\((right|left|up|down)\)$/.exec(filter || '')
+      // Microsoft Open XML uses filter="blinds(horizontal)" for an object entrance effect.
+      // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.animateeffect?view=openxml-3.0.1
+      const blinds = /^blinds\((horizontal|vertical)\)$/.exec(filter || '')
+      // MS-OE376 documents checkerboard(across/down) as object-effect filters.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const checker = /^checkerboard\((across|down)\)$/.exec(filter || '')
+      // MS-OE376 lists random horizontal and vertical object bars.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const randomBar = /^randombar\((horizontal|vertical)\)$/.exec(filter || '')
+      // MS-OE376 lists four diagonal strips variants as object filters.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const strips = /^strips\((downLeft|upLeft|downRight|upRight)\)$/.exec(filter || '')
+      // MS-OE376 lists the four horizontal/vertical barn object filters.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const barn = /^barn\((in|out)(Horizontal|Vertical)\)$/.exec(filter || '')
+      // Office lists these four filters; translate their object across the slide as an entrance/exit.
+      // The from-side direction is interpreted from the named OOXML filter.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const slide = /^slide\(from(Top|Bottom|Left|Right)\)$/.exec(filter || '')
+      // MS-OE376 lists dissolve as an image-filter animation.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const dissolve = filter === 'dissolve'
+      // MS-OE376 names these object filters and their subtypes.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const shapeFilter = /^(circle|diamond|box|plus)\((in|out)\)$/.exec(filter || '')
+      // MS-OE376 defines wedge and wheel(1/2/3/4/8) object filters.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+      const wheel = /^wheel\(([1-4]|8)\)$/.exec(filter || '')
+      const wedge = filter === 'wedge'
+      if (!animationTarget.targetId) {
+        warnings.add('An object animation has no shape target and was skipped.')
+        continue
+      }
+      if (animationTarget.hasUnsupportedTextRange) {
+        warnings.add('This text range animation target is malformed or unsupported.')
+        continue
+      }
+      if (!hasValidCharacterRange(animationTarget, textElement)) {
+        warnings.add('A character-range animation exceeds the target text length and was skipped.')
+        continue
+      }
+      if (['in', 'out'].includes(transition || '') && (['fade', 'none', 'cut'].includes(filter || '') || wipe || blinds || checker || randomBar || strips || barn || slide || dissolve || shapeFilter || wheel || wedge)) {
+        const paragraphWipe = Boolean(wipe && animationTarget.paragraphRange && !animationTarget.characterRange)
+        const characterWipe = Boolean(wipe && animationTarget.characterRange && !animationTarget.paragraphRange)
+        // Microsoft documents pRg with checkerboard(across) as a valid paragraph-targeted animation.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.paragraphindexrange?view=openxml-3.0.1
+        const unsupportedTextMask = randomBar || strips || barn || slide || dissolve || shapeFilter || wheel || wedge || wipe && !paragraphWipe && !characterWipe
+        if (unsupportedTextMask && (animationTarget.paragraphRange || animationTarget.characterRange)) {
+          warnings.add('Text-range slide, random bars, strips, barn, dissolve, wheel, and shape-mask animations are not rendered yet.')
+          handledEffects.add(effect)
+          continue
+        }
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.progress
+        const timeNode = firstDescendant(effect, 'cTn')
+        const timing = animationTiming(timeNode, 'Object')
+        if (!timing) {
+          handledEffects.add(effect)
+          continue
+        }
+        const key = `${animationTarget.targetId}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+        actions.set(key, {
+          targetId: animationTarget.targetId,
+          paragraphRange: animationTarget.paragraphRange,
+          characterRange: animationTarget.characterRange,
+          effect: wheel || wedge ? 'wheel' : slide ? 'slide' : strips ? 'strips' : barn ? 'barn' : dissolve ? 'dissolve' : shapeFilter ? 'shape' : randomBar ? 'randomBars' : checker ? 'checker' : blinds ? 'blinds' : wipe ? 'wipe' : filter === 'fade' ? 'fade' : 'appear',
+          direction: transition as 'in' | 'out',
+          durationMs: animationDurationMs(timeNode, timing),
+          delayMs: delayMs + startDelay(timeNode),
+          ...timing,
+          wipeDirection: wipe?.[1] as PptxAnimation['wipeDirection'],
+          blindsOrientation: blinds?.[1] as PptxAnimation['blindsOrientation'],
+          checkerOrientation: checker?.[1] === 'across' ? 'horz' : checker ? 'vert' : undefined,
+          randomBarOrientation: randomBar?.[1] as PptxAnimation['randomBarOrientation'],
+          stripsDirection: strips ? ({ downLeft: 'ld', upLeft: 'lu', downRight: 'rd', upRight: 'ru' } as const)[strips[1] as 'downLeft' | 'upLeft' | 'downRight' | 'upRight'] : undefined,
+          barnOrientation: barn?.[2]?.toLowerCase() as PptxAnimation['barnOrientation'],
+          barnMotion: barn?.[1] as PptxAnimation['barnMotion'],
+          shapeFilter: shapeFilter?.[1] as PptxAnimation['shapeFilter'],
+          shapeDirection: shapeFilter?.[2] as PptxAnimation['shapeDirection'],
+          slideFrom: slide?.[1]?.toLowerCase() as PptxAnimation['slideFrom'],
+          wheelSpokes: wheel ? Number(wheel[1]) as PptxAnimation['wheelSpokes'] : wedge ? 1 : undefined,
+        })
+        handledEffects.add(effect)
+      } else {
+        warnings.add(`The ${transition || 'unknown'} ${filter || 'unknown'} object animation is not rendered.`)
+      }
+    }
+    for (const animation of ownedDescendants('animScale')) {
+      const animationTarget = target(animation)
+      const timeNode = firstDescendant(animation, 'cTn')
+      const element = elements.find(item => item.id === animationTarget.targetId)
+      if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element)) {
+        warnings.add('A scale animation with an unsupported target or text range was skipped.')
+        continue
+      }
+      const timing = animationTiming(timeNode, 'Scale')
+      if (!timing) {
+        handledScales.add(animation)
+        continue
+      }
+      // DrawingML scale coordinates are in 100,000ths; the SDK example uses by=150000 for a 150% scale.
+      // https://learn.microsoft.com/zh-cn/dotnet/api/documentformat.openxml.presentation.animatescale?view=openxml-3.0.1
+      const pair = (node: Element): [number, number] => [numberAttr(node, 'x', 100_000) / 100_000, numberAttr(node, 'y', 100_000) / 100_000]
+      const fromNode = child(animation, 'from')
+      const toNode = child(animation, 'to')
+      const byNode = child(animation, 'by')
+      const scaleFrom = fromNode ? pair(fromNode) : [1, 1] as [number, number]
+      const by = byNode ? pair(byNode) : undefined
+      const scaleTo = toNode
+        ? pair(toNode)
+        : by
+          ? [scaleFrom[0] * by[0], scaleFrom[1] * by[1]] as [number, number]
+          : undefined
+      if (!scaleTo || [...scaleFrom, ...scaleTo].some(value => !Number.isFinite(value) || value <= 0 || value > 10)) {
+        warnings.add('A scale animation with missing or out-of-range values was skipped.')
+        continue
+      }
+      const key = `${animationTarget.targetId}:scale:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+      actions.set(key, {
+        targetId: animationTarget.targetId,
+        paragraphRange: animationTarget.paragraphRange,
+        characterRange: animationTarget.characterRange,
+        effect: 'scale', direction: 'in', scaleFrom, scaleTo,
+        durationMs: animationDurationMs(timeNode, timing),
+        delayMs: delayMs + startDelay(timeNode),
+        ...timing,
+      })
+      handledScales.add(animation)
+    }
+    for (const animation of ownedDescendants('animRot')) {
+      const behavior = child(animation, 'cBhvr')
+      const animationTarget = target(behavior || animation)
+      const element = elements.find(item => item.id === animationTarget.targetId)
+      const names = descendants(child(behavior, 'attrNameLst'), 'attrName')
+      const property = names[0]?.textContent?.trim()
+      if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element) || !['r', 'ppt_r', 'style.rotation'].includes(property || '')) {
+        warnings.add('A rotation animation with an unsupported target or property was skipped.')
+        continue
+      }
+      const rawFrom = animation.getAttribute('from')
+      const rawTo = animation.getAttribute('to')
+      const rawBy = animation.getAttribute('by')
+      const parseAngle = (value: string | null) => value !== null && /^[-+]?\d+$/.test(value) && Number.isFinite(Number(value)) && Math.abs(Number(value)) <= 2_147_483_647
+        ? Number(value) / 60_000
+        : undefined
+      const from = rawFrom === null ? undefined : parseAngle(rawFrom)
+      const to = rawTo === null ? undefined : parseAngle(rawTo)
+      const by = rawBy === null ? undefined : parseAngle(rawBy)
+      const valid = from !== undefined && to !== undefined && rawBy === null
+        || from !== undefined && by !== undefined && rawTo === null
+        || rawFrom === null && to !== undefined && rawBy === null
+        || rawFrom === null && rawTo === null && by !== undefined
+      if (!valid) {
+        warnings.add('A rotation animation with an invalid from/to/by combination was skipped.')
+        continue
+      }
+      const rotationFrom = from ?? 0
+      const rotationTo = to ?? (rotationFrom + (by ?? 0))
+      const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
+      const timing = animationTiming(timeNode, 'Rotation')
+      if (!timing) {
+        handledRotations.add(animation)
+        continue
+      }
+      const key = `${animationTarget.targetId}:rotation:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+      actions.set(key, {
+        targetId: animationTarget.targetId,
+        paragraphRange: animationTarget.paragraphRange,
+        characterRange: animationTarget.characterRange,
+        effect: 'rotation', direction: 'in',
+        rotationFrom, rotationTo, rotationRelative: from === undefined && to === undefined,
+        durationMs: animationDurationMs(timeNode, timing),
+        delayMs: delayMs + startDelay(timeNode),
+        ...timing,
+      })
+      handledRotations.add(animation)
+    }
+    for (const animation of ownedDescendants('animClr')) {
+      const behavior = child(animation, 'cBhvr')
+      const animationTarget = target(behavior || animation)
+      const property = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent?.trim()
+      const element = elements.find(item => item.id === animationTarget.targetId)
+      const colorSpace = animation.getAttribute('clrSpc') || 'rgb'
+      const colorDirection = animation.getAttribute('dir') || 'cw'
+      const invalidTarget = !element || animationTarget.hasUnsupportedTextRange || (animationTarget.paragraphRange || animationTarget.characterRange) && property !== 'style.color'
+        || !hasValidCharacterRange(animationTarget, element)
+        || property === 'fillcolor' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))
+        || property === 'stroke.color' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))
+        || property === 'shadow.color' && !element?.shadow && !element?.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))
+        || property === 'style.color' && (!element?.paragraphs.length || element.kind === 'table' && animationTarget.paragraphRange)
+      if (!animationTarget.targetId || invalidTarget || !['fillcolor', 'style.color', 'stroke.color', 'shadow.color'].includes(property || '')) {
+        warnings.add('A color animation with an unsupported target or property was skipped.')
+        handledColors.add(animation)
+        continue
+      }
+      if (!['rgb', 'hsl'].includes(colorSpace) || !['cw', 'ccw'].includes(colorDirection)) {
+        warnings.add('A color animation with an unsupported color space or hue direction was skipped.')
+        handledColors.add(animation)
+        continue
+      }
+      const colorValue = (wrapper: Element | undefined) => animationColorChannels(children(wrapper)[0], theme, colorSpace as 'rgb' | 'hsl')
+      const fromNode = child(animation, 'from')
+      const toNode = child(animation, 'to')
+      const byNode = child(animation, 'by')
+      const black: [number, number, number, number] = [0, 0, 0, 1]
+      const colorFrom = fromNode ? colorValue(fromNode) : black
+      const explicitTo = toNode ? colorValue(toNode) : undefined
+      const colorBy = byNode ? colorValue(byNode) : undefined
+      if (!colorFrom || toNode && !explicitTo || !toNode && byNode && !colorBy || !toNode && !byNode) {
+        warnings.add('A color animation with missing or invalid from/to/by colors was skipped.')
+        handledColors.add(animation)
+        continue
+      }
+      const colorTo = explicitTo || colorFrom.map((channel, index) => {
+        const sum = channel + colorBy![index]!
+        return index === 0 && colorSpace === 'hsl' ? sum : Math.max(0, Math.min(index === 3 ? 1 : colorSpace === 'rgb' && index < 3 ? 255 : 1, sum))
+      }) as [number, number, number, number]
+      const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
+      const timing = animationTiming(timeNode, 'Color')
+      if (!timing) {
+        handledColors.add(animation)
+        continue
+      }
+      const key = `${animationTarget.targetId}:color:${property}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+      actions.set(key, {
+        targetId: animationTarget.targetId,
+        paragraphRange: animationTarget.paragraphRange,
+        characterRange: animationTarget.characterRange,
+        effect: 'color', direction: 'in',
+        colorProperty: property as PptxAnimation['colorProperty'], colorFrom, colorTo,
+        colorSpace: colorSpace as PptxAnimation['colorSpace'], colorDirection: colorDirection as PptxAnimation['colorDirection'],
+        durationMs: animationDurationMs(timeNode, timing),
+        delayMs: delayMs + startDelay(timeNode),
+        ...timing,
+      })
+      handledColors.add(animation)
+    }
+    for (const animation of ownedDescendants('anim')) {
+      // Microsoft lists style.fontWeight among p:tav formula-capable target attributes.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa
+      // https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-animation
+      // p:tav elements are time/value keypoints; numeric opacity supports the discrete and linear calculation modes.
+      // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timeanimatevalue?view=openxml-3.0.1
+      // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.animatebehaviorcalculatemodevalues?view=openxml-3.0.1
+      const behavior = child(animation, 'cBhvr')
+      const animationTarget = target(behavior || animation)
+      const property = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent?.trim()
+      const element = elements.find(item => item.id === animationTarget.targetId)
+      const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
+      const tavList = child(animation, 'tavLst')
+      const calculationMode = animation.getAttribute('calcmode') || 'lin'
+      if (!animationTarget.targetId || !['style.fontSize', 'style.fontWeight', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(property || '') || !element
+        || ['style.fontSize', 'style.fontWeight'].includes(property || '') && !element.paragraphs.length
+        || property === 'fill.opacity' && (element.kind !== 'shape' || element.fill.includes('gradient('))
+        || property === 'stroke.opacity' && (!['shape', 'line'].includes(element.kind) || element.stroke.includes('gradient('))
+        || property === 'shadow.opacity' && !element.shadow && !element.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))
+        || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)
+        || animation.getAttribute('valueType') && animation.getAttribute('valueType') !== 'num'
+        || !['lin', 'discrete'].includes(calculationMode)
+        || calculationMode === 'discrete' && !tavList
+        || tavList && children(tavList).some(node => node.localName !== 'tav')) {
+        warnings.add('A generic object animation with an unsupported target or interpolation was skipped.')
+        handledTextAnimations.add(animation)
+        continue
+      }
+      const rawFrom = animation.getAttribute('from')
+      const rawTo = animation.getAttribute('to')
+      const rawBy = animation.getAttribute('by')
+      const parseFixedPercentage = (raw: string | null): number | undefined => {
+        if (raw === null) return undefined
+        const value = raw.trim()
+        // ST_PositiveFixedPercentage accepts a trailing percent or 1000ths of a percent; Office writes the latter.
+        // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c1f1feac-e34c-48d5-b2e2-f67bb67113e7
+        if (/^\d+(?:\.\d+)?%$/.test(value)) return Number(value.slice(0, -1)) / 100
+        if (/^\d+$/.test(value)) return Number(value) / 100_000
+        return undefined
+      }
+      const keyframeNodes = tavList ? children(tavList) : []
+      // ponytail: cap at 256 keypoints to bound parser and per-frame work; raise only when real decks need denser curves.
+      const keyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256 ? keyframeNodes.map((node) => {
+        const valueNode = children(child(node, 'val'))[0]
+        const offset = parseFixedPercentage(node.getAttribute('tm'))
+        const rawValue = valueNode && ['fltVal', 'strVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
+        const value = rawValue?.trim() ? Number(rawValue) : Number.NaN
+        return offset !== undefined && offset >= 0 && offset <= 1 && Number.isFinite(value) && value >= 0 && value <= 1000 && !node.hasAttribute('fmla')
+          ? { offset, value }
+          : undefined
+      }).filter((frame): frame is { offset: number; value: number } => Boolean(frame)) : undefined
+      const validKeyframes = Boolean(keyframes?.length && keyframes.length === keyframeNodes.length && keyframes.every((frame, index) => index === 0 || frame.offset > keyframes[index - 1]!.offset))
+      if (!['style.fontSize', 'style.fontWeight'].includes(property || '')) {
+        const hasTextRange = Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
+        if (hasTextRange && property !== 'style.opacity') {
+          warnings.add('Text-range fill, stroke, and shadow opacity animations are not rendered yet.')
+          handledTextAnimations.add(animation)
+          continue
+        }
+        const validOpacityKeyframes = Boolean(validKeyframes && keyframes?.every(frame => frame.value <= 1))
+        const validValues = tavList
+          ? validOpacityKeyframes && rawFrom === null && rawTo === null && rawBy === null
+          : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
+        const from = rawFrom === null ? 0 : Number(rawFrom)
+        const to = rawTo !== null ? Number(rawTo) : rawBy !== null ? from + Number(rawBy) : undefined
+        if (!validValues || !tavList && (to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from > 1 || to < 0 || to > 1)) {
+          warnings.add('A generic opacity animation with missing or out-of-range values was skipped.')
+          handledTextAnimations.add(animation)
+          continue
+        }
+        const timing = animationTiming(timeNode, 'Opacity')
+        if (!timing) {
+          handledTextAnimations.add(animation)
+          continue
+        }
+        const rangeKey = hasTextRange
+          ? ':' + (animationTarget.paragraphRange?.start ?? '') + ':' + (animationTarget.paragraphRange?.end ?? '') + ':' + (animationTarget.characterRange?.start ?? '') + ':' + (animationTarget.characterRange?.end ?? '')
+          : ''
+        actions.set(animationTarget.targetId + ':opacity:' + property + rangeKey, {
+          targetId: animationTarget.targetId,
+          paragraphRange: animationTarget.paragraphRange,
+          characterRange: animationTarget.characterRange,
+          effect: 'opacity', opacityProperty: property as PptxAnimation['opacityProperty'], direction: 'in',
+          opacityFrom: keyframes?.[0]?.value ?? from, opacityTo: keyframes?.at(-1)?.value ?? to, opacityKeyframes: keyframes,
+          opacityKeyframeMode: tavList ? calculationMode as NonNullable<PptxAnimation['opacityKeyframeMode']> : undefined,
+          durationMs: animationDurationMs(timeNode, timing),
+          delayMs: delayMs + startDelay(timeNode),
+          ...timing,
+        })
+        handledTextAnimations.add(animation)
+        continue
+      }
+      if (property === 'style.fontWeight') {
+        const validFontWeightKeyframes = Boolean(validKeyframes && keyframes?.every(frame => frame.value >= 1 && frame.value <= 1000))
+        const validValues = tavList
+          ? validFontWeightKeyframes && rawFrom === null && rawTo === null && rawBy === null
+          : rawFrom !== null && rawTo !== null && rawBy === null
+        const from = keyframes?.[0]?.value ?? (rawFrom === null ? Number.NaN : Number(rawFrom))
+        const to = keyframes?.at(-1)?.value ?? (rawTo === null ? Number.NaN : Number(rawTo))
+        if (!validValues || !Number.isFinite(from) || !Number.isFinite(to) || from < 1 || from > 1000 || to < 1 || to > 1000) {
+          warnings.add('A generic text font-weight animation with missing or out-of-range numeric values was skipped.')
+          handledTextAnimations.add(animation)
+          continue
+        }
+        const timing = animationTiming(timeNode, 'Text font weight')
+        if (!timing) {
+          handledTextAnimations.add(animation)
+          continue
+        }
+        const key = `${animationTarget.targetId}:fontWeight:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+        actions.set(key, {
+          targetId: animationTarget.targetId,
+          paragraphRange: animationTarget.paragraphRange,
+          characterRange: animationTarget.characterRange,
+          effect: 'fontWeight', direction: 'in', fontWeightFrom: from, fontWeightTo: to,
+          fontWeightKeyframes: keyframes,
+          fontWeightKeyframeMode: tavList ? calculationMode as NonNullable<PptxAnimation['fontWeightKeyframeMode']> : undefined,
+          durationMs: animationDurationMs(timeNode, timing),
+          delayMs: delayMs + startDelay(timeNode),
+          ...timing,
+        })
+        handledTextAnimations.add(animation)
+        continue
+      }
+      const validFontSizeKeyframes = Boolean(validKeyframes && keyframes?.every(frame => frame.value > 0))
+      const validValues = tavList
+        ? validFontSizeKeyframes && rawFrom === null && rawTo === null && rawBy === null
+        : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
+      const from = keyframes?.[0]?.value ?? (rawFrom === null ? 1 : Number(rawFrom))
+      const to = keyframes?.at(-1)?.value ?? (rawTo === null ? rawBy === null ? undefined : from + Number(rawBy) : Number(rawTo))
+      if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0 || from > 100 || to > 100) {
+        warnings.add('A generic text animation with missing or out-of-range font sizes was skipped.')
+        handledTextAnimations.add(animation)
+        continue
+      }
+      const timing = animationTiming(timeNode, 'Text font size')
+      if (!timing) {
+        handledTextAnimations.add(animation)
+        continue
+      }
+      const key = `${animationTarget.targetId}:fontSize:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+      actions.set(key, {
+        targetId: animationTarget.targetId,
+        paragraphRange: animationTarget.paragraphRange,
+        characterRange: animationTarget.characterRange,
+        effect: 'fontSize', direction: 'in', fontSizeFrom: from, fontSizeTo: to, fontSizeKeyframes: keyframes,
+        fontSizeKeyframeMode: tavList ? calculationMode as NonNullable<PptxAnimation['fontSizeKeyframeMode']> : undefined,
+        durationMs: animationDurationMs(timeNode, timing),
+        delayMs: delayMs + startDelay(timeNode),
+        ...timing,
+      })
+      handledTextAnimations.add(animation)
+    }
+    for (const animation of ownedDescendants('animMotion')) {
+      const animationTarget = target(animation)
+      const timeNode = firstDescendant(animation, 'cTn')
+      const element = elements.find(item => item.id === animationTarget.targetId)
+      const path = animation.getAttribute('path')?.trim() || ''
+      const origin = animation.getAttribute('origin') || 'parent'
+      const fromNode = child(animation, 'from')
+      const toNode = child(animation, 'to')
+      const byNode = child(animation, 'by')
+      const hasPosition = Boolean(fromNode || toNode || byNode)
+      if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element)) {
+        warnings.add('A motion animation with an unsupported target or text range was skipped.')
+        continue
+      }
+      if (!path && !hasPosition && ['layout', 'parent'].includes(origin)) {
+        // An empty p:animMotion path has no visual effect but still consumes its behavior duration.
+        // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/498c3cfa-652c-49b3-a82c-33fd94468af8
+        const timing = animationTiming(timeNode, 'Motion')
+        if (timing) actions.set(`${animationTarget.targetId}:timing:${timeNode?.getAttribute('id') || ''}`, {
+          targetId: animationTarget.targetId, effect: 'timingOnly', direction: 'in',
+          durationMs: animationDurationMs(timeNode, timing),
+          delayMs: delayMs + startDelay(timeNode), ...timing,
+        })
+        handledMotions.add(animation)
+        continue
+      }
+      if (!['layout', 'parent'].includes(origin) || (path ? hasPosition : !hasPosition)) {
+        warnings.add('Motion animations without a supported layout or parent path are not rendered yet.')
+        continue
+      }
+      const timing = animationTiming(timeNode, 'Motion')
+      if (!timing) {
+        handledMotions.add(animation)
+        continue
+      }
+      const angleSource = animation.getAttribute('rAng')
+      const angleText = angleSource?.trim()
+      const rotationAngle = angleText === undefined ? 0 : /^[+-]?\d+$/.test(angleText) ? Number(angleText) : Number.NaN
+      const readCoordinate = (raw: string | null): number | undefined => {
+        if (raw === null) return undefined
+        const value = raw.trim()
+        // MS-OI29500 ST_Percentage is either a percent value or integer thousandths of a percent.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.rotationcenter?view=openxml-3.0.1
+        if (/^[+-]?(?:\d+\.?\d*|\.\d+)%$/.test(value)) return Number(value.slice(0, -1)) / 100
+        if (/^[+-]?\d+$/.test(value)) return Number(value) / 100_000
+        return undefined
+      }
+      const readPosition = (node: Element | undefined): [number, number] | undefined => {
+        if (!node) return undefined
+        const x = readCoordinate(node.getAttribute('x'))
+        const y = readCoordinate(node.getAttribute('y'))
+        return x !== undefined && y !== undefined && Number.isFinite(x) && Number.isFinite(y) ? [x, y] : undefined
+      }
+      const rotationCenter = readPosition(child(animation, 'rCtr'))
+      // PowerPoint defaults rAng to zero; nonzero values need an explicit slide-space rCtr.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/498c3cfa-652c-49b3-a82c-33fd94468af8
+      if (!Number.isInteger(rotationAngle) || rotationAngle < -2_147_483_648 || rotationAngle > 2_147_483_647 || rotationAngle !== 0 && (origin !== 'layout' || !rotationCenter)) {
+        warnings.add('A motion animation with an invalid rotation angle or unsupported rotation center was skipped.')
+        continue
+      }
+      const angleRadians = rotationAngle * Math.PI / (60_000 * 180)
+      const angleCosine = Math.cos(angleRadians), angleSine = Math.sin(angleRadians)
+      const rotateMotionOffset = (x: number, y: number): [number, number] => {
+        if (rotationAngle === 0 || !rotationCenter || !element) return [x, y]
+        const centerX = rotationCenter[0] * slideWidth, centerY = rotationCenter[1] * slideHeight
+        const dx = element.x + x - centerX, dy = element.y + y - centerY
+        return [centerX + dx * angleCosine - dy * angleSine - element.x, centerY + dx * angleSine + dy * angleCosine - element.y]
+      }
+      if (!path) {
+        const hasFrom = Boolean(fromNode), hasTo = Boolean(toNode), hasBy = Boolean(byNode)
+        const validCombination = hasTo !== hasBy && (hasFrom || hasTo || hasBy)
+        const from = readPosition(fromNode), to = readPosition(toNode), by = readPosition(byNode)
+        if (!element || !validCombination || fromNode && !from || toNode && !to || byNode && !by) {
+          warnings.add('A motion animation with an invalid from/to/by position was skipped.')
+          continue
+        }
+        const start: [number, number] = from || (origin === 'layout' ? [0, 0] : [element.x / slideWidth, element.y / slideHeight])
+        const end: [number, number] = to || [start[0] + (by?.[0] || 0), start[1] + (by?.[1] || 0)]
+        const toOffset = (coordinates: [number, number]): [number, number] => origin === 'layout'
+          ? [coordinates[0] * slideWidth, coordinates[1] * slideHeight]
+          : [coordinates[0] * slideWidth - element.x, coordinates[1] * slideHeight - element.y]
+        const [startX, startY] = toOffset(start)
+        const [endX, endY] = toOffset(end)
+        const [rotatedStartX, rotatedStartY] = rotateMotionOffset(startX, startY)
+        const [rotatedEndX, rotatedEndY] = rotateMotionOffset(endX, endY)
+        const limit = 100 * Math.max(slideWidth, slideHeight)
+        const distance = Math.hypot(rotatedEndX - rotatedStartX, rotatedEndY - rotatedStartY)
+        if ([rotatedStartX, rotatedStartY, rotatedEndX, rotatedEndY].some(value => !Number.isFinite(value) || Math.abs(value) > limit) || !Number.isFinite(distance)) {
+          warnings.add('A motion animation with out-of-range from/to/by coordinates was skipped.')
+          continue
+        }
+        const key = `${animationTarget.targetId}:motion:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+        actions.set(key, {
+          targetId: animationTarget.targetId, paragraphRange: animationTarget.paragraphRange, characterRange: animationTarget.characterRange,
+          effect: 'motion', direction: 'in',
+          motionPath: [{ x: rotatedStartX, y: rotatedStartY, distance: 0 }, { x: rotatedEndX, y: rotatedEndY, distance }], motionPathLength: distance,
+          durationMs: animationDurationMs(timeNode, timing),
+          delayMs: delayMs + startDelay(timeNode), ...timing,
+>>>>>>> a9d7093 (feat: 支持文本字重动画以及 SmartArt 与 OLE 预览回退)
         })
     }
 
@@ -4341,6 +5134,7 @@ function applyGroupTransform(element: PptxElement, parent: Matrix2D): PptxElemen
     const transform = multiplyMatrix(
         parent,
         multiplyMatrix(
+<<<<<<< HEAD
             translationMatrix(element.x, element.y),
             multiplyMatrix(translationMatrix(element.width / 2, element.height / 2), multiplyMatrix(rotationMatrix(element.rotation), multiplyMatrix([element.flipH ? -1 : 1, 0, 0, element.flipV ? -1 : 1, 0, 0], translationMatrix(-element.width / 2, -element.height / 2))))
         )
@@ -4353,6 +5147,159 @@ function applyGroupTransform(element: PptxElement, parent: Matrix2D): PptxElemen
     ].map(([x, y]) => [transform[0] * x! + transform[2] * y! + transform[4], transform[1] * x! + transform[3] * y! + transform[5]])
     const minX = Math.min(...corners.map(([x]) => x!))
     const minY = Math.min(...corners.map(([, y]) => y!))
+=======
+          rotationMatrix(element.rotation),
+          multiplyMatrix(
+            [element.flipH ? -1 : 1, 0, 0, element.flipV ? -1 : 1, 0, 0],
+            translationMatrix(-element.width / 2, -element.height / 2),
+          ),
+        ),
+      ),
+    ),
+  )
+  const corners = [[0, 0], [element.width, 0], [element.width, element.height], [0, element.height]]
+    .map(([x, y]) => [transform[0] * x! + transform[2] * y! + transform[4], transform[1] * x! + transform[3] * y! + transform[5]])
+  const minX = Math.min(...corners.map(([x]) => x!))
+  const minY = Math.min(...corners.map(([, y]) => y!))
+  return {
+    ...element,
+    x: minX,
+    y: minY,
+    rotation: 0,
+    flipH: false,
+    flipV: false,
+    motionParent: { matrix: parent, x: element.x, y: element.y },
+    renderMatrix: [transform[0], transform[1], transform[2], transform[3], transform[4] - minX, transform[5] - minY],
+  }
+}
+
+async function parseSceneElements(
+  node: Element,
+  rels: Map<string, PptxRelationship>,
+  zip: JSZip,
+  theme: Record<string, string>,
+  warnings: Set<string>,
+  urls: string[],
+  imageUrlCache: Map<string, string>,
+  parentTransform?: Matrix2D,
+): Promise<PptxElement[]> {
+  if (node.localName === 'grpSp') {
+    const localTransform = groupTransformMatrix(node)
+    if (!localTransform) {
+      warnings.add('A grouped shape with invalid coordinate extents was skipped.')
+      return []
+    }
+    const transform = parentTransform ? multiplyMatrix(parentTransform, localTransform) : localTransform
+    const elements: PptxElement[] = []
+    for (const item of children(node)) {
+      if (!['sp', 'pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(item.localName)) continue
+      elements.push(...await parseSceneElements(item, rels, zip, theme, warnings, urls, imageUrlCache, transform))
+    }
+    return elements
+  }
+
+  let element: PptxElement | undefined
+  if (node.localName === 'sp' || node.localName === 'cxnSp') element = parseShape(node, theme, warnings)
+  else if (node.localName === 'pic') element = await parsePicture(node, rels, zip, theme, warnings, urls, imageUrlCache)
+  else if (node.localName === 'graphicFrame') {
+    element = parseTable(node, theme, warnings)
+    if (!element && firstDescendant(node, 'chart')) element = await parseChart(node, rels, zip, theme, warnings)
+    else if (!element) {
+      element = await parseOlePreview(node, rels, zip, theme, warnings, urls, imageUrlCache)
+      if (!element) element = await parseSmartArtTextFallback(node, rels, zip, theme, warnings)
+      if (!element) warnings.add('Unsupported graphic frames are not rendered yet.')
+    }
+  }
+  if (element && node.localName === 'cxnSp') warnings.add('Connector geometry is not fully rendered yet.')
+  if (!element) return []
+  return [parentTransform ? applyGroupTransform(element, parentTransform) : element]
+}
+
+async function backgroundFill(
+  xml: XMLDocument | undefined,
+  rels: Map<string, PptxRelationship>,
+  theme: Record<string, string>,
+  warnings: Set<string>,
+  zip: JSZip,
+  urls: string[],
+  imageUrlCache: Map<string, string>,
+): Promise<{ color?: string; image?: PptxSlide['backgroundImage'] }> {
+  const background = xml && firstDescendant(xml.documentElement, 'bg')
+  const properties = child(background, 'bgPr')
+  if (!properties) {
+    if (child(background, 'bgRef')) warnings.add('Theme slide background references are not rendered.')
+    return {}
+  }
+  const imageFill = child(properties, 'blipFill')
+  if (!imageFill) {
+    if (child(properties, 'grpFill')) warnings.add('Group slide background fills are not rendered.')
+    const color = fillColor(properties, theme, warnings)
+    return { color: color === 'transparent' ? undefined : color }
+  }
+  const tile = child(imageFill, 'tile')
+  const blip = child(imageFill, 'blip')
+  const relationId = namespacedAttr(blip, 'embed') || namespacedAttr(blip, 'link') || ''
+  const relation = rels.get(relationId)
+  if (!relation || relation.external || namespacedAttr(blip, 'link')) {
+    warnings.add('An external or unresolved slide background image was ignored.')
+    return {}
+  }
+  const url = await imageUrlFor(relation.target, zip, urls, imageUrlCache)
+  if (!url) {
+    warnings.add('A slide background image could not be resolved.')
+    return {}
+  }
+  const sourceRect = child(imageFill, 'srcRect')
+  const cropValue = (name: string) => sourceRect?.hasAttribute(name) ? Number(sourceRect.getAttribute(name)) : 0
+  const crop = {
+    left: cropValue('l'), top: cropValue('t'), right: cropValue('r'), bottom: cropValue('b'),
+  }
+  if (Object.values(crop).some(value => !Number.isSafeInteger(value) || value < 0 || value > 100_000)
+    || crop.left + crop.right >= 100_000 || crop.top + crop.bottom >= 100_000) {
+    warnings.add('An invalid slide background image crop was ignored.')
+    return {}
+  }
+  if (tile) {
+    // DrawingML tile defaults: top-left alignment, no flip, 100% scale, and zero offset.
+    // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c0c046ec-a61d-405d-88fe-74d8487a37d7
+    const readTileScale = (name: 'sx' | 'sy') => {
+      const raw = tile.getAttribute(name)
+      if (raw === null) return 1
+      const value = raw.trim()
+      // ST_Percentage is written as thousandths of a percent or a percent string.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/ff18a37e-9bd7-4338-9c37-1e285b5a5dd2
+      const scale = /^(?:\d+\.?\d*|\.\d+)%$/.test(value) ? Number(value.slice(0, -1)) / 100
+        : /^\d+$/.test(value) ? Number(value) / 100_000
+          : Number.NaN
+      if (!Number.isFinite(scale) || scale <= 0) {
+        warnings.add(`An invalid slide background tile ${name} scale was replaced with 100%.`)
+        return 1
+      }
+      return scale
+    }
+    const scaleX = readTileScale('sx')
+    const scaleY = readTileScale('sy')
+    const rawAlign = tile.getAttribute('algn') || 'tl'
+    const alignValues = ['tl', 't', 'tr', 'l', 'ctr', 'r', 'bl', 'b', 'br'] as const
+    const align = alignValues.includes(rawAlign as typeof alignValues[number]) ? rawAlign as typeof alignValues[number] : 'tl'
+    if (align !== rawAlign) warnings.add(`An invalid slide background tile alignment "${rawAlign}" was replaced with top-left.`)
+    const readTileOffset = (name: 'tx' | 'ty') => {
+      if (!tile.hasAttribute(name)) return 0
+      const raw = tile.getAttribute(name) || ''
+      const value = Number(raw)
+      if (!/^[+-]?\d+$/.test(raw.trim()) || !Number.isSafeInteger(value)) {
+        warnings.add(`An invalid slide background tile ${name} offset was replaced with zero.`)
+        return 0
+      }
+      return value
+    }
+    const rawFlip = tile.getAttribute('flip') || 'none'
+    const flips = ['none', 'x', 'y', 'xy'] as const
+    const flip = flips.includes(rawFlip as typeof flips[number]) ? rawFlip as typeof flips[number] : 'none'
+    const hasCrop = Object.values(crop).some(value => value !== 0)
+    if (hasCrop) warnings.add('A cropped tiled slide background uses the full image while tiling.')
+    if (flip !== rawFlip) warnings.add(`Unknown slide background tile flip "${rawFlip}" was replaced with none.`)
+>>>>>>> a9d7093 (feat: 支持文本字重动画以及 SmartArt 与 OLE 预览回退)
     return {
         ...element,
         x: minX,
