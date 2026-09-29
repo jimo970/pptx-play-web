@@ -1393,7 +1393,9 @@ function textFontSizeAnimationStyle(element: PptxElement, paragraphIndex: number
       continue
     }
     if (progress === null || progress < 0 || action.fontWeightFrom === undefined || action.fontWeightTo === undefined) continue
-    weight = action.fontWeightKeyframes?.length
+    weight = action.fontWeightFormulaSamples?.length
+      ? animationKeyframeValue(action.fontWeightFormulaSamples, 'lin', progress)
+      : action.fontWeightKeyframes?.length
       ? animationKeyframeValue(action.fontWeightKeyframes, action.fontWeightKeyframeMode, progress)
       : action.fontWeightFrom + (action.fontWeightTo - action.fontWeightFrom) * progress
   }
