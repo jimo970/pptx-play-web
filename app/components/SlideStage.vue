@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, useId, type CSSProperties } from 'vue'
+import { computed, nextTick, reactive, useId, watch, type CSSProperties } from 'vue'
 import { formatChartNumber } from '~/utils/chart-number-format'
 import { hslToRgb } from '~/utils/color'
 import type { PptxAnimation, PptxChart, PptxChartDataLabelPosition, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxParagraph, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx'
@@ -41,16 +41,25 @@ interface ChartVisual {
   markers: Array<{ x: number; y: number; color: string }>
   slices: Array<{ d: string; color: string }>
   legend: Array<{ text: string; x: number; y: number; color: string }>
+  legendClip?: { id: string; x: number; y: number; width: number; height: number }
   dataLabels: Array<{ text: string; lines: string[]; x: number; y: number; anchor: string }>
   baseline: { x1: number; y1: number; x2: number; y2: number }
   valueAxisLine?: { x1: number; y1: number; x2: number; y2: number }
 }
 
-function makeChartVisual(chart: PptxChart): ChartVisual {
+type ChartLegendPosition = NonNullable<PptxChart['legend']>['position']
+
+function defaultLegendOrigin(position: ChartLegendPosition | undefined, axis: 'x' | 'y') {
+  if (axis === 'x') return position === 'left' ? 88 : position === 'right' ? 780 : position === 'topRight' ? 760 : 88
+  return position === 'left' || position === 'right' ? 105 : position === 'top' ? 77 : position === 'topRight' ? 92 : 530
+}
+
+function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   const position = chart.legend?.position
-  const plot = position === 'left' ? { left: 330, top: 75, width: 608, height: 390 }
-    : position === 'right' ? { left: 88, top: 75, width: 650, height: 390 }
-      : position === 'top' ? { left: 88, top: 145, width: 850, height: 320 }
+  const plotPosition = chart.legend?.overlay ? undefined : position
+  const plot = plotPosition === 'left' ? { left: 330, top: 75, width: 608, height: 390 }
+    : plotPosition === 'right' ? { left: 88, top: 75, width: 650, height: 390 }
+      : plotPosition === 'top' ? { left: 88, top: 145, width: 850, height: 320 }
         : { left: 88, top: 75, width: 850, height: 390 }
   const values = chart.series.flatMap(series => series.values.filter((value): value is number => value !== null && value !== undefined))
   const dataMin = Math.min(0, ...values)
@@ -140,7 +149,8 @@ function makeChartVisual(chart: PptxChart): ChartVisual {
     const showValue = series.valueLabelOverrides[index] ?? series.showValueLabels
     const showCategory = series.categoryNameLabelOverrides[index] ?? series.showCategoryNameLabels
     const showSeries = series.seriesNameLabelOverrides[index] ?? series.showSeriesNameLabels
-    const showPercent = chart.type === 'pie' && (series.percentLabelOverrides[index] ?? series.showPercentLabels)
+    const isPieLike = chart.type === 'pie' || chart.type === 'doughnut'
+    const showPercent = isPieLike && (series.percentLabelOverrides[index] ?? series.showPercentLabels)
     const parts = [
       showValue ? formatValue(value, series, index) : undefined,
       showCategory ? category : undefined,
@@ -148,21 +158,22 @@ function makeChartVisual(chart: PptxChart): ChartVisual {
       showPercent && total ? formatChartNumber(value / total, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat ?? '0.0%') : undefined,
     ].filter((part): part is string => part !== undefined)
     if (!parts.length) return undefined
-    const defaultSeparator = chart.type === 'pie' && !showValue && showCategory && !showSeries && showPercent ? '\n' : ','
+    const defaultSeparator = isPieLike && !showValue && showCategory && !showSeries && showPercent ? '\n' : ','
     return parts.join(series.labelSeparatorOverrides[index] ?? series.labelSeparator ?? chart.labelSeparator ?? defaultSeparator)
   }
 
-  if (chart.type === 'pie') {
+  if (chart.type === 'pie' || chart.type === 'doughnut') {
     const series = chart.series[0]!
     const centerX = plot.left + plot.width / 2
     const centerY = plot.top + plot.height / 2
     const radius = Math.min(plot.width, plot.height) * 0.47
+    const innerRadius = chart.type === 'doughnut' ? radius * (chart.holeSize ?? 50) / 100 : 0
     const points = chart.categories.flatMap((text, index) => {
       const value = series.values[index]
       return value != null && value > 0 ? [{ text, index, value, color: series.pointColors[index] || chart.palette[index % chart.palette.length] || series.color }] : []
     })
     const total = points.reduce((sum, point) => sum + point.value, 0)
-    let angle = -Math.PI / 2
+    let angle = -Math.PI / 2 + (chart.firstSliceAngle ?? 0) * Math.PI / 180
     for (const point of points) {
       const sweep = point.value / total * Math.PI * 2
       const startX = centerX + Math.cos(angle) * radius
@@ -170,15 +181,29 @@ function makeChartVisual(chart: PptxChart): ChartVisual {
       const endAngle = angle + sweep
       const endX = centerX + Math.cos(endAngle) * radius
       const endY = centerY + Math.sin(endAngle) * radius
-      const d = sweep >= Math.PI * 2 - 0.0001
-        ? `M ${centerX} ${centerY} L ${centerX} ${centerY - radius} A ${radius} ${radius} 0 1 1 ${centerX} ${centerY + radius} A ${radius} ${radius} 0 1 1 ${centerX} ${centerY - radius} Z`
-        : `M ${centerX} ${centerY} L ${startX} ${startY} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`
+      const endInnerX = centerX + Math.cos(endAngle) * innerRadius
+      const endInnerY = centerY + Math.sin(endAngle) * innerRadius
+      const startInnerX = centerX + Math.cos(angle) * innerRadius
+      const startInnerY = centerY + Math.sin(angle) * innerRadius
+      const fullCircle = sweep >= Math.PI * 2 - 0.0001
+      const d = innerRadius > 0
+        ? fullCircle
+          ? `M ${startX} ${startY} A ${radius} ${radius} 0 1 1 ${centerX - Math.cos(angle) * radius} ${centerY - Math.sin(angle) * radius} A ${radius} ${radius} 0 1 1 ${startX} ${startY} L ${startInnerX} ${startInnerY} A ${innerRadius} ${innerRadius} 0 1 0 ${centerX - Math.cos(angle) * innerRadius} ${centerY - Math.sin(angle) * innerRadius} A ${innerRadius} ${innerRadius} 0 1 0 ${startInnerX} ${startInnerY} Z`
+          : `M ${startX} ${startY} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} L ${endInnerX} ${endInnerY} A ${innerRadius} ${innerRadius} 0 ${sweep > Math.PI ? 1 : 0} 0 ${startInnerX} ${startInnerY} Z`
+        : fullCircle
+          ? `M ${centerX} ${centerY} L ${startX} ${startY} A ${radius} ${radius} 0 1 1 ${centerX - Math.cos(angle) * radius} ${centerY - Math.sin(angle) * radius} A ${radius} ${radius} 0 1 1 ${startX} ${startY} Z`
+          : `M ${centerX} ${centerY} L ${startX} ${startY} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`
       slices.push({ d, color: point.color })
       const label = formatDataLabel(series, point.index, point.value, point.text, total)
       if (label !== undefined) {
         const labelAngle = angle + sweep / 2
         const position = labelPosition(series, point.index, 'ctr')
-        const labelRadius = radius * (position === 'outEnd' ? 1.12 : position === 'inEnd' ? 0.82 : position === 'inBase' ? 0.24 : position === 'bestFit' ? 0.62 : 0.68)
+        const labelRadius = chart.type === 'doughnut'
+          ? position === 'outEnd' ? radius * 1.12
+            : position === 'inEnd' ? innerRadius + (radius - innerRadius) * 0.82
+              : position === 'inBase' ? innerRadius + (radius - innerRadius) * 0.18
+                : (radius + innerRadius) / 2
+          : radius * (position === 'outEnd' ? 1.12 : position === 'inEnd' ? 0.82 : position === 'inBase' ? 0.24 : position === 'bestFit' ? 0.62 : 0.68)
         const x = position === 'l' ? centerX - radius * 0.75 : position === 'r' ? centerX + radius * 0.75 : centerX + Math.cos(labelAngle) * labelRadius
         const y = position === 't' ? centerY - radius * 0.78 : position === 'b' ? centerY + radius * 0.78 : centerY + Math.sin(labelAngle) * labelRadius + 6
         const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
@@ -186,7 +211,10 @@ function makeChartVisual(chart: PptxChart): ChartVisual {
       }
       angle = endAngle
     }
-    points.slice(0, 12).forEach((point, index) => legend.push({ text: point.text, x: 590, y: 105 + index * 28, color: point.color }))
+    points.slice(0, 12).forEach(point => {
+      if (chart.legend?.hiddenEntries?.includes(point.index)) return
+      legend.push({ text: point.text, x: 590, y: 105 + legend.length * 28, color: point.color })
+    })
   } else {
     const seriesCount = Math.max(chart.series.length, 1)
     for (let index = 0; index < categoryCount; index++) {
@@ -280,23 +308,50 @@ function makeChartVisual(chart: PptxChart): ChartVisual {
         }
       })
     }
-    chart.series.slice(0, 12).forEach((series, index) => legend.push({ text: series.name, x: 88 + (index % 4) * 220, y: 530 + Math.floor(index / 4) * 22, color: series.color }))
+    chart.series.slice(0, 12).forEach(series => {
+      if (chart.legend?.hiddenEntries?.includes(series.legendIndex)) return
+      legend.push({ text: series.name, x: 88 + (legend.length % 4) * 220, y: 530 + Math.floor(legend.length / 4) * 22, color: series.color })
+    })
   }
 
   if (!chart.legend) legend.length = 0
-  else legend.forEach((entry, index) => {
+  else {
     const pos = chart.legend!.position
-    const x = pos === 'left' ? 88 : pos === 'right' ? 780 : pos === 'topRight' ? 760 : 88 + index % 4 * 220
-    const y = pos === 'left' || pos === 'right' ? 105 + index * 28
+    const defaultX = defaultLegendOrigin(pos, 'x')
+    const defaultY = defaultLegendOrigin(pos, 'y')
+    const manual = chart.legend!.manualLayout
+    const originX = manual?.x ? (manual.x.mode === 'edge' ? manual.x.value * 1000 : defaultX + manual.x.value * 1000) : defaultX
+    const originY = manual?.y ? (manual.y.mode === 'edge' ? manual.y.value * 600 : defaultY + manual.y.value * 600) : defaultY
+    const offsetX = originX - defaultX
+    const offsetY = originY - defaultY
+    legend.forEach((entry, index) => {
+      const x = pos === 'left' ? 88 : pos === 'right' ? 780 : pos === 'topRight' ? 760 : 88 + index % 4 * 220
+      const y = pos === 'left' || pos === 'right' ? 105 + index * 28
       : pos === 'top' ? 77 + Math.floor(index / 4) * 18
         : pos === 'topRight' ? 92 + index * 22
           : 530 + Math.floor(index / 4) * 22
-    legend[index] = { ...entry, x, y }
-  })
+      legend[index] = { ...entry, x: x + offsetX, y: y + offsetY }
+    })
+  }
+  const manualLayout = chart.legend?.manualLayout
+  let legendClip: ChartVisual['legendClip']
+  if (manualLayout?.w || manualLayout?.h) {
+    const x = manualLayout.x?.mode === 'edge' ? manualLayout.x.value * 1000 : defaultLegendOrigin(chart.legend?.position, 'x') + (manualLayout.x?.value || 0) * 1000
+    const y = manualLayout.y?.mode === 'edge' ? manualLayout.y.value * 600 : defaultLegendOrigin(chart.legend?.position, 'y') + (manualLayout.y?.value || 0) * 600
+    const width = manualLayout.w?.mode === 'edge' ? manualLayout.w.value * 1000 - x : (manualLayout.w?.value ?? 1) * 1000
+    const height = manualLayout.h?.mode === 'edge' ? manualLayout.h.value * 600 - y : (manualLayout.h?.value ?? 1) * 600
+    legendClip = {
+      id: `${customGradientScope}-legend-${elementId}`.replace(/[^a-zA-Z0-9_-]/g, '_'),
+      x,
+      y,
+      width: Math.max(0, width),
+      height: Math.max(0, height),
+    }
+  }
   const baseline = horizontalValueAxis
     ? { x1: categoryAxisCrossingCoordinate, y1: plot.top, x2: categoryAxisCrossingCoordinate, y2: plot.top + plot.height }
     : { x1: plot.left, y1: categoryAxisCrossingCoordinate, x2: plot.left + plot.width, y2: categoryAxisCrossingCoordinate }
-  return { plot, ticks, axisTicks, categories, bars, lines, markers, slices, legend, dataLabels, baseline, valueAxisLine }
+  return { plot, ticks, axisTicks, categories, bars, lines, markers, slices, legend, ...(legendClip ? { legendClip } : {}), dataLabels, baseline, valueAxisLine }
 }
 
 const props = withDefaults(defineProps<{
@@ -311,17 +366,100 @@ const props = withDefaults(defineProps<{
 }>(), { animationStep: 0, thumbnail: false, playbackPreview: false })
 const emit = defineEmits<{ 'trigger-playback': [playback: PptxTriggerPlayback[]] }>()
 
+const backgroundImageSize = ref<{ sourceUrl: string; url: string; width: number; height: number; repeatX: number; repeatY: number }>()
+const backgroundTileWarning = ref('')
+watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundImage?.tile), props.slide.backgroundImage?.tile?.flip || 'none'] as const, ([url, tiled, flip], _oldValue, onCleanup) => {
+  backgroundImageSize.value = undefined
+  backgroundTileWarning.value = ''
+  if (!import.meta.client || !url || !tiled) return
+  const probe = new Image()
+  let current = true
+  let generatedUrl: string | undefined
+  onCleanup(() => {
+    current = false
+    probe.onload = null
+    probe.onerror = null
+    if (generatedUrl) URL.revokeObjectURL(generatedUrl)
+  })
+  probe.onerror = () => {
+    if (current) backgroundTileWarning.value = 'The tiled slide background image could not be decoded.'
+  }
+  probe.onload = () => {
+    if (!current || probe.naturalWidth < 1 || probe.naturalHeight < 1) return
+    const width = probe.naturalWidth
+    const height = probe.naturalHeight
+    const flipX = flip === 'x' || flip === 'xy'
+    const flipY = flip === 'y' || flip === 'xy'
+    const imageSize = { sourceUrl: url, url, width, height, repeatX: flipX ? 2 : 1, repeatY: flipY ? 2 : 1 }
+    if (!flipX && !flipY) {
+      backgroundImageSize.value = imageSize
+      return
+    }
+    // ponytail: cap synthesized flip patterns at 16 MP; downsample if real decks hit this ceiling.
+    if (width * imageSize.repeatX > 32_767 || height * imageSize.repeatY > 32_767 || width * height * imageSize.repeatX * imageSize.repeatY > 16_777_216) {
+      backgroundTileWarning.value = 'The tiled background flip exceeds the local canvas limit; the unflipped image is used.'
+      backgroundImageSize.value = { ...imageSize, repeatX: 1, repeatY: 1 }
+      return
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = width * imageSize.repeatX
+    canvas.height = height * imageSize.repeatY
+    const context = canvas.getContext('2d')
+    if (!context) {
+      backgroundTileWarning.value = 'The browser could not render the tiled background flip; the unflipped image is used.'
+      backgroundImageSize.value = { ...imageSize, repeatX: 1, repeatY: 1 }
+      return
+    }
+    const drawTile = (x: number, y: number, mirrorX: boolean, mirrorY: boolean) => {
+      context.save()
+      context.translate(x + (mirrorX ? width : 0), y + (mirrorY ? height : 0))
+      context.scale(mirrorX ? -1 : 1, mirrorY ? -1 : 1)
+      context.drawImage(probe, 0, 0, width, height)
+      context.restore()
+    }
+    drawTile(0, 0, false, false)
+    if (flipX) drawTile(width, 0, true, false)
+    if (flipY) drawTile(0, height, false, true)
+    if (flipX && flipY) drawTile(width, height, true, true)
+    canvas.toBlob(blob => {
+      if (!current) return
+      if (!blob) {
+        backgroundTileWarning.value = 'The browser could not encode the tiled background flip; the unflipped image is used.'
+        backgroundImageSize.value = { ...imageSize, repeatX: 1, repeatY: 1 }
+        return
+      }
+      generatedUrl = URL.createObjectURL(blob)
+      backgroundImageSize.value = { ...imageSize, url: generatedUrl }
+    }, 'image/png')
+  }
+  probe.src = url
+}, { immediate: true })
+
 const frameStyle = computed<CSSProperties>(() => {
   const image = props.slide.backgroundImage
   if (!image) return { aspectRatio: `${props.width} / ${props.height}`, background: props.slide.background }
   const { left, top, right, bottom } = image.crop
+  const tile = image.tile
+  const alignments = { tl: [0, 0], t: [50, 0], tr: [100, 0], l: [0, 50], ctr: [50, 50], r: [100, 50], bl: [0, 100], b: [50, 100], br: [100, 100] } as const
+  const naturalSize = backgroundImageSize.value?.sourceUrl === image.url ? backgroundImageSize.value : undefined
+  const tileWidth = naturalSize && tile ? naturalSize.width * tile.scaleX : 0
+  const tileHeight = naturalSize && tile ? naturalSize.height * tile.scaleY : 0
+  const tilePosition = (alignment: number, offset: number) => offset === 0
+    ? `${alignment}%`
+    : `calc(${alignment}% ${offset < 0 ? '-' : '+'} ${Math.abs(offset)}px)`
+  const position = tile && tile.align === 'tl' && tile.offsetX === 0 && tile.offsetY === 0 && (naturalSize?.repeatX ?? 1) === 1 && (naturalSize?.repeatY ?? 1) === 1
+    ? '0px 0px'
+    : tile ? `${tilePosition(alignments[tile.align][0], tile.offsetX * scale.value + tileWidth * alignments[tile.align][0] / 100 * ((naturalSize?.repeatX ?? 1) - 1))} ${tilePosition(alignments[tile.align][1], tile.offsetY * scale.value + tileHeight * alignments[tile.align][1] / 100 * ((naturalSize?.repeatY ?? 1) - 1))}`
+      : `${left + right ? left / (left + right) * 100 : 50}% ${top + bottom ? top / (top + bottom) * 100 : 50}%`
   return {
     aspectRatio: `${props.width} / ${props.height}`,
     background: props.slide.background,
-    backgroundImage: `url("${image.url}")`,
-    backgroundRepeat: image.tiled ? 'repeat' : 'no-repeat',
-    backgroundSize: image.tiled ? 'auto' : `${100 / (1 - (left + right) / 100000)}% ${100 / (1 - (top + bottom) / 100000)}%`,
-    backgroundPosition: image.tiled ? '0px 0px' : `${left + right ? left / (left + right) * 100 : 50}% ${top + bottom ? top / (top + bottom) * 100 : 50}%`,
+    backgroundImage: `url("${naturalSize?.url || image.url}")`,
+    backgroundRepeat: tile ? 'repeat' : 'no-repeat',
+    backgroundSize: tile
+      ? naturalSize ? `${tileWidth * naturalSize.repeatX}px ${tileHeight * naturalSize.repeatY}px` : 'auto'
+      : `${100 / (1 - (left + right) / 100000)}% ${100 / (1 - (top + bottom) / 100000)}%`,
+    backgroundPosition: position,
   }
 })
 
@@ -350,7 +488,7 @@ let animationFrame = 0
 let animationTimer: ReturnType<typeof setTimeout> | undefined
 let motionPreference: MediaQueryList | undefined
 const scale = computed(() => stageWidth.value / Math.max(props.width, 1))
-const chartVisuals = computed(() => new Map(props.slide.elements.flatMap(element => element.chart ? [[element.id, makeChartVisual(element.chart)] as const] : [])))
+const chartVisuals = computed(() => new Map(props.slide.elements.flatMap(element => element.chart ? [[element.id, makeChartVisual(element.chart, element.id)] as const] : [])))
 
 function scheduleShapeAutoFit() {
   if (!stage.value || autoFitFrame || scale.value <= 0) return
@@ -1238,7 +1376,31 @@ function textFontSizeAnimationStyle(element: PptxElement, paragraphIndex: number
       ? animationKeyframeValue(action.fontSizeKeyframes, action.fontSizeKeyframeMode, progress)
       : action.fontSizeFrom + (action.fontSizeTo - action.fontSizeFrom) * progress
   }
-  return factor === 1 ? {} : { fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value * factor}px` }
+  let weight: number | undefined
+  const weightActions = animationsByTarget.value.get(element.id)?.filter((action) => {
+    if (action.effect !== 'fontWeight') return false
+    const paragraphRange = action.paragraphRange
+    const characterRange = action.characterRange
+    const iterationIndex = iterationIndexFor(action, characterStart, characterEnd)
+    return (!paragraphRange || paragraphIndex >= paragraphRange.start && paragraphIndex <= paragraphRange.end)
+      && (!characterRange || characterStart < characterRange.end && characterEnd > characterRange.start)
+      && (!action.iteration || iterationIndex !== undefined && iterationIndex >= 0)
+  }) || []
+  for (const action of weightActions) {
+    const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
+    if (progress === -2) {
+      weight = run.bold ? 700 : 400
+      continue
+    }
+    if (progress === null || progress < 0 || action.fontWeightFrom === undefined || action.fontWeightTo === undefined) continue
+    weight = action.fontWeightKeyframes?.length
+      ? animationKeyframeValue(action.fontWeightKeyframes, action.fontWeightKeyframeMode, progress)
+      : action.fontWeightFrom + (action.fontWeightTo - action.fontWeightFrom) * progress
+  }
+  return {
+    ...(factor === 1 ? {} : { fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value * factor}px` }),
+    ...(weight === undefined ? {} : { fontWeight: weight }),
+  }
 }
 
 function textTransformAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
@@ -1290,6 +1452,15 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
     const progress = animationProgress(action, textRange ? iterationIndexFor(action, characterStart!, characterEnd!) : undefined)
     if (progress === -2) {
       value = [0, 0]
+      continue
+    }
+    const samples = action.motionPathSamples
+    if (progress !== null && progress >= 0 && samples?.length) {
+      const samplePosition = Math.min(samples.length - 1, progress * (samples.length - 1))
+      const from = samples[Math.floor(samplePosition)]!
+      const to = samples[Math.ceil(samplePosition)]!
+      const ratio = samplePosition - Math.floor(samplePosition)
+      value = [from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio]
       continue
     }
     const path = action.motionPath
@@ -1739,6 +1910,7 @@ function textFrameStyle(element: PptxElement): CSSProperties {
   const eastAsianVerticalText = element.textOrientation === 'eaVert'
   const wordArtVerticalText = element.textOrientation === 'wordArtVert'
   const mongolianVerticalText = element.textOrientation === 'mongolianVert'
+  const columnCount = element.textColumnCount ?? 1
   const rect = element.customTextRect
   return {
     position: rect ? 'absolute' : undefined,
@@ -1747,6 +1919,10 @@ function textFrameStyle(element: PptxElement): CSSProperties {
     width: rect ? `${(rect.right - rect.left) * 100}%` : undefined,
     height: rect ? `${(rect.bottom - rect.top) * 100}%` : undefined,
     boxSizing: rect ? 'border-box' : undefined,
+    display: columnCount > 1 ? 'block' : undefined,
+    columnCount: columnCount > 1 ? columnCount : undefined,
+    columnGap: columnCount > 1 ? `${(element.textColumnSpacing ?? 0) * scale.value}px` : undefined,
+    columnFill: columnCount > 1 ? 'auto' : undefined,
     padding: `${element.margins.top * scale.value}px ${element.margins.right * scale.value}px ${element.margins.bottom * scale.value}px ${element.margins.left * scale.value}px`,
     justifyContent: element.verticalAlign === 'middle' ? 'center' : element.verticalAlign === 'bottom' ? 'flex-end' : 'flex-start',
     whiteSpace: element.textWrap === 'none' ? 'nowrap' : undefined,
@@ -1982,6 +2158,17 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
     borderBottom: border('bottom'), borderLeft: border('left'),
   }
 }
+
+function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
+  const columnCount = cell.textColumnCount ?? 1
+  return columnCount > 1 ? {
+    height: '100%',
+    boxSizing: 'border-box',
+    columnCount,
+    columnGap: `${(cell.textColumnSpacing ?? 0) * scale.value}px`,
+    columnFill: 'auto',
+  } : {}
+}
 </script>
 
 <template>
@@ -2040,10 +2227,13 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
       </div>
       <svg v-else-if="element.kind === 'chart' && element.chart" class="slide-chart" viewBox="0 0 1000 600" preserveAspectRatio="none" role="img" :aria-label="element.chart.title || element.name">
         <title>{{ element.chart.title || element.name }}</title>
-        <defs><clipPath :id="`chart-plot-${element.id}`"><polygon :points="`${chartPlot(element.id).left},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top + chartPlot(element.id).height} ${chartPlot(element.id).left},${chartPlot(element.id).top + chartPlot(element.id).height}`" /></clipPath></defs>
+        <defs>
+          <clipPath :id="`chart-plot-${element.id}`"><polygon :points="`${chartPlot(element.id).left},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top + chartPlot(element.id).height} ${chartPlot(element.id).left},${chartPlot(element.id).top + chartPlot(element.id).height}`" /></clipPath>
+          <clipPath v-if="chartVisuals.get(element.id)?.legendClip" :id="chartVisuals.get(element.id)?.legendClip?.id"><rect :x="chartVisuals.get(element.id)?.legendClip?.x" :y="chartVisuals.get(element.id)?.legendClip?.y" :width="chartVisuals.get(element.id)?.legendClip?.width" :height="chartVisuals.get(element.id)?.legendClip?.height" /></clipPath>
+        </defs>
         <text v-if="element.chart.title" x="500" y="42" text-anchor="middle" class="chart-title">{{ element.chart.title }}</text>
-        <g v-if="element.chart.type === 'pie'">
-          <path v-for="(slice, index) in chartVisuals.get(element.id)?.slices" :key="index" :d="slice.d" :fill="slice.color" stroke="white" stroke-width="2" />
+        <g v-if="element.chart.type === 'pie' || element.chart.type === 'doughnut'">
+          <path v-for="(slice, index) in chartVisuals.get(element.id)?.slices" :key="index" :d="slice.d" :fill="slice.color" :fill-rule="element.chart.type === 'doughnut' ? 'evenodd' : 'nonzero'" stroke="white" stroke-width="2" />
         </g>
         <g v-else>
           <template v-if="!element.chart.valueAxis?.deleted && element.chart.valueAxis?.majorGridlines"><line v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`grid-${index}`" class="chart-major-gridline" :x1="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left" :x2="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left + chartPlot(element.id).width" :y1="element.chart.direction === 'horizontal' ? chartPlot(element.id).top : tick.y" :y2="element.chart.direction === 'horizontal' ? chartPlot(element.id).top + chartPlot(element.id).height : tick.y" stroke="#d1d5db" stroke-width="1" /></template>
@@ -2059,9 +2249,11 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
           <text v-for="(label, index) in chartVisuals.get(element.id)?.categories" :key="`category-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" class="chart-label chart-category-label">{{ label.text }}</text>
         </g>
         <text v-for="(label, index) in chartVisuals.get(element.id)?.dataLabels" :key="`data-label-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" class="chart-data-label"><tspan v-for="(line, lineIndex) in label.lines" :key="lineIndex" :x="label.x" :y="label.y + (lineIndex - (label.lines.length - 1) / 2) * 22">{{ line }}</tspan></text>
-        <g v-for="(entry, index) in chartVisuals.get(element.id)?.legend" :key="`legend-${index}`">
-          <rect :x="entry.x" :y="entry.y - 12" width="12" height="12" :fill="entry.color" />
-          <text :x="entry.x + 18" :y="entry.y" class="chart-label chart-legend-label">{{ entry.text }}</text>
+        <g class="chart-legend-group" :clip-path="chartVisuals.get(element.id)?.legendClip ? `url(#${chartVisuals.get(element.id)?.legendClip?.id})` : undefined">
+          <g v-for="(entry, index) in chartVisuals.get(element.id)?.legend" :key="`legend-${index}`">
+            <rect :x="entry.x" :y="entry.y - 12" width="12" height="12" :fill="entry.color" />
+            <text :x="entry.x + 18" :y="entry.y" class="chart-label chart-legend-label">{{ entry.text }}</text>
+          </g>
         </g>
       </svg>
       <div v-else-if="(element.kind === 'picture' || element.kind === 'video') && element.imageUrl" class="image-viewport" aria-hidden="true">
@@ -2075,11 +2267,13 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
           <tr v-for="(row, rowIndex) in element.table.rows" :key="rowIndex" :style="{ height: `${row.height / Math.max(element.table.rows.reduce((sum, item) => sum + item.height, 0), 1) * 100}%` }">
             <template v-for="(cell, cellIndex) in row.cells" :key="cellIndex">
               <td v-if="!cell.hidden" :colspan="cell.colSpan" :rowspan="cell.rowSpan" :data-autofit="cell.textAutoFitDynamic ? 'normal' : undefined" :data-row-index="rowIndex" :data-cell-index="cellIndex" :style="tableCellStyle(cell)">
-                <div v-for="(entry, paragraphIndex) in paragraphEntries(cell.paragraphs)" :key="paragraphIndex" class="text-paragraph" :style="paragraphStyle(entry.paragraph, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), cell.textLineSpacingReduction)">
-                  <span v-if="entry.marker" class="paragraph-marker" aria-hidden="true">{{ entry.marker }}</span>
-                  <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
-                    <span v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)" :key="segmentIndex" class="text-run" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell)), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, segment.start, segment.end), textFontSizeAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell)), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]">{{ segment.text }}</span>
-                  </template>
+                <div class="table-cell-text" :style="tableCellTextStyle(cell)">
+                  <div v-for="(entry, paragraphIndex) in paragraphEntries(cell.paragraphs)" :key="paragraphIndex" class="text-paragraph" :style="paragraphStyle(entry.paragraph, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), cell.textLineSpacingReduction)">
+                    <span v-if="entry.marker" class="paragraph-marker" aria-hidden="true">{{ entry.marker }}</span>
+                    <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
+                      <span v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)" :key="segmentIndex" class="text-run" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell)), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, segment.start, segment.end), textFontSizeAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell)), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]">{{ segment.text }}</span>
+                    </template>
+                  </div>
                 </div>
               </td>
             </template>
@@ -2112,6 +2306,7 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
         <line x1="0" y1="0" :x2="element.width > 0 ? 1000 : 0" :y2="element.height > 0 ? 1000 : 0" :stroke="lineStrokeColor(element)" :stroke-width="Math.max(element.strokeWidth * scale, 1)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
       </svg>
     </div>
+    <span v-if="backgroundTileWarning" class="media-warning" role="status">{{ backgroundTileWarning }}</span>
   </div>
 </template>
 

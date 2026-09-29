@@ -37,6 +37,8 @@ export interface PptxParagraph {
 
 export interface PptxTableCell {
   paragraphs: PptxParagraph[]
+  textColumnCount?: number
+  textColumnSpacing?: number
   textFontScale?: number
   textLineSpacingReduction?: number
   textAutoFitDynamic?: boolean
@@ -61,6 +63,7 @@ export type PptxChartTickLabelPosition = 'high' | 'low' | 'nextTo' | 'none'
 export type PptxChartDataLabelPosition = 'bestFit' | 'b' | 'ctr' | 'inBase' | 'inEnd' | 'l' | 'outEnd' | 'r' | 't'
 
 export interface PptxChartSeries {
+  legendIndex: number
   name: string
   values: Array<number | null>
   color: string
@@ -82,8 +85,10 @@ export interface PptxChartSeries {
 }
 
 export interface PptxChart {
-  type: 'bar' | 'line' | 'pie'
+  type: 'bar' | 'line' | 'pie' | 'doughnut'
   direction?: 'horizontal' | 'vertical'
+  holeSize?: number
+  firstSliceAngle?: number
   title?: string
   categories: string[]
   palette: string[]
@@ -97,7 +102,17 @@ export interface PptxChart {
   categoryAxisDeleted?: boolean
   categoryAxisMajorTickMark?: PptxChartTickMark
   categoryAxisTickLabelPosition?: PptxChartTickLabelPosition
-  legend?: { position: 'bottom' | 'top' | 'left' | 'right' | 'topRight' }
+  legend?: {
+    position: 'bottom' | 'top' | 'left' | 'right' | 'topRight'
+    hiddenEntries?: number[]
+    overlay?: boolean
+    manualLayout?: {
+      x?: { value: number; mode: 'edge' | 'factor' }
+      y?: { value: number; mode: 'edge' | 'factor' }
+      w?: { value: number; mode: 'edge' | 'factor' }
+      h?: { value: number; mode: 'edge' | 'factor' }
+    }
+  }
   dataLabelPosition?: PptxChartDataLabelPosition
 }
 
@@ -121,6 +136,7 @@ export interface PptxElement {
   flipH: boolean
   flipV: boolean
   renderMatrix?: [number, number, number, number, number, number]
+  motionParent?: { matrix: [number, number, number, number, number, number]; x: number; y: number }
   fill: string
   stroke: string
   strokeWidth: number
@@ -144,6 +160,8 @@ export interface PptxElement {
   verticalAlign: 'top' | 'middle' | 'bottom'
   textWrap?: 'square' | 'none'
   textOrientation?: PptxTextOrientation
+  textColumnCount?: number
+  textColumnSpacing?: number
   textFontScale?: number
   textLineSpacingReduction?: number
   textAutoFit?: 'normal' | 'shape'
@@ -156,7 +174,11 @@ export interface PptxSlide {
   name: string
   elements: PptxElement[]
   background: string
-  backgroundImage?: { url: string; crop: { left: number; top: number; right: number; bottom: number }; tiled?: boolean }
+  backgroundImage?: {
+    url: string
+    crop: { left: number; top: number; right: number; bottom: number }
+    tile?: { scaleX: number; scaleY: number; align: 'tl' | 't' | 'tr' | 'l' | 'ctr' | 'r' | 'bl' | 'b' | 'br'; flip: 'none' | 'x' | 'y' | 'xy'; offsetX: number; offsetY: number }
+  }
   speakerNotes?: string
   automaticAnimations?: PptxAnimation[]
   animationSteps?: PptxAnimation[][]
@@ -203,7 +225,7 @@ export interface PptxAnimation {
   paragraphRange?: { start: number; end: number }
   characterRange?: { start: number; end: number }
   iteration?: { intervalMs: number; ranges: Array<{ start: number; end: number }>; backwards?: boolean }
-  effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'opacity' | 'media'
+  effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'opacity' | 'media'
   direction: 'in' | 'out'
   durationMs: number
   delayMs: number
@@ -239,6 +261,10 @@ export interface PptxAnimation {
   fontSizeTo?: number
   fontSizeKeyframes?: Array<{ offset: number; value: number }>
   fontSizeKeyframeMode?: 'lin' | 'discrete'
+  fontWeightFrom?: number
+  fontWeightTo?: number
+  fontWeightKeyframes?: Array<{ offset: number; value: number }>
+  fontWeightKeyframeMode?: 'lin' | 'discrete'
   opacityFrom?: number
   opacityTo?: number
   opacityKeyframes?: Array<{ offset: number; value: number }>
@@ -255,6 +281,7 @@ export interface PptxAnimation {
   mediaMuted?: boolean
   motionPath?: Array<{ x: number; y: number; distance: number }>
   motionPathLength?: number
+  motionPathSamples?: Array<{ progress: number; x: number; y: number }>
   acceleration?: number
   deceleration?: number
   playbackSpeed?: number
@@ -311,6 +338,7 @@ const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024
 const OFFICE_REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const PRESENTATION_NS = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 const DRAWING_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+const OLE_GRAPHIC_DATA_URI = 'http://schemas.openxmlformats.org/presentationml/2006/ole'
 const POWERPOINT_2010_NS = 'http://schemas.microsoft.com/office/powerpoint/2010/main'
 const POWERPOINT_2012_NS = 'http://schemas.microsoft.com/office/powerpoint/2012/main'
 const POWERPOINT_2015_NS = 'http://schemas.microsoft.com/office/powerpoint/2015/09/main'
@@ -958,10 +986,22 @@ function parseText(
   warnings: Set<string>,
   inheritedStyle: PptxTextStyle = {},
   inheritedParagraphStyles: ParagraphDefaultsByLevel = {},
-): { paragraphs: PptxParagraph[]; margins: PptxElement['margins']; verticalAlign: PptxElement['verticalAlign']; textWrap?: PptxElement['textWrap']; textOrientation?: PptxTextOrientation; textFontScale?: number; textLineSpacingReduction?: number; textAutoFit?: PptxElement['textAutoFit']; textAutoFitDynamic?: boolean } {
+): { paragraphs: PptxParagraph[]; margins: PptxElement['margins']; verticalAlign: PptxElement['verticalAlign']; textWrap?: PptxElement['textWrap']; textOrientation?: PptxTextOrientation; textColumnCount?: number; textColumnSpacing?: number; textFontScale?: number; textLineSpacingReduction?: number; textAutoFit?: PptxElement['textAutoFit']; textAutoFitDynamic?: boolean } {
   const txBody = child(shape, 'txBody')
   if (!txBody) return { paragraphs: [], margins: { left: 0, right: 0, top: 0, bottom: 0 }, verticalAlign: 'top' }
   const body = child(txBody, 'bodyPr')
+  const rawColumnCount = body?.getAttribute('numCol')
+  const columnCount = rawColumnCount === null || rawColumnCount === undefined ? undefined : Number(rawColumnCount)
+  const textColumnCount = columnCount !== undefined && Number.isSafeInteger(columnCount) && columnCount >= 1 && columnCount <= 16
+    ? columnCount
+    : undefined
+  if (columnCount !== undefined && textColumnCount === undefined) warnings.add('An invalid a:bodyPr numCol was ignored.')
+  const rawColumnSpacing = body?.getAttribute('spcCol')
+  const columnSpacing = rawColumnSpacing === null || rawColumnSpacing === undefined ? undefined : Number(rawColumnSpacing)
+  const textColumnSpacing = columnSpacing !== undefined && Number.isSafeInteger(columnSpacing) && columnSpacing >= 0 && columnSpacing <= 2_147_483_647
+    ? columnSpacing
+    : undefined
+  if (columnSpacing !== undefined && textColumnSpacing === undefined) warnings.add('An invalid a:bodyPr spcCol was ignored.')
   const normalAutoFit = child(body, 'normAutofit')
   const shapeAutoFit = child(body, 'spAutoFit')
   const rawFontScale = normalAutoFit?.getAttribute('fontScale') ?? null
@@ -1018,6 +1058,8 @@ function parseText(
     textOrientation: rawTextOrientation && validTextOrientations.includes(rawTextOrientation as PptxTextOrientation)
       ? rawTextOrientation as PptxTextOrientation
       : undefined,
+    textColumnCount,
+    textColumnSpacing,
     textFontScale: normalAutoFit ? parsedFontScale ?? 1 : undefined,
     textLineSpacingReduction: normalAutoFit ? parsedLineSpaceReduction ?? 0 : undefined,
     textAutoFit: shapeAutoFit ? 'shape' : normalAutoFit ? 'normal' : undefined,
@@ -1134,6 +1176,8 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
     verticalAlign: anchor ? element.verticalAlign : fallbackElement.verticalAlign,
     textWrap: ['square', 'none'].includes(bodyPr?.getAttribute('wrap') || '') ? element.textWrap : fallbackElement.textWrap,
     textOrientation: bodyPr?.hasAttribute('vert') ? element.textOrientation : fallbackElement.textOrientation,
+    textColumnCount: bodyPr?.hasAttribute('numCol') ? element.textColumnCount : fallbackElement.textColumnCount,
+    textColumnSpacing: bodyPr?.hasAttribute('spcCol') ? element.textColumnSpacing : fallbackElement.textColumnSpacing,
     textFontScale: hasTextAutoFit ? element.textFontScale : fallbackElement.textFontScale,
     textLineSpacingReduction: hasTextAutoFit ? element.textLineSpacingReduction : fallbackElement.textLineSpacingReduction,
     textAutoFit: hasTextAutoFit ? element.textAutoFit : fallbackElement.textAutoFit,
@@ -1246,6 +1290,8 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
       const anchor = properties?.getAttribute('anchor')
       return {
         paragraphs: text.paragraphs,
+        textColumnCount: text.textColumnCount,
+        textColumnSpacing: text.textColumnSpacing,
         textFontScale: text.textFontScale,
         textLineSpacingReduction: text.textLineSpacingReduction,
         textAutoFitDynamic: text.textAutoFitDynamic,
@@ -1274,6 +1320,104 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
     fill: 'transparent', stroke: 'transparent', strokeWidth: 0,
     paragraphs: [], margins: { left: 0, right: 0, top: 0, bottom: 0 }, verticalAlign: 'top',
     table: { columns, rows },
+  }
+}
+
+async function parseSmartArtTextFallback(
+  frame: Element,
+  rels: Map<string, PptxRelationship>,
+  zip: JSZip,
+  theme: Record<string, string>,
+  warnings: Set<string>,
+): Promise<PptxElement | undefined> {
+  const graphicData = firstDescendant(frame, 'graphicData')
+  if (!graphicData?.getAttribute('uri')?.endsWith('/diagram')) return undefined
+
+  const dataId = namespacedAttr(child(graphicData, 'relIds'), 'dm') || ''
+  const relation = rels.get(dataId)
+  let paragraphs: PptxParagraph[] = []
+  if (!relation || relation.external || !relation.type.endsWith('/diagramData')) {
+    warnings.add('SmartArt diagram data is missing or external; its text could not be recovered.')
+  } else {
+    const part = zip.file(relation.target)
+    if (!part) warnings.add('The SmartArt diagram data part is missing; its text could not be recovered.')
+    else {
+      try {
+        const xml = parseXml(await part.async('string'), relation.target)
+        const points = children(firstDescendant(xml.documentElement, 'ptLst'), 'pt')
+          .filter(point => point.getAttribute('type') === 'node')
+        for (const point of points) {
+          const pointText = child(point, 't')
+          if (!pointText) continue
+          const shape = pointText.ownerDocument.createElementNS(PRESENTATION_NS, 'p:sp')
+          const body = pointText.ownerDocument.createElementNS(PRESENTATION_NS, 'p:txBody')
+          for (const node of Array.from(pointText.childNodes)) body.appendChild(node.cloneNode(true))
+          shape.appendChild(body)
+          paragraphs.push(...parseText(shape, theme, warnings).paragraphs)
+        }
+      } catch {
+        warnings.add('The SmartArt diagram data contains invalid XML; its text could not be recovered.')
+      }
+    }
+  }
+
+  if (!paragraphs.some(paragraph => paragraph.runs.some(run => run.text.trim()))) {
+    paragraphs = [{ align: 'left', runs: [{ text: 'SmartArt text unavailable', fontSizePt: 14 }] }]
+  }
+  warnings.add('SmartArt is shown as a plain text list; node layout, hierarchy, connectors, and formatting are not reproduced.')
+  const nonVisual = firstDescendant(frame, 'cNvPr')
+  return {
+    id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
+    name: nonVisual?.getAttribute('name') || 'SmartArt text fallback',
+    kind: 'shape', geometry: 'rect', ...shapeTransform(frame),
+    fill: '#f8fafc', stroke: '#94a3b8', strokeWidth: 12_700,
+    paragraphs,
+    margins: { left: 182_880, right: 182_880, top: 137_160, bottom: 137_160 },
+    verticalAlign: 'top', textWrap: 'square',
+  }
+}
+
+async function parseOlePreview(
+  frame: Element,
+  rels: Map<string, PptxRelationship>,
+  zip: JSZip,
+  theme: Record<string, string>,
+  warnings: Set<string>,
+  urls: string[],
+  imageUrlCache: Map<string, string>,
+): Promise<PptxElement | undefined> {
+  const graphicData = firstDescendant(frame, 'graphicData')
+  const ole = child(graphicData, 'oleObj')
+  if (!ole && graphicData?.getAttribute('uri') !== OLE_GRAPHIC_DATA_URI) return undefined
+
+  const preview = child(ole, 'pic')
+  const previewBlip = preview && firstDescendant(preview, 'blip')
+  const previewRelation = rels.get(namespacedAttr(previewBlip, 'embed') || '')
+  if (preview && previewRelation && !previewRelation.external && zip.file(previewRelation.target)) {
+    const picture = await parsePicture(preview, rels, zip, theme, warnings, urls, imageUrlCache)
+    if (picture.imageUrl) {
+      warnings.add('An OLE object is displayed from its embedded preview image; its embedded or linked content is not opened.')
+      const nonVisual = firstDescendant(frame, 'cNvPr')
+      return {
+        ...picture,
+        id: nonVisual?.getAttribute('id') || picture.id,
+        name: nonVisual?.getAttribute('name') || picture.name,
+        ...shapeTransform(frame),
+      }
+    }
+  }
+
+  warnings.add('An OLE object has no usable embedded preview image; a labeled placeholder is shown.')
+  const nonVisual = firstDescendant(frame, 'cNvPr')
+  const label = ole?.getAttribute('progId') || ole?.getAttribute('name') || nonVisual?.getAttribute('name') || 'Embedded object'
+  return {
+    id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
+    name: nonVisual?.getAttribute('name') || 'OLE object preview',
+    kind: 'shape', geometry: 'rect', ...shapeTransform(frame),
+    fill: '#f8fafc', stroke: '#94a3b8', strokeWidth: 12_700,
+    paragraphs: [{ align: 'center', runs: [{ text: label, fontSizePt: 14, bold: true }] }],
+    margins: { left: 182_880, right: 182_880, top: 137_160, bottom: 137_160 },
+    verticalAlign: 'middle', textWrap: 'square',
   }
 }
 
@@ -1517,7 +1661,7 @@ async function parseChart(
   const xml = parseXml(await part.async('string'), relation.target)
   const chart = firstDescendant(xml.documentElement, 'chart')
   const plotArea = firstDescendant(chart, 'plotArea')
-  const supported = ['barChart', 'lineChart', 'pieChart']
+  const supported = ['barChart', 'lineChart', 'pieChart', 'doughnutChart']
   const chartNodes = children(plotArea).filter(item => item.localName.endsWith('Chart'))
   const typeNode = chartNodes.find(item => supported.includes(item.localName))
   if (!typeNode) {
@@ -1525,11 +1669,20 @@ async function parseChart(
     return undefined
   }
   if (chartNodes.length > 1) warnings.add('A mixed chart is simplified to its first supported chart type.')
-  const type = typeNode.localName === 'barChart' ? 'bar' : typeNode.localName === 'lineChart' ? 'line' : 'pie'
+  const type = typeNode.localName === 'barChart' ? 'bar' : typeNode.localName === 'lineChart' ? 'line' : typeNode.localName === 'doughnutChart' ? 'doughnut' : 'pie'
+  const isPieLike = type === 'pie' || type === 'doughnut'
+  const firstSliceAngleNode = child(typeNode, 'firstSliceAng')
+  const firstSliceAngleValue = firstSliceAngleNode ? Number(firstSliceAngleNode.getAttribute('val')) : 0
+  const firstSliceAngle = Number.isInteger(firstSliceAngleValue) && firstSliceAngleValue >= 0 && firstSliceAngleValue <= 360 ? firstSliceAngleValue : 0
+  if (firstSliceAngleNode && firstSliceAngle !== firstSliceAngleValue) warnings.add('Invalid chart first-slice angle uses 0 degrees.')
+  const holeSizeNode = type === 'doughnut' ? child(typeNode, 'holeSize') : undefined
+  const holeSizeValue = holeSizeNode ? Number(holeSizeNode.getAttribute('val')) : 50
+  const holeSize = Number.isInteger(holeSizeValue) && holeSizeValue >= 10 && holeSizeValue <= 90 ? holeSizeValue : 50
+  if (holeSizeNode && holeSize !== holeSizeValue) warnings.add('Invalid doughnut hole size uses the 50 percent default.')
   const direction = type === 'bar' && child(typeNode, 'barDir')?.getAttribute('val') === 'bar' ? 'horizontal' : 'vertical'
   const grouping = child(typeNode, 'grouping')?.getAttribute('val')
   if (grouping && !['clustered', 'standard'].includes(grouping)) warnings.add('Stacked and percentage-stacked charts are rendered as grouped series.')
-  if (type !== 'pie' && children(plotArea).some(item => ['catAx', 'dateAx', 'serAx'].includes(item.localName))) warnings.add('Chart date and series axes, category-axis number formatting, minor tick marks, and advanced styling are simplified.')
+  if (!isPieLike && children(plotArea).some(item => ['catAx', 'dateAx', 'serAx'].includes(item.localName))) warnings.add('Chart date and series axes, category-axis number formatting, minor tick marks, and advanced styling are simplified.')
   const legendNode = child(chart, 'legend')
   const legendPositionValue = child(legendNode, 'legendPos')?.getAttribute('val') || 'r'
   const legendPosition = legendPositionValue === 'b' ? 'bottom'
@@ -1538,7 +1691,53 @@ async function parseChart(
         : legendPositionValue === 'r' ? 'right'
           : legendPositionValue === 'tr' ? 'topRight' : undefined
   if (legendNode && !legendPosition) warnings.add('Unsupported chart legend position is rendered on the right.')
-  if (legendNode && children(legendNode).some(item => ['layout', 'legendEntry', 'spPr', 'txPr', 'overlay'].includes(item.localName))) warnings.add('Chart legend manual layout, entry visibility, and styling are simplified.')
+  const legendOverlay = chartBoolean(child(legendNode, 'overlay')) ?? false
+  const legendEntries = children(legendNode, 'legendEntry')
+  const hiddenLegendEntries: number[] = []
+  for (const entry of legendEntries) {
+    if (chartBoolean(child(entry, 'delete')) !== true) continue
+    const index = Number(child(entry, 'idx')?.getAttribute('val'))
+    if (Number.isSafeInteger(index) && index >= 0) hiddenLegendEntries.push(index)
+    else warnings.add('A chart legend entry with an invalid index was ignored.')
+  }
+  const legendLayout = child(legendNode, 'layout')
+  const manualLayout = child(legendLayout, 'manualLayout')
+  let invalidManualLayout = false
+  const manualAxis = (axis: 'x' | 'y' | 'w' | 'h'): { value: number; mode: 'edge' | 'factor' } | undefined => {
+    const coordinate = child(manualLayout, axis)
+    if (!coordinate) return undefined
+    const value = Number(coordinate.getAttribute('val'))
+    const modeValue = child(manualLayout, `${axis}Mode`)?.getAttribute('val') || 'factor'
+    if (modeValue !== 'edge' && modeValue !== 'factor') {
+      invalidManualLayout = true
+      warnings.add('An unsupported chart legend manual layout was ignored.')
+      return undefined
+    }
+    const minimum = modeValue === 'edge' || axis === 'w' || axis === 'h' ? 0 : -1
+    if (!coordinate.hasAttribute('val') || !Number.isFinite(value) || value < minimum || value > 1) {
+      invalidManualLayout = true
+      warnings.add('An out-of-range chart legend manual layout was ignored.')
+      return undefined
+    }
+    return { value, mode: modeValue }
+  }
+  const manualLegendX = manualAxis('x')
+  const manualLegendY = manualAxis('y')
+  const manualLegendWidth = manualAxis('w')
+  const manualLegendHeight = manualAxis('h')
+  const parsedManualLayout = manualLayout && !invalidManualLayout && (manualLegendX || manualLegendY || manualLegendWidth || manualLegendHeight)
+    ? {
+        ...(manualLegendX ? { x: manualLegendX } : {}),
+        ...(manualLegendY ? { y: manualLegendY } : {}),
+        ...(manualLegendWidth ? { w: manualLegendWidth } : {}),
+        ...(manualLegendHeight ? { h: manualLegendHeight } : {}),
+      }
+    : undefined
+  if (manualLayout && (manualLegendWidth || manualLegendHeight)) warnings.add('Manual chart legend contents are clipped to the specified box; text wrapping is simplified.')
+  const unsupportedLegendLayout = (legendLayout && !manualLayout)
+    || (manualLayout && children(manualLayout).some(item => !['layoutTarget', 'x', 'xMode', 'y', 'yMode', 'w', 'wMode', 'h', 'hMode'].includes(item.localName)))
+  if (legendNode && (unsupportedLegendLayout || children(legendNode).some(item => ['spPr', 'txPr'].includes(item.localName))
+    || legendEntries.some(entry => !!child(entry, 'txPr')))) warnings.add('Chart legend sizing, automatic layout, and styling are simplified.')
   const palette = ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].map(key => theme[key] || DEFAULT_THEME[key]!)
   const seriesNodes = children(typeNode, 'ser')
   const chartDataLabels = child(typeNode, 'dLbls')
@@ -1562,8 +1761,8 @@ async function parseChart(
   if (allDataLabelSettings.some(item => ['showLegendKey', 'showBubbleSize'].some(name => chartBoolean(child(item, name)) === true))) {
     warnings.add('Chart legend-key and bubble-size data labels are not rendered.')
   }
-  if (type !== 'pie' && allDataLabelSettings.some(item => chartBoolean(child(item, 'showPercent')) === true)) {
-    warnings.add('Percentage data labels are rendered only for pie charts.')
+  if (!isPieLike && allDataLabelSettings.some(item => chartBoolean(child(item, 'showPercent')) === true)) {
+    warnings.add('Percentage data labels are rendered only for pie and doughnut charts.')
   }
   const labelPositionSettings = allDataLabelSettings.flatMap(item => [item, ...children(item, 'dLbl')])
   if (labelPositionSettings.some(item => {
@@ -1573,6 +1772,9 @@ async function parseChart(
   if (allDataLabelSettings.some(item => ['txPr', 'spPr'].some(name => !!child(item, name)))) warnings.add('Chart data label styling is simplified.')
   if (seriesNodes.length > 12) warnings.add('Chart series beyond 12 are omitted.')
   const series = seriesNodes.slice(0, 12).map((item, index): PptxChartSeries => {
+    const sourceIndex = Number(child(item, 'idx')?.getAttribute('val'))
+    const legendIndex = Number.isSafeInteger(sourceIndex) && sourceIndex >= 0 ? sourceIndex : index
+    if (child(item, 'idx') && legendIndex !== sourceIndex) warnings.add('A chart series with an invalid index uses its source order.')
     const values = chartCache(child(item, 'val'), warnings).map(value => {
       if (value === null || value.trim() === '') return null
       const number = Number(value)
@@ -1589,6 +1791,7 @@ async function parseChart(
     const dataLabels = child(item, 'dLbls')
     const numberFormat = chartNumberFormat(dataLabels) ?? chartValueFormat
     return {
+      legendIndex,
       name,
       values,
       color: chartFillColor(child(item, 'spPr'), theme, warnings, palette[index % palette.length]!),
@@ -1613,13 +1816,13 @@ async function parseChart(
     warnings.add('A chart without cached series values cannot be rendered.')
     return undefined
   }
-  if (type === 'pie' && series.length > 1) warnings.add('Pie chart series beyond the first are omitted.')
-  const parsedValueAxis = type === 'pie' ? undefined : chartValueAxis(children(plotArea, 'valAx')[0], warnings)
+  if (isPieLike && series.length > 1) warnings.add('Pie and doughnut chart series beyond the first are omitted.')
+  const parsedValueAxis = isPieLike ? undefined : chartValueAxis(children(plotArea, 'valAx')[0], warnings)
   const categoryAxis = children(plotArea, 'catAx')[0]
-  let categoryAxisPosition = type === 'pie' ? undefined : chartAxisPosition(categoryAxis, 'category', warnings)
-  const categoryAxisMajorTickMark = type === 'pie' ? undefined : chartMajorTickMark(categoryAxis, 'category', warnings)
-  const categoryAxisTickLabelPosition = type === 'pie' ? undefined : chartTickLabelPosition(categoryAxis, 'category', warnings)
-  const categoryAxisDeleted = type !== 'pie' && chartAxisDeleted(categoryAxis, 'category', warnings)
+  let categoryAxisPosition = isPieLike ? undefined : chartAxisPosition(categoryAxis, 'category', warnings)
+  const categoryAxisMajorTickMark = isPieLike ? undefined : chartMajorTickMark(categoryAxis, 'category', warnings)
+  const categoryAxisTickLabelPosition = isPieLike ? undefined : chartTickLabelPosition(categoryAxis, 'category', warnings)
+  const categoryAxisDeleted = !isPieLike && chartAxisDeleted(categoryAxis, 'category', warnings)
   if (direction === 'horizontal' && parsedValueAxis?.position && !['b', 't'].includes(parsedValueAxis.position)) {
     warnings.add('A horizontal chart value axis must be positioned on the top or bottom; its default side is used.')
     delete parsedValueAxis.position
@@ -1632,8 +1835,8 @@ async function parseChart(
     warnings.add('The chart category axis position does not match its chart direction; its default side is used.')
     categoryAxisPosition = undefined
   }
-  if (type !== 'pie' && children(plotArea, 'valAx').length > 1) warnings.add('Secondary chart value axes are omitted.')
-  if (type !== 'pie' && children(plotArea, 'catAx').length > 1) warnings.add('Secondary chart category axes are omitted.')
+  if (!isPieLike && children(plotArea, 'valAx').length > 1) warnings.add('Secondary chart value axes are omitted.')
+  if (!isPieLike && children(plotArea, 'catAx').length > 1) warnings.add('Secondary chart category axes are omitted.')
   let valueAxis: PptxChart['valueAxis']
   if (parsedValueAxis) {
     const values = series.flatMap(item => item.values.filter((value): value is number => value !== null))
@@ -1660,10 +1863,10 @@ async function parseChart(
   const categories = chartCache(child(seriesNodes[0], 'cat'), warnings)
   const pointCount = Math.min(128, Math.max(categories.length, ...series.map(item => item.values.length), 0))
   const labels = Array.from({ length: pointCount }, (_, index) => categories[index] || String(index + 1))
-  const categoryAxisCrossing: ReturnType<typeof chartAxisCrossing> = type === 'pie' ? {} : chartAxisCrossing(categoryAxis, 'category', warnings, Math.max(labels.length, 1))
+  const categoryAxisCrossing: ReturnType<typeof chartAxisCrossing> = isPieLike ? {} : chartAxisCrossing(categoryAxis, 'category', warnings, Math.max(labels.length, 1))
   if (labels.length !== categories.length) warnings.add('Missing chart category labels are shown as point numbers.')
-  if (type === 'pie' && labels.length > 12) warnings.add('Pie chart legend entries beyond 12 are omitted.')
-  if (type === 'pie' && series[0]!.values.some(value => value !== null && value < 0)) warnings.add('Negative pie chart values are omitted.')
+  if (isPieLike && labels.length > 12) warnings.add('Pie and doughnut chart legend entries beyond 12 are omitted.')
+  if (isPieLike && series[0]!.values.some(value => value !== null && value < 0)) warnings.add('Negative pie and doughnut chart values are omitted.')
   const titleNode = firstDescendant(chart, 'title')
   const title = descendants(titleNode, 't').map(value => value.textContent || '').join('').trim() || undefined
   const transform = shapeTransform(frame)
@@ -1677,6 +1880,8 @@ async function parseChart(
     chart: {
       type,
       direction,
+      ...(type === 'doughnut' ? { holeSize } : {}),
+      ...(firstSliceAngleNode ? { firstSliceAngle } : {}),
       title,
       categories: labels,
       palette,
@@ -1690,7 +1895,14 @@ async function parseChart(
       ...(categoryAxisTickLabelPosition ? { categoryAxisTickLabelPosition } : {}),
       ...(categoryAxisCrossing.crosses ? { categoryAxisCrosses: categoryAxisCrossing.crosses } : {}),
       ...(categoryAxisCrossing.crossesAt !== undefined ? { categoryAxisCrossesAt: categoryAxisCrossing.crossesAt } : {}),
-      ...(legendNode ? { legend: { position: legendPosition || 'right' } } : {}),
+      ...(legendNode ? {
+        legend: {
+          position: legendPosition || 'right',
+          ...(hiddenLegendEntries.length ? { hiddenEntries: hiddenLegendEntries } : {}),
+          ...(legendOverlay ? { overlay: true } : {}),
+          ...(parsedManualLayout ? { manualLayout: parsedManualLayout } : {}),
+        },
+      } : {}),
       ...(chartLabelPosition ? { dataLabelPosition: chartLabelPosition } : {}),
     },
   }
@@ -1926,6 +2138,101 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
     // Default speed timings were read from PowerPoint's SlideShowTransition.Speed and Duration properties.
     durationMs: explicitDuration !== undefined && Number.isFinite(explicitDuration) && explicitDuration >= 0 ? Math.min(explicitDuration, 60_000) : speed === 'fast' ? 500 : speed === 'slow' ? 1000 : 750,
   }
+}
+
+function evaluateMotionFormula(formula: string, variables: Record<string, number>): number | undefined {
+  const tokens: string[] = []
+  const tokenizer = /#[A-Za-z][A-Za-z0-9_.]*|\$|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[A-Za-z][A-Za-z0-9_]*|[()+\-*/%^,]/gy
+  let scan = 0
+  while (scan < formula.length) {
+    if (/\s/.test(formula[scan] || '')) { scan++; continue }
+    tokenizer.lastIndex = scan
+    const match = tokenizer.exec(formula)
+    if (!match) return undefined
+    tokens.push(match[0])
+    if (tokens.length > 512) return undefined
+    scan = tokenizer.lastIndex
+  }
+
+  const functions: Record<string, (...args: number[]) => number> = {
+    abs: Math.abs, acos: Math.acos, asin: Math.asin, atan: Math.atan, ceil: Math.ceil,
+    cos: Math.cos, cosh: Math.cosh, deg: value => value * 180 / Math.PI, exp: Math.exp,
+    floor: Math.floor, ln: Math.log, max: Math.max, min: Math.min,
+    rad: value => value * Math.PI / 180, sin: Math.sin, sinh: Math.sinh,
+    sqrt: Math.sqrt, tan: Math.tan, tanh: Math.tanh,
+  }
+  let cursor = 0
+  const finite = (value: number | undefined): value is number => value !== undefined && Number.isFinite(value)
+  const formulaValue = (): number | undefined => {
+    let value = term()
+    while (value !== undefined && (tokens[cursor] === '+' || tokens[cursor] === '-')) {
+      const operator = tokens[cursor++]
+      const right = term()
+      if (right === undefined) return undefined
+      value = operator === '+' ? value + right : value - right
+      if (!Number.isFinite(value)) return undefined
+    }
+    return value
+  }
+  const factor = (depth: number): number | undefined => {
+    if (depth > 255) return undefined
+    const token = tokens[cursor++]
+    if (token === undefined) return undefined
+    if (token === '+' || token === '-') {
+      const value = factor(depth + 1)
+      return value === undefined ? undefined : token === '-' ? -value : value
+    }
+    if (token === '(') {
+      const value = formulaValue()
+      if (!finite(value) || tokens[cursor++] !== ')') return undefined
+      return value
+    }
+    if (token.startsWith('#')) return variables[token.slice(1)]
+    if (token === '$') return variables.$
+    if (token === 'pi') return Math.PI
+    if (token === 'e') return Math.E
+    const numeric = Number(token)
+    if (Number.isFinite(numeric)) return numeric
+    const fn = functions[token]
+    if (!fn || tokens[cursor++] !== '(') return undefined
+    const first = formulaValue()
+    if (!finite(first)) return undefined
+    let args = [first]
+    if (token === 'max' || token === 'min') {
+      if (tokens[cursor++] !== ',') return undefined
+      const second = formulaValue()
+      if (!finite(second)) return undefined
+      args.push(second)
+    }
+    if (tokens[cursor++] !== ')') return undefined
+    const result = fn(...args)
+    return Number.isFinite(result) ? result : undefined
+  }
+  const power = (): number | undefined => {
+    let value = factor(0)
+    while (value !== undefined && tokens[cursor] === '^') {
+      cursor++
+      const right = factor(0)
+      if (right === undefined) return undefined
+      value = value ** right
+      if (!Number.isFinite(value)) return undefined
+    }
+    return value
+  }
+  const term = (): number | undefined => {
+    let value = power()
+    while (value !== undefined && (tokens[cursor] === '*' || tokens[cursor] === '/' || tokens[cursor] === '%')) {
+      const operator = tokens[cursor++]
+      const right = power()
+      if (right === undefined) return undefined
+      value = operator === '*' ? value * right : operator === '/' ? value / right : value % right
+      if (!Number.isFinite(value)) return undefined
+    }
+    return value
+  }
+
+  const value = formulaValue()
+  return finite(value) && cursor === tokens.length ? value : undefined
 }
 
 function parseAnimations(slideRoot: Element, theme: Record<string, string>, warnings: Set<string>, elements: PptxElement[], slideWidth: number, slideHeight: number): Pick<PptxSlide, 'automaticAnimations' | 'animationSteps' | 'animationSequence' | 'triggeredAnimations'> {
@@ -2565,7 +2872,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
       handledColors.add(animation)
     }
     for (const animation of ownedDescendants('anim')) {
-      // Microsoft Open XML lists style, fill, stroke, and shadow opacity as animatable properties.
+      // Microsoft lists style.fontWeight among p:tav formula-capable target attributes.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa
       // https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-animation
       // p:tav elements are time/value keypoints; numeric opacity supports the discrete and linear calculation modes.
       // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timeanimatevalue?view=openxml-3.0.1
@@ -2577,8 +2885,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
       const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
       const tavList = child(animation, 'tavLst')
       const calculationMode = animation.getAttribute('calcmode') || 'lin'
-      if (!animationTarget.targetId || !['style.fontSize', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(property || '') || !element
-        || property === 'style.fontSize' && !element.paragraphs.length
+      if (!animationTarget.targetId || !['style.fontSize', 'style.fontWeight', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(property || '') || !element
+        || ['style.fontSize', 'style.fontWeight'].includes(property || '') && !element.paragraphs.length
         || property === 'fill.opacity' && (element.kind !== 'shape' || element.fill.includes('gradient('))
         || property === 'stroke.opacity' && (!['shape', 'line'].includes(element.kind) || element.stroke.includes('gradient('))
         || property === 'shadow.opacity' && !element.shadow && !element.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))
@@ -2610,12 +2918,12 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         const offset = parseFixedPercentage(node.getAttribute('tm'))
         const rawValue = valueNode && ['fltVal', 'strVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
         const value = rawValue?.trim() ? Number(rawValue) : Number.NaN
-        return offset !== undefined && offset >= 0 && offset <= 1 && Number.isFinite(value) && value >= 0 && value <= 100 && !node.hasAttribute('fmla')
+        return offset !== undefined && offset >= 0 && offset <= 1 && Number.isFinite(value) && value >= 0 && value <= 1000 && !node.hasAttribute('fmla')
           ? { offset, value }
           : undefined
       }).filter((frame): frame is { offset: number; value: number } => Boolean(frame)) : undefined
       const validKeyframes = Boolean(keyframes?.length && keyframes.length === keyframeNodes.length && keyframes.every((frame, index) => index === 0 || frame.offset > keyframes[index - 1]!.offset))
-      if (property !== 'style.fontSize') {
+      if (!['style.fontSize', 'style.fontWeight'].includes(property || '')) {
         const hasTextRange = Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
         if (hasTextRange && property !== 'style.opacity') {
           warnings.add('Text-range fill, stroke, and shadow opacity animations are not rendered yet.')
@@ -2648,6 +2956,38 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
           effect: 'opacity', opacityProperty: property as PptxAnimation['opacityProperty'], direction: 'in',
           opacityFrom: keyframes?.[0]?.value ?? from, opacityTo: keyframes?.at(-1)?.value ?? to, opacityKeyframes: keyframes,
           opacityKeyframeMode: tavList ? calculationMode as NonNullable<PptxAnimation['opacityKeyframeMode']> : undefined,
+          durationMs: animationDurationMs(timeNode, timing),
+          delayMs: delayMs + startDelay(timeNode),
+          ...timing,
+        })
+        handledTextAnimations.add(animation)
+        continue
+      }
+      if (property === 'style.fontWeight') {
+        const validFontWeightKeyframes = Boolean(validKeyframes && keyframes?.every(frame => frame.value >= 1 && frame.value <= 1000))
+        const validValues = tavList
+          ? validFontWeightKeyframes && rawFrom === null && rawTo === null && rawBy === null
+          : rawFrom !== null && rawTo !== null && rawBy === null
+        const from = keyframes?.[0]?.value ?? (rawFrom === null ? Number.NaN : Number(rawFrom))
+        const to = keyframes?.at(-1)?.value ?? (rawTo === null ? Number.NaN : Number(rawTo))
+        if (!validValues || !Number.isFinite(from) || !Number.isFinite(to) || from < 1 || from > 1000 || to < 1 || to > 1000) {
+          warnings.add('A generic text font-weight animation with missing or out-of-range numeric values was skipped.')
+          handledTextAnimations.add(animation)
+          continue
+        }
+        const timing = animationTiming(timeNode, 'Text font weight')
+        if (!timing) {
+          handledTextAnimations.add(animation)
+          continue
+        }
+        const key = `${animationTarget.targetId}:fontWeight:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+        actions.set(key, {
+          targetId: animationTarget.targetId,
+          paragraphRange: animationTarget.paragraphRange,
+          characterRange: animationTarget.characterRange,
+          effect: 'fontWeight', direction: 'in', fontWeightFrom: from, fontWeightTo: to,
+          fontWeightKeyframes: keyframes,
+          fontWeightKeyframeMode: tavList ? calculationMode as NonNullable<PptxAnimation['fontWeightKeyframeMode']> : undefined,
           durationMs: animationDurationMs(timeNode, timing),
           delayMs: delayMs + startDelay(timeNode),
           ...timing,
@@ -2797,113 +3137,242 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
       }
       // Office motion path commands use slide-size fractions and absolute/relative coordinates.
       // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/498c3cfa-652c-49b3-a82c-33fd94468af8
-      const tokenPattern = /[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?|[MLCZEmlcze]/gi
-      const tokensBeforeEnd = [...path.matchAll(tokenPattern)]
-      const endToken = tokensBeforeEnd.find(token => token[0].toLowerCase() === 'e')
-      const pathSource = endToken ? path.slice(0, endToken.index) : path
-      const tokens = pathSource.match(tokenPattern) || []
-      const compactPath = pathSource.replace(tokenPattern, '').replace(/[\s,]/g, '')
-      if (compactPath || !tokens.length || !element) {
+      const tokens: Array<string | { coordinates: [number, number] } | { formulas: [string, string] }> = []
+      const numberPattern = /[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/iy
+      let scan = 0
+      let invalidPathSyntax = false
+      let tooManyTokens = false
+      let unsupportedFormula = false
+      let dynamicFormula = false
+      const formulaVariables: Record<string, number> = element ? {
+        ppt_x: element.x / slideWidth,
+        ppt_y: element.y / slideHeight,
+        ppt_w: element.width / slideWidth,
+        ppt_h: element.height / slideHeight,
+      } : { ppt_x: Number.NaN, ppt_y: Number.NaN, ppt_w: Number.NaN, ppt_h: Number.NaN }
+      while (scan < path.length && !invalidPathSyntax) {
+        const character = path[scan]
+        if (character && /[\s,]/.test(character)) { scan++; continue }
+        if (character && /[MLCZE]/i.test(character)) {
+          const action = character
+          tokens.push(action)
+          scan++
+          if (action.toLowerCase() === 'e') break
+        } else if (character === '(') {
+          const start = ++scan
+          let depth = 1
+          while (scan < path.length && depth > 0) {
+            if (path[scan] === '(') depth++
+            else if (path[scan] === ')') depth--
+            scan++
+            if (depth > 256) { invalidPathSyntax = true; break }
+          }
+          if (depth !== 0 || invalidPathSyntax) { invalidPathSyntax = true; break }
+          const formulaPair = path.slice(start, scan - 1)
+          let formulaDepth = 0
+          const commaSeparators: number[] = []
+          const spaceSeparators: number[] = []
+          for (let index = 0; index < formulaPair.length; index++) {
+            if (formulaPair[index] === '(') formulaDepth++
+            else if (formulaPair[index] === ')') formulaDepth--
+            else if (formulaDepth === 0 && formulaPair[index] === ',') commaSeparators.push(index)
+            else if (formulaDepth === 0 && /\s/.test(formulaPair[index] || '') && (index === 0 || !/\s/.test(formulaPair[index - 1] || ''))) spaceSeparators.push(index)
+          }
+          const dynamicCoordinates = formulaPair.includes('$')
+          if (dynamicCoordinates) dynamicFormula = true
+          if (formulaPair.length > 16_384 || commaSeparators.length > 1) { unsupportedFormula = true; invalidPathSyntax = true; break }
+          let coordinates: [number, number] | undefined
+          let formulas: [string, string] | undefined
+          const separators = commaSeparators.length ? commaSeparators : spaceSeparators
+          for (const separator of separators) {
+            const xFormula = formulaPair.slice(0, separator).trim()
+            const yFormula = formulaPair.slice(separator + 1).trim()
+            const variables = dynamicCoordinates ? { ...formulaVariables, $: 0.5 } : formulaVariables
+            const x = evaluateMotionFormula(xFormula, variables)
+            const y = evaluateMotionFormula(yFormula, variables)
+            if (x !== undefined && y !== undefined) {
+              coordinates = [x, y]
+              if (dynamicCoordinates) formulas = [xFormula, yFormula]
+              break
+            }
+          }
+          if (!coordinates) { unsupportedFormula = true; invalidPathSyntax = true; break }
+          tokens.push(formulas ? { formulas } : { coordinates })
+        } else {
+          numberPattern.lastIndex = scan
+          const number = numberPattern.exec(path)
+          if (!number || !number[0]) { invalidPathSyntax = true; break }
+          tokens.push(number[0])
+          scan = numberPattern.lastIndex
+        }
+        if (tokens.length > 1024) { tooManyTokens = true; break }
+      }
+      if (tooManyTokens) {
+        warnings.add('A motion path with more than 1,024 coordinates was skipped.')
+        continue
+      }
+      if (invalidPathSyntax || !tokens.length || !element) {
+        if (unsupportedFormula) warnings.add('A motion path with an unsupported or invalid coordinate formula was skipped.')
+        else warnings.add('An invalid or unsupported motion path was skipped.')
+        continue
+      }
+      if (!Number.isFinite(formulaVariables.ppt_x) || !Number.isFinite(formulaVariables.ppt_y) || !Number.isFinite(formulaVariables.ppt_w) || !Number.isFinite(formulaVariables.ppt_h)) {
         warnings.add('An invalid or unsupported motion path was skipped.')
         continue
       }
       // Relative layout paths travel with the target; fixed paths stay anchored to the slide.
       // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/498c3cfa-652c-49b3-a82c-33fd94468af8
-      const point = (x: number, y: number): [number, number] => origin === 'layout'
-        ? pathEditMode === 'fixed'
-          ? [x * slideWidth - element.x, y * slideHeight - element.y]
-          : [x * slideWidth, y * slideHeight]
-        : [x * slideWidth - element.x, y * slideHeight - element.y]
-      const pathPoints: NonNullable<PptxAnimation['motionPath']> = []
-      const pathControls: [number, number][] = []
-      const limit = 100 * Math.max(slideWidth, slideHeight)
-      let cursor = 0
-      let current: [number, number] | undefined
-      let pathStart: [number, number] | undefined
-      let invalidPath = false
-      let drawingSegments = 0
-      let distance = 0
-      const append = (coordinates: [number, number], snap = false) => {
-        const [x, y] = point(...coordinates)
-        const previous = pathPoints.at(-1)
-        if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > limit || Math.abs(y) > limit) {
-          invalidPath = true
-          return
+      const point = (x: number, y: number): [number, number] => {
+        if (origin === 'parent' && element.motionParent) {
+          const [a, b, c, d] = element.motionParent.matrix
+          const localX = x * slideWidth - element.motionParent.x
+          const localY = y * slideHeight - element.motionParent.y
+          return [a * localX + c * localY, b * localX + d * localY]
         }
-        if (previous && !snap) distance += Math.hypot(x - previous.x, y - previous.y)
-        pathPoints.push({ x, y, distance })
+        return origin === 'layout'
+          ? pathEditMode === 'fixed'
+            ? [x * slideWidth - element.x, y * slideHeight - element.y]
+            : [x * slideWidth, y * slideHeight]
+          : [x * slideWidth - element.x, y * slideHeight - element.y]
       }
-      const readPoint = (): [number, number] | undefined => {
-        const x = tokens[cursor++], y = tokens[cursor++]
-        if (x === undefined || y === undefined || !Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return undefined
-        return [Number(x), Number(y)]
+      const limit = 100 * Math.max(slideWidth, slideHeight)
+      const buildPath = (progress: number) => {
+        const pathPoints: NonNullable<PptxAnimation['motionPath']> = []
+        const pathControls: [number, number][] = []
+        let cursor = 0
+        let current: [number, number] | undefined
+        let pathStart: [number, number] | undefined
+        let invalid = false
+        let drawingSegments = 0
+        let distance = 0
+        const append = (coordinates: [number, number], snap = false) => {
+          const [x, y] = point(...coordinates)
+          const previous = pathPoints.at(-1)
+          if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > limit || Math.abs(y) > limit) {
+            invalid = true
+            return
+          }
+          if (previous && !snap) distance += Math.hypot(x - previous.x, y - previous.y)
+          pathPoints.push({ x, y, distance })
+        }
+        const readPoint = (): [number, number] | undefined => {
+          const x = tokens[cursor++]
+          if (x === undefined) return undefined
+          if (typeof x !== 'string') {
+            if ('coordinates' in x) return x.coordinates
+            const variables = { ...formulaVariables, $: progress }
+            const formulaX = evaluateMotionFormula(x.formulas[0], variables)
+            const formulaY = evaluateMotionFormula(x.formulas[1], variables)
+            return formulaX === undefined || formulaY === undefined ? undefined : [formulaX, formulaY]
+          }
+          const y = tokens[cursor++]
+          if (typeof y !== 'string' || !Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return undefined
+          return [Number(x), Number(y)]
+        }
+        while (cursor < tokens.length && !invalid) {
+          const action = tokens[cursor++]
+          if (typeof action !== 'string') { invalid = true; break }
+          if (action.toLowerCase() === 'e') break
+          if (action.toLowerCase() === 'm') {
+            const coordinates = readPoint()
+            if (!coordinates) { invalid = true; break }
+            current = action === 'm' ? [coordinates[0], coordinates[1]] : coordinates
+            pathStart ??= [...current]
+            // M snaps to a point; disconnected subpaths add no travel distance.
+            append(current, true)
+            continue
+          }
+          if (!current) { invalid = true; break }
+          if (action.toLowerCase() === 'l') {
+            const coordinates = readPoint()
+            if (!coordinates) { invalid = true; break }
+            const end = action === 'l'
+              ? [current[0] + coordinates[0], current[1] + coordinates[1]] as [number, number]
+              : coordinates
+            append(end)
+            current = end
+            drawingSegments++
+          } else if (action.toLowerCase() === 'c') {
+            const values = [readPoint(), readPoint(), readPoint()]
+            if (values.some(value => !value)) { invalid = true; break }
+            const [control1Input, control2Input, endInput] = values as [[number, number], [number, number], [number, number]]
+            const relative = action === 'c'
+            const control1 = relative ? [current[0] + control1Input[0], current[1] + control1Input[1]] as [number, number] : control1Input
+            const control2 = relative ? [current[0] + control2Input[0], current[1] + control2Input[1]] as [number, number] : control2Input
+            const end = relative ? [current[0] + endInput[0], current[1] + endInput[1]] as [number, number] : endInput
+            pathControls.push(control1, control2, end)
+            const from = point(...current), first = point(...control1), second = point(...control2), to = point(...end)
+            // ponytail: 32 samples per cubic bound per-frame lookup size; increase or make adaptive if subpixel pacing error appears in calibrated decks.
+            for (let step = 1; step <= 32; step++) {
+              const t = step / 32, inverse = 1 - t
+              const x = inverse ** 3 * from[0] + 3 * inverse ** 2 * t * first[0] + 3 * inverse * t ** 2 * second[0] + t ** 3 * to[0]
+              const y = inverse ** 3 * from[1] + 3 * inverse ** 2 * t * first[1] + 3 * inverse * t ** 2 * second[1] + t ** 3 * to[1]
+              const previous = pathPoints.at(-1)
+              if (previous) distance += Math.hypot(x - previous.x, y - previous.y)
+              pathPoints.push({ x, y, distance })
+            }
+            current = end
+            drawingSegments++
+          } else if (action.toLowerCase() === 'z') {
+            if (!pathStart) { invalid = true; break }
+            append(pathStart)
+            current = [...pathStart]
+            drawingSegments++
+          } else {
+            invalid = true
+            break
+          }
+          if (drawingSegments > 128) invalid = true
+        }
+        if (!invalid && pathControls.some(coordinates => {
+          const [x, y] = rotateMotionOffset(...point(...coordinates))
+          return !Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > limit || Math.abs(y) > limit
+        })) invalid = true
+        if (!invalid) for (const pathPoint of pathPoints) {
+          const [x, y] = rotateMotionOffset(pathPoint.x, pathPoint.y)
+          pathPoint.x = x
+          pathPoint.y = y
+          if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > limit || Math.abs(y) > limit) invalid = true
+        }
+        return { points: pathPoints, length: distance, invalid: invalid || !pathPoints.length || !Number.isFinite(distance) }
       }
-      while (cursor < tokens.length && !invalidPath) {
-        const action = tokens[cursor++]
-        if (action === undefined) { invalidPath = true; break }
-        if (action.toLowerCase() === 'e') break
-        if (action.toLowerCase() === 'm') {
-          const coordinates = readPoint()
-          if (!coordinates) { invalidPath = true; break }
-          current = action === 'm' ? [coordinates[0], coordinates[1]] : coordinates
-          pathStart ??= [...current]
-          // M snaps to a point; disconnected subpaths add no travel distance.
-          append(current, true)
+      const pathPosition = (path: NonNullable<PptxAnimation['motionPath']>, length: number, progress: number): [number, number] => {
+        if (path.length === 1 || length <= 0) return [path.at(-1)!.x, path.at(-1)!.y]
+        const distance = length * progress
+        let low = 0, high = path.length
+        while (low < high) {
+          const middle = (low + high) >>> 1
+          if (path[middle]!.distance <= distance) low = middle + 1
+          else high = middle
+        }
+        const from = path[low - 1], to = path[low]
+        if (!from) return [path[0]!.x, path[0]!.y]
+        if (!to) return [from.x, from.y]
+        const span = to.distance - from.distance
+        const ratio = span ? (distance - from.distance) / span : 0
+        return [from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio]
+      }
+      const durationMs = animationDurationMs(timeNode, timing)
+      let pathGeometry = buildPath(0)
+      let motionPathSamples: PptxAnimation['motionPathSamples']
+      if (dynamicFormula) {
+        const desiredSamples = Math.max(60, Math.ceil(durationMs / 1000 * 60))
+        const sampleCount = Math.min(900, desiredSamples)
+        if (sampleCount < desiredSamples) warnings.add('A long animation-progress motion path is sampled at a reduced rate.')
+        motionPathSamples = []
+        for (let index = 0; index <= sampleCount; index++) {
+          const progress = index / sampleCount
+          const geometry = index === 0 ? pathGeometry : buildPath(progress)
+          if (geometry.invalid) { pathGeometry = geometry; break }
+          const [x, y] = pathPosition(geometry.points, geometry.length, progress)
+          motionPathSamples.push({ progress, x, y })
+        }
+        if (motionPathSamples.length !== sampleCount + 1) {
+          warnings.add('A dynamic motion-path formula produced an invalid or out-of-range coordinate; animation was skipped.')
           continue
         }
-        if (!current) { invalidPath = true; break }
-        if (action.toLowerCase() === 'l') {
-          const coordinates = readPoint()
-          if (!coordinates) { invalidPath = true; break }
-          const end = action === 'l'
-            ? [current[0] + coordinates[0], current[1] + coordinates[1]] as [number, number]
-            : coordinates
-          append(end)
-          current = end
-          drawingSegments++
-        } else if (action.toLowerCase() === 'c') {
-          const values = [readPoint(), readPoint(), readPoint()]
-          if (values.some(value => !value)) { invalidPath = true; break }
-          const [control1Input, control2Input, endInput] = values as [[number, number], [number, number], [number, number]]
-          const relative = action === 'c'
-          const control1 = relative ? [current[0] + control1Input[0], current[1] + control1Input[1]] as [number, number] : control1Input
-          const control2 = relative ? [current[0] + control2Input[0], current[1] + control2Input[1]] as [number, number] : control2Input
-          const end = relative ? [current[0] + endInput[0], current[1] + endInput[1]] as [number, number] : endInput
-          pathControls.push(control1, control2, end)
-          const from = point(...current), first = point(...control1), second = point(...control2), to = point(...end)
-          // ponytail: 32 samples per cubic bound per-frame lookup size; increase or make adaptive if subpixel pacing error appears in calibrated decks.
-          for (let step = 1; step <= 32; step++) {
-            const t = step / 32, inverse = 1 - t
-            const x = inverse ** 3 * from[0] + 3 * inverse ** 2 * t * first[0] + 3 * inverse * t ** 2 * second[0] + t ** 3 * to[0]
-            const y = inverse ** 3 * from[1] + 3 * inverse ** 2 * t * first[1] + 3 * inverse * t ** 2 * second[1] + t ** 3 * to[1]
-            const previous = pathPoints.at(-1)
-            if (previous) distance += Math.hypot(x - previous.x, y - previous.y)
-            pathPoints.push({ x, y, distance })
-          }
-          current = end
-          drawingSegments++
-        } else if (action.toLowerCase() === 'z') {
-          if (!pathStart) { invalidPath = true; break }
-          append(pathStart)
-          current = [...pathStart]
-          drawingSegments++
-        } else {
-          invalidPath = true
-          break
-        }
-        if (drawingSegments > 128) invalidPath = true
       }
-      if (!invalidPath && pathControls.some(coordinates => {
-        const [x, y] = rotateMotionOffset(...point(...coordinates))
-        return !Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > limit || Math.abs(y) > limit
-      })) invalidPath = true
-      if (!invalidPath) for (const pathPoint of pathPoints) {
-        const [x, y] = rotateMotionOffset(pathPoint.x, pathPoint.y)
-        pathPoint.x = x
-        pathPoint.y = y
-        if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > limit || Math.abs(y) > limit) invalidPath = true
-      }
-      if (invalidPath || !pathPoints.length || !Number.isFinite(distance)) {
+      if (pathGeometry.invalid) {
         warnings.add('A motion animation with out-of-range coordinates was skipped.')
         continue
       }
@@ -2912,8 +3381,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         targetId: animationTarget.targetId,
         paragraphRange: animationTarget.paragraphRange,
         characterRange: animationTarget.characterRange,
-        effect: 'motion', direction: 'in', motionPath: pathPoints, motionPathLength: distance,
-        durationMs: animationDurationMs(timeNode, timing),
+        effect: 'motion', direction: 'in', motionPath: pathGeometry.points, motionPathLength: pathGeometry.length, motionPathSamples,
+        durationMs,
         delayMs: delayMs + startDelay(timeNode),
         ...timing,
       })
@@ -3452,6 +3921,7 @@ function applyGroupTransform(element: PptxElement, parent: Matrix2D): PptxElemen
     rotation: 0,
     flipH: false,
     flipV: false,
+    motionParent: { matrix: parent, x: element.x, y: element.y },
     renderMatrix: [transform[0], transform[1], transform[2], transform[3], transform[4] - minX, transform[5] - minY],
   }
 }
@@ -3487,7 +3957,11 @@ async function parseSceneElements(
   else if (node.localName === 'graphicFrame') {
     element = parseTable(node, theme, warnings)
     if (!element && firstDescendant(node, 'chart')) element = await parseChart(node, rels, zip, theme, warnings)
-    else if (!element) warnings.add('SmartArt and unsupported graphic frames are not rendered yet.')
+    else if (!element) {
+      element = await parseOlePreview(node, rels, zip, theme, warnings, urls, imageUrlCache)
+      if (!element) element = await parseSmartArtTextFallback(node, rels, zip, theme, warnings)
+      if (!element) warnings.add('Unsupported graphic frames are not rendered yet.')
+    }
   }
   if (element && node.localName === 'cxnSp') warnings.add('Connector geometry is not fully rendered yet.')
   if (!element) return []
@@ -3541,15 +4015,50 @@ async function backgroundFill(
   if (tile) {
     // DrawingML tile defaults: top-left alignment, no flip, 100% scale, and zero offset.
     // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c0c046ec-a61d-405d-88fe-74d8487a37d7
-    const isDefaultScale = (name: 'sx' | 'sy') => !tile.hasAttribute(name) || ['100000', '100%'].includes(tile.getAttribute(name) || '')
+    const readTileScale = (name: 'sx' | 'sy') => {
+      const raw = tile.getAttribute(name)
+      if (raw === null) return 1
+      const value = raw.trim()
+      // ST_Percentage is written as thousandths of a percent or a percent string.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/ff18a37e-9bd7-4338-9c37-1e285b5a5dd2
+      const scale = /^(?:\d+\.?\d*|\.\d+)%$/.test(value) ? Number(value.slice(0, -1)) / 100
+        : /^\d+$/.test(value) ? Number(value) / 100_000
+          : Number.NaN
+      if (!Number.isFinite(scale) || scale <= 0) {
+        warnings.add(`An invalid slide background tile ${name} scale was replaced with 100%.`)
+        return 1
+      }
+      return scale
+    }
+    const scaleX = readTileScale('sx')
+    const scaleY = readTileScale('sy')
+    const rawAlign = tile.getAttribute('algn') || 'tl'
+    const alignValues = ['tl', 't', 'tr', 'l', 'ctr', 'r', 'bl', 'b', 'br'] as const
+    const align = alignValues.includes(rawAlign as typeof alignValues[number]) ? rawAlign as typeof alignValues[number] : 'tl'
+    if (align !== rawAlign) warnings.add(`An invalid slide background tile alignment "${rawAlign}" was replaced with top-left.`)
+    const readTileOffset = (name: 'tx' | 'ty') => {
+      if (!tile.hasAttribute(name)) return 0
+      const raw = tile.getAttribute(name) || ''
+      const value = Number(raw)
+      if (!/^[+-]?\d+$/.test(raw.trim()) || !Number.isSafeInteger(value)) {
+        warnings.add(`An invalid slide background tile ${name} offset was replaced with zero.`)
+        return 0
+      }
+      return value
+    }
+    const rawFlip = tile.getAttribute('flip') || 'none'
+    const flips = ['none', 'x', 'y', 'xy'] as const
+    const flip = flips.includes(rawFlip as typeof flips[number]) ? rawFlip as typeof flips[number] : 'none'
     const hasCrop = Object.values(crop).some(value => value !== 0)
-    const usesDefaultTile = (tile.getAttribute('algn') || 'tl') === 'tl'
-      && (tile.getAttribute('flip') || 'none') === 'none'
-      && isDefaultScale('sx') && isDefaultScale('sy')
-      && ['tx', 'ty'].every(name => !tile.hasAttribute(name) || tile.getAttribute(name) === '0')
     if (hasCrop) warnings.add('A cropped tiled slide background uses the full image while tiling.')
-    if (!usesDefaultTile) warnings.add('Non-default slide background tile scale, alignment, flip, or offset is approximated with default tiling.')
-    return { image: { url, crop: { left: 0, top: 0, right: 0, bottom: 0 }, tiled: true } }
+    if (flip !== rawFlip) warnings.add(`Unknown slide background tile flip "${rawFlip}" was replaced with none.`)
+    return {
+      image: {
+        url,
+        crop: { left: 0, top: 0, right: 0, bottom: 0 },
+        tile: { scaleX, scaleY, align, flip, offsetX: readTileOffset('tx'), offsetY: readTileOffset('ty') },
+      },
+    }
   }
   return { image: { url, crop } }
 }
