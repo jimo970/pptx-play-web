@@ -66,4 +66,6 @@ Numeric opacity animations also read up to 256 `p:tavLst` keypoints with `p:fltV
 
 Generic numeric `style.fontWeight` animations support explicit `from`/`to` values and up to 256 linear or discrete `p:tavLst` keypoints. Rendering follows CSS numeric font weights; available font faces may map intermediate weights to their nearest supported face. The supported target is listed in [Microsoft MS-OE376 `tav`](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa).
 
+Linear `style.fontWeight` keyframes may also use `p:tav/@fmla`; formulas are pre-sampled at up to 60 Hz and support `$`, `#style.fontWeight`, `#ppt_x/y/w/h`, and deterministic math functions. The renderer applies each formula to the linearly interpolated numeric keyframe track, an interpretation inferred from Microsoft's formula and keyframe examples; formula-mode interpolation, `rand`, unsupported variables, and out-of-range values are skipped with a warning.
+
 Value-axis major gridlines render only when the source axis includes `c:majorGridlines`.
