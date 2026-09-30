@@ -798,6 +798,15 @@ function applyColorOpacity(color: string, opacity: number): string {
   return `rgba(${channels.slice(0, 3).join(', ')}, ${Math.max(0, Math.min(channels[3]! * opacity, 1))})`
 }
 
+function animatedRunColor(color: string | undefined, opacity: number): string | undefined {
+  if (opacity >= 1) return color
+  const value = color || 'currentColor'
+  const adjusted = applyColorOpacity(value, opacity)
+  return adjusted !== value || value === 'transparent'
+    ? adjusted
+    : `color-mix(in srgb, ${value} ${Math.max(0, Math.min(opacity, 1)) * 100}%, transparent)`
+}
+
 function elementStyle(element: PptxElement): CSSProperties {
   const fittedSize = autoFitDimensions.get(`${props.slide.id}:${element.id}`)
   const width = fittedSize?.width || element.width
@@ -1966,23 +1975,39 @@ type ScriptFont = 'latin' | 'eastAsia' | 'complexScript'
 
 type TextSegment = { text: string; script: ScriptFont; start: number; end: number }
 
-function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], script: ScriptFont, fontScale = element.textFontScale ?? 1): CSSProperties {
-  const requestedFont = script === 'eastAsia' ? run.fontFamilyEastAsia : script === 'complexScript' ? run.fontFamilyComplexScript : run.fontFamily
-  const fontFamily = (requestedFont || run.fontFamily || '').replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 128)
+function cssFontFamily(fontFamily: string | undefined): string {
+  const safeFontFamily = (fontFamily || '').replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 128)
+  return safeFontFamily ? `'${safeFontFamily}', Arial, sans-serif` : 'Arial, sans-serif'
+}
+
+function runTextShadowStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties['textShadow'] {
   const shadow = run.shadow
-  const angle = (shadow?.angle || 0) * Math.PI / 180
-  const shadowColor = animationColor(element, 'shadow.color') || shadow?.color
+  if (!shadow) return undefined
+  const angle = (shadow.angle || 0) * Math.PI / 180
+  const shadowColor = animationColor(element, 'shadow.color', paragraphIndex, characterStart, characterEnd) || shadow.color
+  return `${Math.cos(angle) * shadow.distance * scale.value}px ${Math.sin(angle) * shadow.distance * scale.value}px ${shadow.blur * scale.value}px ${animatedRunColor(shadowColor, animationOpacity(element, 'shadow.opacity', paragraphIndex, characterStart, characterEnd))}`
+}
+
+function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], script: ScriptFont, fontScale: number, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
+  const requestedFont = script === 'eastAsia' ? run.fontFamilyEastAsia : script === 'complexScript' ? run.fontFamilyComplexScript : run.fontFamily
+  const fillOpacity = animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)
+  const strokeOpacity = animationOpacity(element, 'stroke.opacity', paragraphIndex, characterStart, characterEnd)
+  const textDecorationLine = [run.underline ? 'underline' : undefined, run.lineThrough ? 'line-through' : undefined].filter(Boolean).join(' ')
+  const textDecorationStyle = run.underline && run.lineThrough
+    ? (run.underlineStyle ?? (run.lineThroughStyle === 'double' ? 'solid' : run.lineThroughStyle))
+    : run.underlineStyle ?? run.lineThroughStyle
   return {
-    fontFamily: fontFamily ? `'${fontFamily}', Arial, sans-serif` : 'Arial, sans-serif',
+    fontFamily: cssFontFamily(requestedFont || run.fontFamily),
     fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value}px`,
     letterSpacing: run.letterSpacingPt === undefined ? undefined : `${run.letterSpacingPt * fontScale * EMU_PER_POINT * scale.value}px`,
     verticalAlign: run.baselineOffsetEm === undefined ? undefined : `${run.baselineOffsetEm}em`,
-    color: run.color || undefined,
-    WebkitTextStroke: run.outlineColor !== undefined && run.outlineWidth !== undefined ? `${run.outlineWidth * scale.value}px ${run.outlineColor}` : undefined,
+    color: animatedRunColor(run.color, fillOpacity),
+    WebkitTextStroke: run.outlineColor !== undefined && run.outlineWidth !== undefined ? `${run.outlineWidth * scale.value}px ${animatedRunColor(run.outlineColor, strokeOpacity)}` : undefined,
     fontWeight: run.bold ? 700 : undefined,
     fontStyle: run.italic ? 'italic' : undefined,
-    textDecoration: run.underline ? 'underline' : undefined,
-    textShadow: shadow ? `${Math.cos(angle) * shadow.distance * scale.value}px ${Math.sin(angle) * shadow.distance * scale.value}px ${shadow.blur * scale.value}px ${applyColorOpacity(shadowColor || shadow.color, animationOpacity(element, 'shadow.opacity'))}` : undefined,
+    textDecorationLine: textDecorationLine || undefined,
+    textDecorationStyle,
+    textShadow: runTextShadowStyle(element, run, paragraphIndex, characterStart, characterEnd),
   }
 }
 

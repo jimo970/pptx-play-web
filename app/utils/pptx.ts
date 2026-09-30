@@ -17,8 +17,17 @@ export interface PptxRun {
     bold?: boolean
     italic?: boolean
     underline?: boolean
+    underlineStyle?: 'double' | 'dotted' | 'dashed' | 'wavy'
+    lineThrough?: boolean
+    lineThroughStyle?: 'solid' | 'double'
+    hyperlink?: PptxHyperlink
     shadow?: PptxShadow
 }
+
+export type PptxHyperlink =
+    | {kind: 'external'; url: string; tooltip?: string}
+    | {kind: 'slide'; targetPath: string; tooltip?: string}
+    | {kind: 'showJump'; jump: 'firstslide' | 'lastslide' | 'nextslide' | 'previousslide' | 'number'; slideNumber?: number; tooltip?: string}
 
 export interface PptxShadow {
     color: string
@@ -1048,6 +1057,14 @@ function parseCustomGeometry(geometry: Element | undefined, warnings: Set<string
     return paths.length ? paths : undefined
 }
 
+const textUnderlineStyles: Record<string, PptxRun['underlineStyle']> = {
+    none: undefined, words: undefined, sng: undefined, dbl: 'double', heavy: undefined,
+    dotted: 'dotted', dottedHeavy: 'dotted', dash: 'dashed', dashHeavy: 'dashed', dashLong: 'dashed', dashLongHeavy: 'dashed',
+    dotDash: 'dashed', dotDashHeavy: 'dashed', dotDotDash: 'dashed', dotDotDashHeavy: 'dashed',
+    wavy: 'wavy', wavyHeavy: 'wavy', wavyDbl: 'wavy',
+}
+const approximatedTextUnderlineValues = new Set(['words', 'heavy', 'dottedHeavy', 'dashHeavy', 'dashLong', 'dashLongHeavy', 'dotDash', 'dotDashHeavy', 'dotDotDash', 'dotDotDashHeavy', 'wavyHeavy', 'wavyDbl'])
+
 function textStyle(style: Element | undefined, theme: Record<string, string>, warnings: Set<string>): PptxTextStyle {
     const fill = child(style, 'solidFill')
     const line = child(style, 'ln')
@@ -1096,6 +1113,13 @@ function textStyle(style: Element | undefined, theme: Record<string, string>, wa
     const validBaseline =
         baseline == null || (baselineIsPercent ? /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)%$/.test(baseline) && Number.isFinite(baselineValue) : /^[+-]?\d+$/.test(baseline) && baselineValue !== undefined && Number.isInteger(baselineValue) && baselineValue >= -2_147_483_648 && baselineValue <= 2_147_483_647)
     if (baseline != null && !validBaseline) warnings.add('A text run with malformed baseline shift was rendered on the default baseline.')
+    const rawUnderline = style?.hasAttribute('u') ? style.getAttribute('u')! : undefined
+    const validUnderline = rawUnderline === undefined || Object.prototype.hasOwnProperty.call(textUnderlineStyles, rawUnderline)
+    if (rawUnderline !== undefined && !validUnderline) warnings.add(`A text run with unsupported underline value "${rawUnderline}" was rendered as a solid underline.`)
+    else if (rawUnderline !== undefined && approximatedTextUnderlineValues.has(rawUnderline)) warnings.add(`The DrawingML underline value "${rawUnderline}" is approximated as CSS ${textUnderlineStyles[rawUnderline] || 'solid'}.`)
+    const strike = style?.getAttribute('strike')
+    const validStrike = strike == null || ['noStrike', 'sngStrike', 'dblStrike'].includes(strike)
+    if (!validStrike) warnings.add(`A text run with unsupported strike value "${strike}" was rendered without strikethrough.`)
     return {
         fontFamily: typeface('latin'),
         fontFamilyEastAsia: typeface('ea'),
@@ -1105,7 +1129,10 @@ function textStyle(style: Element | undefined, theme: Record<string, string>, wa
         baselineOffsetEm: validBaseline && baselineValue !== undefined ? baselineValue / (baselineIsPercent ? 100 : 100_000) : undefined,
         bold: style?.hasAttribute('b') ? style.getAttribute('b') === '1' : undefined,
         italic: style?.hasAttribute('i') ? style.getAttribute('i') === '1' : undefined,
-        underline: style?.hasAttribute('u') ? style.getAttribute('u') !== 'none' : undefined,
+        underline: rawUnderline === undefined ? undefined : rawUnderline !== 'none',
+        underlineStyle: validUnderline && rawUnderline !== undefined ? textUnderlineStyles[rawUnderline] : undefined,
+        lineThrough: validStrike && strike !== undefined ? strike !== 'noStrike' : undefined,
+        lineThroughStyle: validStrike && strike !== undefined ? strike === 'dblStrike' ? 'double' : 'solid' : undefined,
         color: readColor(children(fill)[0], theme),
         outlineColor,
         outlineWidth,
@@ -1121,6 +1148,12 @@ function mergeTextStyles(...styles: PptxTextStyle[]): PptxTextStyle {
         }
     }
     return result
+}
+
+function warnTextDecorationStyleConflict(style: PptxTextStyle, warnings: Set<string>): void {
+    if (style.underline && style.lineThrough && (style.underlineStyle || 'solid') !== (style.lineThroughStyle || 'solid')) {
+        warnings.add('A text run uses different underline and strikethrough styles; CSS applies one style to both and prioritizes the underline style.')
+    }
 }
 
 function parseSpacing(properties: Element | undefined, name: string): PptxParagraph['lineSpacing'] {
