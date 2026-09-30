@@ -1863,11 +1863,11 @@ function animationBarn(element: PptxElement): CSSProperties {
 
 function animationCss(actions: RenderAnimation[] | undefined, characterStart?: number, characterEnd?: number): CSSProperties {
   if (props.thumbnail && !props.playbackPreview || !actions?.length) return {}
-  const visibilityActions = actions.filter(action => ['appear', 'fade', 'wipe', 'strips', 'barn', 'slide'].includes(action.effect))
+  const visibilityActions = actions.filter(action => ['appear', 'fade', 'wipe', 'strips', 'barn', 'slide', 'visibility'].includes(action.effect))
   const first = visibilityActions[0]
   if (!first) return {}
-  let opacity = first.effect === 'wipe' || first.effect === 'strips' || first.effect === 'barn' || first.effect === 'slide' || first.direction === 'out' ? 1 : 0
-  let visibility: 'visible' | 'hidden' = first.direction === 'out' ? 'visible' : 'hidden'
+  let opacity = first.effect === 'visibility' || first.effect === 'wipe' || first.effect === 'strips' || first.effect === 'barn' || first.effect === 'slide' || first.direction === 'out' ? 1 : 0
+  let visibility: 'visible' | 'hidden' = first.effect === 'visibility' ? first.visibilityFrom || 'visible' : first.direction === 'out' ? 'visible' : 'hidden'
   for (const action of visibilityActions) {
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
     const progress = animationProgress(action, iterationIndex)
@@ -1883,6 +1883,15 @@ function animationCss(actions: RenderAnimation[] | undefined, characterStart?: n
         ? atEnd ? 'visible' : 'hidden'
         : atEnd ? 'hidden' : 'visible'
       opacity = visibility === 'visible' ? 1 : 0
+    } else if (action.effect === 'visibility') {
+      let value = action.visibilityFrom || 'visible'
+      if (action.visibilityKeyframes?.length) {
+        for (const frame of action.visibilityKeyframes) {
+          if (frame.offset > progress) break
+          value = frame.value
+        }
+      } else if (progress >= 1) value = action.visibilityTo || value
+      visibility = value
     } else if (action.effect === 'wipe' || action.effect === 'strips' || action.effect === 'barn') {
       visibility = action.direction === 'in'
         ? progress > 0 ? 'visible' : 'hidden'
