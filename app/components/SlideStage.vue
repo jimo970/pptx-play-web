@@ -1293,6 +1293,7 @@ function timingWarpChildElapsed(action: RenderAnimation, startedAt: number, stag
 
 function animationProgress(action: RenderAnimation, iterationIndex?: number): number | null {
   if (props.thumbnail && !props.playbackPreview) return null
+  const now = animationClock.value
   if (action.iteration && (iterationIndex === undefined || iterationIndex < 0)) return null
   const startedAt = timelineStart(action)
   const stagger = action.iteration ? action.iteration.intervalMs * (iterationIndex || 0) : 0
@@ -1302,7 +1303,7 @@ function animationProgress(action: RenderAnimation, iterationIndex?: number): nu
   if (startedAt === Number.NEGATIVE_INFINITY || reduceMotion.value) return finalAnimationProgress(action)
   const elapsed = action.timingWarp
     ? timingWarpChildElapsed(action, startedAt, stagger)
-    : animationClock.value - startedAt - action.delayMs - stagger
+    : now - startedAt - action.delayMs - stagger
   if (elapsed < 0) return -1
   if (action.durationMs === 0) return action.reversePlayback ? 0 : 1
   const cycleDuration = action.durationMs * (action.autoReverse ? 2 : 1)
@@ -1376,7 +1377,7 @@ function animationOpacity(
 ): number {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => {
     if (action.effect !== 'opacity' || action.opacityProperty !== property) return false
-    const hasTextRange = Boolean(action.paragraphRange || action.characterRange)
+    const hasTextRange = Boolean(action.paragraphRange || action.characterRange || action.iteration)
     if (paragraphIndex === undefined) return !hasTextRange
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
     return hasTextRange

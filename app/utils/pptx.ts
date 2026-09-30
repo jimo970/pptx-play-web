@@ -3017,7 +3017,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 return undefined
             }
             const {intervalMs, backwards} = interval
-            if (!['appear', 'fade', 'fontSize'].includes(action.effect) && !(action.effect === 'color' && action.colorProperty === 'style.color')) {
+            if (!['appear', 'fade', 'fontSize', 'fontWeight', 'textStyle', 'opacity'].includes(action.effect) && !(action.effect === 'color' && action.colorProperty === 'style.color')) {
                 warnings.add(`Text iteration for ${action.effect} animation is not rendered yet.`)
                 return undefined
             }

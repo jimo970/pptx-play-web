@@ -802,11 +802,11 @@ try {
   assert(paragraphWipe?.maskImage.includes('linear-gradient') && Number.parseFloat(paragraphWipe.wipeProgress) > 0 && Number.parseFloat(paragraphWipe.wipeProgress) < 100 && paragraphWipe.opacity === '1' && shape(afterStart, 'Paragraph wipe target').maskImage === 'none', `A paragraph-range wipe must mask only the selected paragraph and preserve text opacity: ${JSON.stringify(paragraphWipe)}`)
   const letterRuns = afterStart.textRuns.filter(run => ['W', 'O', 'R', 'D'].includes(run.text))
   assert(letterRuns.length === 4 && Number(letterRuns[0].opacity) > 0 && Number(letterRuns[0].opacity) < 1 && letterRuns.slice(1).every(run => run.visibility === 'hidden'), `The tmAbs by-letter iteration must stagger grapheme starts: ${JSON.stringify(letterRuns)}`)
-  const wordRuns = afterStart.textRuns.filter(run => ['ONE', 'TWO', ' '].includes(run.text))
+  const wordRuns = afterStart.textRuns.filter(run => run.name === 'By word' && ['ONE', 'TWO', ' '].includes(run.text))
   assert(wordRuns.length === 3 && Number(wordRuns.find(run => run.text === 'TWO')?.opacity) > 0 && wordRuns.find(run => run.text === 'ONE')?.visibility === 'hidden' && wordRuns.find(run => run.text === ' ')?.visibility === 'visible', `The backwards tmPct by-word iteration must reveal words in reverse and leave separators alone: ${JSON.stringify(wordRuns)}`)
   const baseFontSize = Number.parseFloat(initial.textRuns.find(run => run.text === 'ways')?.fontSize || '')
   const activeFontSize = Number.parseFloat(afterStart.textRuns.find(run => run.text === 'ways')?.fontSize || '')
-  assert(activeFontSize > baseFontSize && activeFontSize < baseFontSize * 1.5, 'A generic style.fontSize animation must interpolate on just the targeted character range.')
+  assert(activeFontSize > baseFontSize && activeFontSize < baseFontSize * 1.5, `A generic style.fontSize animation must interpolate on just the targeted character range: ${JSON.stringify({ baseFontSize, activeFontSize, targetRun: afterStart.textRuns.find(run => run.text === 'ways'), warnings: afterStart.warnings.filter(warning => /font.?size|animation/i.test(warning)) })}`)
   const fadeOpacity = Number(shape(afterStart, 'Click fade').opacity)
   assert(fadeOpacity > 0 && fadeOpacity < 1, 'A fade entrance must interpolate during its duration.')
   const motionAtStart = shape(afterStart, 'Motion path').frameRect.left / shape(afterStart, 'Motion path').frameRect.frameWidth
