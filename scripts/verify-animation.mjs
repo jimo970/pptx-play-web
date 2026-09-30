@@ -378,13 +378,19 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const shredPresentationRels = await zip.file('ppt/_rels/presentation.xml.rels').async('string')
   zip.file('ppt/_rels/presentation.xml.rels', shredPresentationRels.replace('</Relationships>', '<Relationship Id="rId38" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide38.xml"/><Relationship Id="rId39" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide39.xml"/><Relationship Id="rId40" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide40.xml"/><Relationship Id="rId41" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide41.xml"/><Relationship Id="rId42" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide42.xml"/><Relationship Id="rId43" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide43.xml"/><Relationship Id="rId44" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide44.xml"/><Relationship Id="rId45" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide45.xml"/><Relationship Id="rId46" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide46.xml"/><Relationship Id="rId47" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide47.xml"/><Relationship Id="rId48" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide48.xml"/><Relationship Id="rId49" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide49.xml"/><Relationship Id="rId50" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide50.xml"/><Relationship Id="rId51" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide51.xml"/></Relationships>'))
   const slide17Xml = await zip.file('ppt/slides/slide17.xml').async('string')
+  const wordArtVerticalRtl = plainTextShape(79, 'WordArt vertical RTL', 3500000, 3600000, 'This is')
+    .replace('cy="800000"', 'cy="2500000"')
+    .replace('</a:p>', '</a:p><a:p><a:r><a:rPr sz="1800"/><a:t>some text.</a:t></a:r></a:p>')
+    .replace('<a:bodyPr/>', '<a:bodyPr vert="wordArtVertRtl"/>')
   const verticalOrientationFixtures = plainTextShape(74, 'Vertical 270 text', 6000000, 5800000, 'Vertical 270').replace('<a:bodyPr/>', '<a:bodyPr vert="vert270"/>')
     + plainTextShape(75, 'WordArt vertical', 9000000, 5800000, 'WordArt').replace('<a:bodyPr/>', '<a:bodyPr vert="wordArtVert"/>')
     + plainTextShape(76, 'East Asian vertical text', 6000000, 4700000, '東西南北').replace('<a:bodyPr/>', '<a:bodyPr vert="eaVert"/>')
     + plainTextShape(77, 'Explicit horizontal text', 9000000, 4700000, 'Horizontal').replace('<a:bodyPr/>', '<a:bodyPr vert="horz"/>')
     + plainTextShape(78, 'Mongolian vertical', 0, 5000000, 'ᠮᠣᠩᠭᠣᠯ').replace('<a:bodyPr/>', '<a:bodyPr vert="mongolianVert"/>')
-    + plainTextShape(79, 'WordArt vertical RTL fallback', 3500000, 5000000, 'RTL').replace('<a:bodyPr/>', '<a:bodyPr vert="wordArtVertRtl"/>')
-    + plainTextShape(80, 'Two-column text', 0, 3000000, 'First column text keeps flowing until its height is full, then the remaining words continue in the second column with the configured gap.').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200"/>')
+    + wordArtVerticalRtl
+    + plainTextShape(80, 'Two-column text', 0, 3000000, 'First column text keeps flowing until its height is full, then the remaining words continue in the second column with the configured gap.').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="0"/>')
+    + plainTextShape(81, 'Two-column RTL text', 3000000, 3000000, 'The rightmost text column comes first, then overflow continues in the left column while paragraph text remains left-to-right.').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
+    + plainTextShape(82, 'RTL paragraph direction', 6000000, 3000000, 'Paragraph rtl controls this paragraph direction independently from the text column order.').replace('<a:p>', '<a:p><a:pPr rtl="1"/>').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
   zip.file('ppt/slides/slide17.xml', slide17Xml.replace('</p:spTree>', verticalOrientationFixtures + '</p:spTree>'))
   const layoutPath = 'ppt/slideLayouts/slideLayout1.xml'
   const layoutXml = await zip.file(layoutPath).async('string')
@@ -515,8 +521,10 @@ try {
         fontSize: parseFloat(getComputedStyle(cell.querySelector('.text-run') || cell).fontSize),
         columnCount: getComputedStyle(cell.querySelector('.table-cell-text')).columnCount,
         columnGap: getComputedStyle(cell.querySelector('.table-cell-text')).columnGap,
+        direction: getComputedStyle(cell.querySelector('.table-cell-text')).direction,
+        paragraphDirection: getComputedStyle(cell.querySelector('.text-paragraph')).direction,
         frameWidth: cell.closest('.slide-frame')?.getBoundingClientRect().width,
-        runRects: cell.textContent.includes('fills its first text column') ? (() => { const range = document.createRange(); range.selectNodeContents(cell.querySelector('.text-run')); return [...range.getClientRects()].map(rect => ({ left: rect.left, top: rect.top })) })() : undefined,
+        runRects: cell.textContent.includes('fills its first text column') ? (() => { const range = document.createRange(); range.selectNodeContents(cell.querySelector('.text-run')); return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top })) })() : undefined,
       })),
     })),
     menuItems: [...document.querySelectorAll('.presentation-menu button')].map(item => item.textContent),
@@ -651,7 +659,19 @@ try {
     await writeFile(process.env.DECKLINE_CAPTURE_SLIDE_PATH, Buffer.from(screenshot.data, 'base64'))
     console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, hostFrame: initial.hostFrame, shapes: initial.shapes, paragraphs: initial.paragraphs, textRuns: initial.textRuns, textLayout }))
   } else {
-  assert(initial.shapes.length === 66, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+  assert(initial.shapes.length === 80, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+  const textOverflow = await evaluate(`(() => {
+    const clip = document.querySelector('.stage-shell > .slide-host [title="Picture bullet"] .text-frame')
+    const ellipsis = document.querySelector('.stage-shell > .slide-host [title="Autofit reference"] .text-frame')
+    const clippedStyle = getComputedStyle(clip)
+    const ellipsisStyle = getComputedStyle(ellipsis)
+    const run = clip.querySelector('.text-run')
+    return { horizontal: clippedStyle.overflowX, vertical: clippedStyle.overflowY, textLength: run.textContent.length, whiteSpace: clippedStyle.whiteSpace, ellipsisVertical: ellipsisStyle.overflowY }
+  })()`)
+  assert(textOverflow.horizontal === 'clip' && textOverflow.vertical === 'clip'
+    && textOverflow.textLength > 100 && textOverflow.whiteSpace === 'nowrap' && ['clip', 'hidden'].includes(textOverflow.ellipsisVertical)
+    && initial.warnings.some(warning => warning.includes('vertOverflow="ellipsis"')),
+    `DrawingML text overflow must clip at the text frame and warn when ellipsis is approximated: ${JSON.stringify({ textOverflow, warnings: initial.warnings })}`)
   const initialThumbnailWindow = await evaluate(`(() => {
     const list = document.querySelector('.thumb-list')
     const items = [...(list?.querySelectorAll('.thumb-button') || [])]
@@ -1385,7 +1405,15 @@ try {
   const columnTableCellRender = secondSlide.tables[0].cells.find(cell => cell.text.includes('fills its first text column'))
   const expectedTableColumnGap = 457200 * (columnTableCellRender?.frameWidth || 0) / 12192000
   const tableColumnXs = (columnTableCellRender?.runRects || []).map(rect => rect.left)
-  assert(columnTableCellRender?.columnCount === '2' && Math.abs(Number.parseFloat(columnTableCellRender.columnGap) - expectedTableColumnGap) < 0.1 && tableColumnXs.length > 1 && Math.max(...tableColumnXs) - Math.min(...tableColumnXs) > expectedTableColumnGap, `Table-cell a:bodyPr columns must flow text into the next column at the configured EMU spacing: ${JSON.stringify({ columnTableCellRender, expectedTableColumnGap })}`)
+  const tableColumnFlow = await evaluate(`(() => {
+    const cell = [...document.querySelectorAll('.stage-shell > .slide-host .slide-table td')].find(item => item.textContent.includes('fills its first text column'))
+    const node = cell?.querySelector('.text-run')?.firstChild
+    if (!node || node.nodeType !== Node.TEXT_NODE) return undefined
+    const rectAt = (start, end) => { const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end); const rect = range.getBoundingClientRect(); return { left: rect.left, right: rect.right } }
+    const rect = element => { const { left, right, top, width, height } = element.getBoundingClientRect(); return { left, right, top, width, height } }
+    return { first: rectAt(0, 5), last: rectAt(Math.max(0, node.textContent.length - 5), node.textContent.length), cell: rect(cell), frame: rect(cell.querySelector('.table-cell-text')), paragraphRects: [...cell.querySelector('.text-paragraph').getClientRects()].map(item => ({ left: item.left, top: item.top, width: item.width, height: item.height })) }
+  })()`)
+  assert(columnTableCellRender?.columnCount === '2' && columnTableCellRender.direction === 'rtl' && columnTableCellRender.paragraphDirection === 'ltr' && Math.abs(Number.parseFloat(columnTableCellRender.columnGap) - expectedTableColumnGap) < 0.1 && tableColumnXs.length > 1 && Math.max(...tableColumnXs) - Math.min(...tableColumnXs) > expectedTableColumnGap && tableColumnFlow?.first.left > tableColumnFlow?.last.left, `Table-cell a:bodyPr rtlCol must reverse column order while preserving text direction and EMU spacing: ${JSON.stringify({ columnTableCellRender: { ...columnTableCellRender, runRects: columnTableCellRender.runRects?.slice(0, 4) }, tableColumnFlow, expectedTableColumnGap })}`)
   const customRadialMetrics = await evaluate(`(() => {
     const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom radial gradient geometry"] .custom-geometry path')
     const read = property => {
@@ -1723,6 +1751,23 @@ try {
   const expectedColumnGap = 457200 * (twoColumnFrame?.frameWidth || 0) / 12192000
   const columnXs = (twoColumnFrame?.runRects || []).map(rect => rect.left)
   assert(twoColumnFrame?.columnCount === '2' && Math.abs(Number.parseFloat(twoColumnFrame.columnGap) - expectedColumnGap) < 0.1 && columnXs.length > 1 && Math.max(...columnXs) - Math.min(...columnXs) > expectedColumnGap, `a:bodyPr numCol and spcCol must create equal text columns with the specified EMU gap and flow text into the next column: ${JSON.stringify({ twoColumnFrame, expectedColumnGap })}`)
+  const ltrColumnFlow = await evaluate(`(() => {
+    const node = document.querySelector('.stage-shell > .slide-host .slide-element[title="Two-column text"] .text-run')?.firstChild
+    if (!node || node.nodeType !== Node.TEXT_NODE) return undefined
+    const rectAt = (start, end) => { const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end); const rect = range.getBoundingClientRect(); return { left: rect.left, right: rect.right } }
+    return { first: rectAt(0, 5), last: rectAt(Math.max(0, node.textContent.length - 5), node.textContent.length) }
+  })()`)
+  assert(twoColumnFrame?.direction === 'ltr' && twoColumnFrame.paragraphDirection === 'ltr' && ltrColumnFlow?.first.left < ltrColumnFlow?.last.left, `a:bodyPr rtlCol="0" must preserve left-to-right column overflow and paragraph direction: ${JSON.stringify({ frame: twoColumnFrame && { direction: twoColumnFrame.direction, paragraphDirection: twoColumnFrame.paragraphDirection }, flow: ltrColumnFlow })}`)
+  const rtlColumnFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'Two-column RTL text')
+  const rtlColumnFlow = await evaluate(`(() => {
+    const node = document.querySelector('.stage-shell > .slide-host .slide-element[title="Two-column RTL text"] .text-run')?.firstChild
+    if (!node || node.nodeType !== Node.TEXT_NODE) return undefined
+    const rectAt = (start, end) => { const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end); const rect = range.getBoundingClientRect(); return { left: rect.left, right: rect.right } }
+    return { first: rectAt(0, 5), last: rectAt(Math.max(0, node.textContent.length - 5), node.textContent.length) }
+  })()`)
+  assert(rtlColumnFrame?.columnCount === '2' && rtlColumnFrame.direction === 'rtl' && rtlColumnFrame.paragraphDirection === 'ltr' && rtlColumnFrame.runRects?.length > 1 && rtlColumnFlow?.first.left > rtlColumnFlow?.last.left, `a:bodyPr rtlCol must start overflow in the rightmost column without changing paragraph text direction: ${JSON.stringify({ frame: rtlColumnFrame, flow: rtlColumnFlow })}`)
+  const rtlParagraphFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'RTL paragraph direction')
+  assert(rtlParagraphFrame?.direction === 'rtl' && rtlParagraphFrame.paragraphDirection === 'rtl', `a:pPr rtl must control paragraph direction independently from a:bodyPr rtlCol: ${JSON.stringify(rtlParagraphFrame)}`)
   const wordArtFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'WordArt vertical')
   assert(wordArtFrame?.writingMode === 'vertical-rl' && wordArtFrame.textOrientation === 'upright'
     && verticalRandomBarTransition.warnings.some(warning => warning.includes('wordArtVert') && warning.includes('CSS writing modes')),
@@ -1731,12 +1776,14 @@ try {
   assert(mongolianFrame?.writingMode === 'vertical-lr' && mongolianFrame.textOrientation === 'upright'
     && verticalRandomBarTransition.warnings.some(warning => warning.includes('mongolianVert') && warning.includes('CSS writing modes')),
     'mongolianVert text must use left-to-right upright vertical CSS flow and report its shaping approximation.')
-  assert(verticalRandomBarTransition.textFrames.find(frame => frame.name === 'WordArt vertical RTL fallback')?.writingMode === 'horizontal-tb'
-    && verticalRandomBarTransition.warnings.some(warning => warning.includes('wordArtVertRtl') && warning.includes('not rendered yet')),
-    'wordArtVertRtl must remain horizontal with a warning until its Office direction mapping is verified.')
+  const wordArtRtlFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'WordArt vertical RTL')
+  assert(wordArtRtlFrame?.writingMode === 'vertical-rl' && wordArtRtlFrame.textOrientation === 'upright'
+    && wordArtRtlFrame.paragraphRects?.length === 2 && wordArtRtlFrame.paragraphRects[0].left > wordArtRtlFrame.paragraphRects[1].left
+    && !verticalRandomBarTransition.warnings.some(warning => warning.includes('wordArtVertRtl')),
+    `wordArtVertRtl must stack glyphs top-to-bottom and flow paragraphs right-to-left without a fallback warning: ${JSON.stringify({ wordArtRtlFrame, warnings: verticalRandomBarTransition.warnings })}`)
   assert(inheritedParagraph?.textAlign === 'center' && inheritedParagraph.lineHeight === '1.25' && inheritedParagraph.marginLeft && inheritedParagraph.marker === '→', `Placeholder paragraph defaults must cascade from master through layout: ${JSON.stringify({ inheritedParagraph, warnings: verticalRandomBarTransition.warnings })}`)
   const inheritedFontSizeRatio = Number.parseFloat(inheritedRun?.fontSize || '0') / verticalRandomBarTransition.hostFrame.width
-  assert(Math.abs(inheritedFontSizeRatio - 32 * 12_700 / 12_192_000) < 0.00001 && inheritedRun?.fontWeight === '700' && inheritedRun.fontStyle === 'italic' && inheritedRun.color === 'rgb(255, 0, 0)', `Placeholder run defaults must preserve layout font size and master emphasis/color: ${JSON.stringify({ inheritedRun, inheritedFontSizeRatio })}`)
+  assert(Math.abs(inheritedFontSizeRatio - 32 * 12_700 / 12_192_000) < 0.00001 && inheritedRun?.fontWeight === '700' && inheritedRun.fontStyle === 'italic' && inheritedRun.color === 'rgb(255, 0, 0)' && inheritedRun.textDecorationLine.includes('line-through'), `Placeholder run defaults must preserve layout font size, master emphasis/color, and strike: ${JSON.stringify({ inheritedRun, inheritedFontSizeRatio })}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '8' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)

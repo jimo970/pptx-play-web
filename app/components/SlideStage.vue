@@ -2254,12 +2254,16 @@ function textFrameStyle(element: PptxElement): CSSProperties {
     columnFill: columnCount > 1 ? 'auto' : undefined,
     padding: `${element.margins.top * scale.value}px ${element.margins.right * scale.value}px ${element.margins.bottom * scale.value}px ${element.margins.left * scale.value}px`,
     justifyContent: element.verticalAlign === 'middle' ? 'center' : element.verticalAlign === 'bottom' ? 'flex-end' : 'flex-start',
+    overflowX: element.textHorizontalOverflow === undefined ? undefined : element.textHorizontalOverflow === 'clip' ? 'clip' : 'visible',
+    overflowY: element.textVerticalOverflow === undefined ? undefined : element.textVerticalOverflow === 'overflow' ? 'visible' : 'clip',
     whiteSpace: element.textWrap === 'none' ? 'nowrap' : undefined,
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.textverticalvalues?view=openxml-3.0.1
     // https://www.w3.org/TR/css-writing-modes-3/#block-flow
-    writingMode: element.textOrientation === 'vert270' || mongolianVerticalText ? 'vertical-lr' : verticalText || eastAsianVerticalText || wordArtVerticalText ? 'vertical-rl' : undefined,
-    textOrientation: verticalText ? 'sideways' : eastAsianVerticalText || wordArtVerticalText || mongolianVerticalText ? 'upright' : undefined,
-    direction: element.textOrientation === 'vert270' ? 'rtl' : undefined,
+    // wordArtVertRtl stacks text top-to-bottom and places earlier paragraphs to the right.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.vertical?view=openxml-3.0.0
+    writingMode: element.textOrientation === 'vert270' || mongolianVerticalText ? 'vertical-lr' : verticalText || eastAsianVerticalText || wordArtVerticalText || wordArtVerticalRtlText ? 'vertical-rl' : undefined,
+    textOrientation: verticalText ? 'sideways' : eastAsianVerticalText || wordArtVerticalText || wordArtVerticalRtlText || mongolianVerticalText ? 'upright' : undefined,
+    direction: element.textOrientation === 'vert270' || usesRightToLeftColumns(element) ? 'rtl' : undefined,
   }
 }
 
@@ -2475,12 +2479,15 @@ function cssSpacing(spacing: PptxParagraph['lineSpacing']): string | undefined {
   return spacing.unit === 'emu' ? `${spacing.value * scale.value}px` : `${spacing.value}em`
 }
 
-function paragraphStyle(paragraph: PptxParagraph, fontScale = 1, lineSpaceReduction = 0): CSSProperties {
+function paragraphStyle(paragraph: PptxParagraph, fontScale = 1, lineSpaceReduction = 0, fallbackDirection?: CSSProperties['direction']): CSSProperties {
   const lineSpacing = paragraph.lineSpacing
   const fontSizePt = paragraph.runs.reduce((size, run) => Math.max(size, run.fontSizePt || 18), 0) || 18
   return {
     fontSize: `${fontSizePt * fontScale * EMU_PER_POINT * scale.value}px`,
     textAlign: paragraph.align,
+    // Keep paragraph bidi direction separate from the multicol container's direction.
+    // https://www.w3.org/TR/css-writing-modes-4/#direction
+    direction: paragraph.direction ?? fallbackDirection,
     marginLeft: paragraph.marginLeft === undefined ? undefined : `${paragraph.marginLeft * scale.value}px`,
     marginRight: paragraph.marginRight === undefined ? undefined : `${paragraph.marginRight * scale.value}px`,
     textIndent: paragraph.indent === undefined ? undefined : `${paragraph.indent * scale.value}px`,
@@ -2504,14 +2511,17 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
   }
 }
 
-function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
+function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperties {
   const columnCount = cell.textColumnCount ?? 1
   return columnCount > 1 ? {
-    height: '100%',
+    height: rowHeight > 0 ? `${Math.max(0, rowHeight - cell.margins.top - cell.margins.bottom) * scale.value}px` : '100%',
     boxSizing: 'border-box',
+    minHeight: 0,
+    overflow: 'hidden',
     columnCount,
     columnGap: `${(cell.textColumnSpacing ?? 0) * scale.value}px`,
     columnFill: 'auto',
+    direction: cell.textColumnsRightToLeft ? 'rtl' : undefined,
   } : {}
 }
 </script>

@@ -41,6 +41,7 @@ export interface PptxShadow {
 
 export interface PptxParagraph {
     align: 'left' | 'center' | 'right' | 'justify'
+    direction?: 'ltr' | 'rtl'
     runs: PptxRun[]
     level?: number
     marginLeft?: number
@@ -194,9 +195,12 @@ export interface PptxElement {
     margins: {left: number; right: number; top: number; bottom: number}
     verticalAlign: 'top' | 'middle' | 'bottom'
     textWrap?: 'square' | 'none'
+    textHorizontalOverflow?: 'overflow' | 'clip'
+    textVerticalOverflow?: 'overflow' | 'clip' | 'ellipsis'
     textOrientation?: PptxTextOrientation
     textColumnCount?: number
     textColumnSpacing?: number
+    textColumnsRightToLeft?: boolean
     textFontScale?: number
     textLineSpacingReduction?: number
     textAutoFit?: 'normal' | 'shape'
@@ -1374,6 +1378,16 @@ function parseText(
     const columnSpacing = rawColumnSpacing === null || rawColumnSpacing === undefined ? undefined : Number(rawColumnSpacing)
     const textColumnSpacing = columnSpacing !== undefined && Number.isSafeInteger(columnSpacing) && columnSpacing >= 0 && columnSpacing <= 2_147_483_647 ? columnSpacing : undefined
     if (columnSpacing !== undefined && textColumnSpacing === undefined) warnings.add('An invalid a:bodyPr spcCol was ignored.')
+    const rawRightToLeftColumns = body?.getAttribute('rtlCol')
+    const rightToLeftColumnsValue = rawRightToLeftColumns?.trim()
+    const textColumnsRightToLeft = rightToLeftColumnsValue === undefined || rightToLeftColumnsValue === null
+        ? undefined
+        : ['true', '1'].includes(rightToLeftColumnsValue)
+            ? true
+            : ['false', '0'].includes(rightToLeftColumnsValue)
+                ? false
+                : undefined
+    if (rawRightToLeftColumns !== undefined && rawRightToLeftColumns !== null && textColumnsRightToLeft === undefined) warnings.add('An invalid a:bodyPr rtlCol value was ignored.')
     const normalAutoFit = child(body, 'normAutofit')
     const shapeAutoFit = child(body, 'spAutoFit')
     const rawFontScale = normalAutoFit?.getAttribute('fontScale') ?? null
@@ -1422,14 +1436,25 @@ function parseText(
     const margin = (key: string, fallback: number) => numberAttr(body, key, fallback)
     const anchor = body?.getAttribute('anchor')
     const wrap = body?.getAttribute('wrap')
+    // DrawingML defaults both overflow axes to visible; clip constrains text to the body bounds.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.horizontaloverflow?view=openxml-3.0.1
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.verticaloverflow?view=openxml-3.0.1
+    const horizontalOverflow = body?.getAttribute('horzOverflow')
+    const verticalOverflow = body?.getAttribute('vertOverflow')
+    const textHorizontalOverflow = horizontalOverflow === 'clip' || horizontalOverflow === 'overflow' ? horizontalOverflow : undefined
+    const textVerticalOverflow = verticalOverflow === 'clip' || verticalOverflow === 'overflow' || verticalOverflow === 'ellipsis' ? verticalOverflow : undefined
+    if (horizontalOverflow && !textHorizontalOverflow) warnings.add(`The unsupported text horizontal overflow mode "${horizontalOverflow}" was ignored.`)
+    if (verticalOverflow && !textVerticalOverflow) warnings.add(`The unsupported text vertical overflow mode "${verticalOverflow}" was ignored.`)
+    if (textVerticalOverflow === 'ellipsis') warnings.add('a:bodyPr vertOverflow="ellipsis" is clipped; trailing ellipsis rendering is not supported.')
     const rawTextOrientation = body?.getAttribute('vert')
     const validTextOrientations: PptxTextOrientation[] = ['horz', 'vert', 'vert270', 'wordArtVert', 'eaVert', 'mongolianVert', 'wordArtVertRtl']
     if (rawTextOrientation && !validTextOrientations.includes(rawTextOrientation as PptxTextOrientation)) {
         warnings.add('The unsupported text vertical mode "' + rawTextOrientation + '" was ignored.')
     } else if (rawTextOrientation === 'wordArtVert' || rawTextOrientation === 'mongolianVert') {
         warnings.add(`The text vertical mode "${rawTextOrientation}" uses CSS writing modes; glyph shaping may differ from Office.`)
-    } else if (rawTextOrientation === 'wordArtVertRtl') {
-        warnings.add('The text vertical mode "wordArtVertRtl" is not rendered yet; horizontal text is used.')
+    }
+    if (textColumnsRightToLeft && textColumnCount && textColumnCount > 1 && rawTextOrientation && rawTextOrientation !== 'horz' && validTextOrientations.includes(rawTextOrientation as PptxTextOrientation)) {
+        warnings.add('Right-to-left column order with vertical text is not rendered; CSS writing-mode order is used.')
     }
     if (wrap && !['square', 'none'].includes(wrap)) warnings.add(`The unsupported text wrapping mode "${wrap}" was ignored.`)
     return {
@@ -1437,9 +1462,12 @@ function parseText(
         margins: {left: margin('lIns', 91_440), right: margin('rIns', 91_440), top: margin('tIns', 45_720), bottom: margin('bIns', 45_720)},
         verticalAlign: anchor === 'ctr' ? 'middle' : anchor === 'b' ? 'bottom' : 'top',
         textWrap: wrap === 'square' || wrap === 'none' ? wrap : undefined,
+        textHorizontalOverflow,
+        textVerticalOverflow,
         textOrientation: rawTextOrientation && validTextOrientations.includes(rawTextOrientation as PptxTextOrientation) ? (rawTextOrientation as PptxTextOrientation) : undefined,
         textColumnCount,
         textColumnSpacing,
+        textColumnsRightToLeft,
         textFontScale: normalAutoFit ? (parsedFontScale ?? 1) : undefined,
         textLineSpacingReduction: normalAutoFit ? (parsedLineSpaceReduction ?? 0) : undefined,
         textAutoFit: shapeAutoFit ? 'shape' : normalAutoFit ? 'normal' : undefined,
@@ -1509,7 +1537,7 @@ function matchPlaceholder(identity: PptxElement['placeholder'], candidates: Pars
     return candidates.find(candidate => candidate.type === identity.type)
 }
 
-function inheritPlaceholderProperties(element: PptxElement, node: Element, fallback?: ParsedPlaceholder): PptxElement {
+function inheritPlaceholderProperties(element: PptxElement, node: Element, fallback: ParsedPlaceholder | undefined, warnings: Set<string>): PptxElement {
     if (!fallback) return element
     const fallbackElement = fallback.element
     const properties = child(node, 'spPr')
@@ -1530,6 +1558,12 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
     }
     const anchor = bodyPr?.getAttribute('anchor')
     const currentGeometry = child(properties, 'prstGeom') || child(properties, 'custGeom')
+    const textOrientation = bodyPr?.hasAttribute('vert') ? element.textOrientation : fallbackElement.textOrientation
+    const textColumnCount = bodyPr?.hasAttribute('numCol') ? element.textColumnCount : fallbackElement.textColumnCount
+    const textColumnsRightToLeft = bodyPr?.hasAttribute('rtlCol') ? element.textColumnsRightToLeft : fallbackElement.textColumnsRightToLeft
+    if (textColumnsRightToLeft && textColumnCount && textColumnCount > 1 && textOrientation && textOrientation !== 'horz') {
+        warnings.add('Right-to-left column order with vertical text is not rendered; CSS writing-mode order is used.')
+    }
     return {
         ...element,
         x: offset?.hasAttribute('x') ? element.x : fallbackElement.x,
@@ -1560,9 +1594,12 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
         },
         verticalAlign: anchor ? element.verticalAlign : fallbackElement.verticalAlign,
         textWrap: ['square', 'none'].includes(bodyPr?.getAttribute('wrap') || '') ? element.textWrap : fallbackElement.textWrap,
-        textOrientation: bodyPr?.hasAttribute('vert') ? element.textOrientation : fallbackElement.textOrientation,
-        textColumnCount: bodyPr?.hasAttribute('numCol') ? element.textColumnCount : fallbackElement.textColumnCount,
+        textHorizontalOverflow: bodyPr?.hasAttribute('horzOverflow') ? element.textHorizontalOverflow : fallbackElement.textHorizontalOverflow,
+        textVerticalOverflow: bodyPr?.hasAttribute('vertOverflow') ? element.textVerticalOverflow : fallbackElement.textVerticalOverflow,
+        textOrientation,
+        textColumnCount,
         textColumnSpacing: bodyPr?.hasAttribute('spcCol') ? element.textColumnSpacing : fallbackElement.textColumnSpacing,
+        textColumnsRightToLeft,
         textFontScale: hasTextAutoFit ? element.textFontScale : fallbackElement.textFontScale,
         textLineSpacingReduction: hasTextAutoFit ? element.textLineSpacingReduction : fallbackElement.textLineSpacingReduction,
         textAutoFit: hasTextAutoFit ? element.textAutoFit : fallbackElement.textAutoFit,
@@ -1668,6 +1705,7 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
                 paragraphs: text.paragraphs,
                 textColumnCount: text.textColumnCount,
                 textColumnSpacing: text.textColumnSpacing,
+                textColumnsRightToLeft: text.textColumnsRightToLeft,
                 textFontScale: text.textFontScale,
                 textLineSpacingReduction: text.textLineSpacingReduction,
                 textAutoFitDynamic: text.textAutoFitDynamic,
