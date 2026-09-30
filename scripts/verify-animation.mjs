@@ -401,7 +401,13 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   assert(layoutWithStyles !== layoutXml && layoutWithStyles.includes('<a:bodyPr wrap="none" vert="vert"/>'), 'The layout placeholder line, no-wrap, and vertical-text fixtures must be inserted.')
   zip.file(layoutPath, layoutWithStyles)
   const imageContentTypes = await zip.file('[Content_Types].xml').async('string')
-  zip.file('[Content_Types].xml', imageContentTypes.replace('</Types>', '<Default Extension="png" ContentType="image/png"/><Default Extension="svg" ContentType="image/svg+xml"/></Types>'))
+  zip.file('[Content_Types].xml', imageContentTypes.replace('</Types>', '<Default Extension="png" ContentType="image/png"/><Default Extension="svg" ContentType="image/svg+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>'))
+  const themedSlide = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', themedSlide.replace('<p:cSld>', '<p:cSld><p:bg><p:bgRef idx="1001"><a:srgbClr val="ff00ff"/></p:bgRef></p:bg>'))
+  const fillStyleSlide = await zip.file('ppt/slides/slide3.xml').async('string')
+  zip.file('ppt/slides/slide3.xml', fillStyleSlide.replace('<p:cSld>', '<p:cSld><p:bg><p:bgRef idx="1"><a:srgbClr val="00ff00"/></p:bgRef></p:bg>'))
+  zip.file('ppt/theme/theme1.xml', '<?xml version="1.0"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Fixture"><a:themeElements><a:clrScheme name="Fixture"><a:accent1><a:srgbClr val="4472c4"/></a:accent1><a:accent2><a:srgbClr val="ed7d31"/></a:accent2></a:clrScheme><a:fontScheme name="Fixture"><a:majorFont><a:latin typeface="Arial"/></a:majorFont><a:minorFont><a:latin typeface="Arial"/></a:minorFont></a:fontScheme><a:fmtScheme name="Fixture"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>')
+  zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/></Relationships>')
   await writeFile(fixturePath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
 }
 

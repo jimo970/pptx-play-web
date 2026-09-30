@@ -771,7 +771,8 @@ function outerShadow(parent: Element | undefined, theme: Record<string, string>)
 }
 
 function fillColor(parent: Element | undefined, theme: Record<string, string>, warnings: Set<string>): string {
-    const fill = children(parent).find(node => ['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill'].includes(node.localName))
+    const fillKinds = ['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill', 'grpFill']
+    const fill = parent && fillKinds.includes(parent.localName) ? parent : children(parent).find(node => fillKinds.includes(node.localName))
     if (!fill || fill.localName === 'noFill') return 'transparent'
     if (fill.localName === 'gradFill') {
         // OOXML gradient stops and clockwise angle:
@@ -2501,7 +2502,13 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     }
 }
 
-function parseTheme(xml: XMLDocument | undefined): Record<string, string> {
+type ParsedTheme = {
+    colors: Record<string, string>
+    fillStyles: Element[]
+    backgroundFillStyles: Element[]
+}
+
+function parseTheme(xml: XMLDocument | undefined): ParsedTheme {
     const result = {...DEFAULT_THEME}
     const scheme = xml && firstDescendant(xml.documentElement, 'clrScheme')
     for (const slot of children(scheme)) {
@@ -2518,7 +2525,12 @@ function parseTheme(xml: XMLDocument | undefined): Record<string, string> {
             if (typeface) result[`font-${role}-${script}`] = typeface
         }
     }
-    return result
+    const formatScheme = firstDescendant(xml?.documentElement, 'fmtScheme')
+    return {
+        colors: result,
+        fillStyles: children(child(formatScheme, 'fillStyleLst')),
+        backgroundFillStyles: children(child(formatScheme, 'bgFillStyleLst'))
+    }
 }
 
 function imageMime(path: string): string {
@@ -5538,7 +5550,7 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
         const warnings = new Set<string>()
         const slides: PptxSlide[] = []
         const imageUrlCache = new Map<string, string>()
-        const themeCache = new Map<string, Record<string, string>>()
+        const themeCache = new Map<string, ParsedTheme>()
         const decorationCache = new Map<string, Promise<PptxElement[]>>()
 
         const readXml = async (path: string | undefined): Promise<XMLDocument | undefined> => {
@@ -5546,7 +5558,7 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             const entry = zip.file(path)
             return entry ? parseXml(await entry.async('string'), path) : undefined
         }
-        const loadTheme = async (masterRels: Map<string, PptxRelationship>): Promise<Record<string, string>> => {
+        const loadTheme = async (masterRels: Map<string, PptxRelationship>): Promise<ParsedTheme> => {
             const themePath = [...masterRels.values()].find(relation => relation.type.endsWith('/theme'))?.target || fallbackThemePath || 'default'
             const cached = themeCache.get(themePath)
             if (cached) return cached
@@ -5594,11 +5606,13 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             const masterXml = await readXml(masterPath)
             if (masterPath && !masterXml) warnings.add(`Slide ${index + 1} references a missing master.`)
             const masterRels = masterPath ? await loadRelationships(zip, relationshipPath(masterPath)) : new Map<string, PptxRelationship>()
-            const theme = await loadTheme(masterRels)
-            const masterTextStyles = parseMasterTextStyles(masterXml, theme, warnings)
-            const masterPlaceholders = parsePlaceholderCandidates(masterXml, theme, warnings, masterTextStyles)
-            const layoutPlaceholders = parsePlaceholderCandidates(layoutXml, theme, warnings, masterTextStyles, masterPlaceholders)
+            const themeData = await loadTheme(masterRels)
+            const theme = themeData.colors
+            const masterTextStyles = parseMasterTextStyles(masterXml, theme, warnings, masterRels)
+            const masterPlaceholders = parsePlaceholderCandidates(masterXml, theme, warnings, masterTextStyles, [], false, masterRels)
+            const layoutPlaceholders = parsePlaceholderCandidates(layoutXml, theme, warnings, masterTextStyles, masterPlaceholders, false, layoutRels)
             const tree = firstDescendant(xml.documentElement, 'spTree')
+            const animationTargetIds = new Set(descendants(xml.documentElement, 'spTgt').map(target => target.getAttribute('spid') || '').filter(Boolean))
             const masterElements = await loadDecorations(masterPath, masterXml, theme)
             const layoutElements = await loadDecorations(layoutPath, layoutXml, theme)
             const elements: PptxElement[] = [...masterElements, ...layoutElements]
