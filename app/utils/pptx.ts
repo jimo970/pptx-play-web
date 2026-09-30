@@ -1781,6 +1781,77 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
     }
 }
 
+async function parseSmartArtCachedDrawing(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, animationTargetIds: Set<string>, parentTransform?: Matrix2D): Promise<PptxElement[] | undefined> {
+    const graphicData = firstDescendant(frame, 'graphicData')
+    if (!graphicData?.getAttribute('uri')?.endsWith('/diagram')) return undefined
+    const frameId = firstDescendant(frame, 'cNvPr')?.getAttribute('id') || ''
+    if (animationTargetIds.has(frameId)) {
+        warnings.add('SmartArt with frame-targeted animation uses the text fallback to preserve its animation.')
+        return undefined
+    }
+    const dataRelation = rels.get(namespacedAttr(child(graphicData, 'relIds'), 'dm') || '')
+    const dataPart = dataRelation?.target.match(/^(.*\/)data(\d+)\.xml$/i)
+    if (!dataRelation || dataRelation.external || !dataPart) return undefined
+    const expectedDrawingPath = `${dataPart[1]}drawing${dataPart[2]}.xml`
+    const drawingRelation = [...rels.values()].find(relation => !relation.external && relation.type.endsWith('/diagramDrawing') && relation.target.toLowerCase() === expectedDrawingPath.toLowerCase())
+    if (!drawingRelation) return undefined
+    const part = zip.file(drawingRelation.target)
+    if (!part) {
+        warnings.add('The SmartArt cached drawing part is missing; its text fallback was used.')
+        return undefined
+    }
+
+    try {
+        const xml = parseXml(await part.async('string'), drawingRelation.target)
+        const tree = firstDescendant(xml.documentElement, 'spTree')
+        const groupTransform = tree && groupTransformMatrix(tree)
+        const groupXfrm = tree && child(child(tree, 'grpSpPr'), 'xfrm')
+        const groupOffset = child(groupXfrm, 'off')
+        const groupExtent = child(groupXfrm, 'ext')
+        const groupWidth = numberAttr(groupExtent, 'cx')
+        const groupHeight = numberAttr(groupExtent, 'cy')
+        const frameTransform = shapeTransform(frame)
+        if (!tree || !groupTransform || !groupXfrm || groupWidth <= 0 || groupHeight <= 0 || frameTransform.width <= 0 || frameTransform.height <= 0) {
+            warnings.add('The SmartArt cached drawing has invalid bounds; its text fallback was used.')
+            return undefined
+        }
+        const framePlacement = multiplyMatrix(
+            translationMatrix(frameTransform.x, frameTransform.y),
+            multiplyMatrix(
+                translationMatrix(frameTransform.width / 2, frameTransform.height / 2),
+                multiplyMatrix(
+                    rotationMatrix(frameTransform.rotation),
+                    multiplyMatrix(
+                        [frameTransform.flipH ? -1 : 1, 0, 0, frameTransform.flipV ? -1 : 1, 0, 0],
+                        translationMatrix(-frameTransform.width / 2, -frameTransform.height / 2)
+                    )
+                )
+            )
+        )
+        const drawingToFrame = multiplyMatrix(
+            scaleMatrix(frameTransform.width / groupWidth, frameTransform.height / groupHeight),
+            translationMatrix(-numberAttr(groupOffset, 'x'), -numberAttr(groupOffset, 'y'))
+        )
+        const drawingTransform = multiplyMatrix(parentTransform || [1, 0, 0, 1, 0, 0], multiplyMatrix(framePlacement, multiplyMatrix(drawingToFrame, groupTransform)))
+        const drawingRels = await loadRelationships(zip, relationshipPath(drawingRelation.target))
+        const elements: PptxElement[] = []
+        for (const node of children(tree)) {
+            elements.push(...(await parseSceneElements(node, drawingRels, zip, theme, warnings, urls, imageUrlCache, drawingTransform, animationTargetIds)))
+        }
+        if (!elements.length) return undefined
+        warnings.add('SmartArt uses its last saved diagram drawing; its data-driven layout is not regenerated in the browser.')
+        const frameName = firstDescendant(frame, 'cNvPr')?.getAttribute('name') || 'SmartArt'
+        return elements.map((element, index) => ({
+            ...element,
+            id: `${frameId}:smartart:${drawingRelation.target}:${element.id || index}`,
+            name: `${frameName}: ${element.name}`
+        }))
+    } catch {
+        warnings.add('The SmartArt cached drawing could not be parsed; its text fallback was used.')
+        return undefined
+    }
+}
+
 async function parseSmartArtTextFallback(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>): Promise<PptxElement | undefined> {
     const graphicData = firstDescendant(frame, 'graphicData')
     if (!graphicData?.getAttribute('uri')?.endsWith('/diagram')) return undefined
@@ -1788,6 +1859,7 @@ async function parseSmartArtTextFallback(frame: Element, rels: Map<string, PptxR
     const dataId = namespacedAttr(child(graphicData, 'relIds'), 'dm') || ''
     const relation = rels.get(dataId)
     let paragraphs: PptxParagraph[] = []
+    let hasHierarchy = false
     if (!relation || relation.external || !relation.type.endsWith('/diagramData')) {
         warnings.add('SmartArt diagram data is missing or external; its text could not be recovered.')
     } else {
@@ -1796,7 +1868,56 @@ async function parseSmartArtTextFallback(frame: Element, rels: Map<string, PptxR
         else {
             try {
                 const xml = parseXml(await part.async('string'), relation.target)
-                const points = children(firstDescendant(xml.documentElement, 'ptLst'), 'pt').filter(point => point.getAttribute('type') === 'node')
+                const allPoints = children(firstDescendant(xml.documentElement, 'ptLst'), 'pt')
+                const points = allPoints.filter(point => point.getAttribute('type') === 'node')
+                const pointIds = new Set(allPoints.map(point => point.getAttribute('modelId')).filter((id): id is string => Boolean(id)))
+                const pointTypes = new Map(allPoints.map(point => [point.getAttribute('modelId') || '', point.getAttribute('type') || '']))
+                const parentByChild = new Map<string, string>()
+                for (const connection of children(firstDescendant(xml.documentElement, 'cxnLst'), 'cxn')) {
+                    if (!['parOf', 'presParOf'].includes(connection.getAttribute('type') || '')) continue
+                    const parent = connection.getAttribute('srcId') || ''
+                    const node = connection.getAttribute('destId') || ''
+                    if (!pointIds.has(parent) || !pointIds.has(node) || parent === node) {
+                        warnings.add('A SmartArt parent connection with an invalid endpoint was ignored.')
+                        continue
+                    }
+                    const existingParent = parentByChild.get(node)
+                    if (existingParent && existingParent !== parent) {
+                        warnings.add('A SmartArt node with multiple parents uses its first parent connection.')
+                        continue
+                    }
+                    parentByChild.set(node, parent)
+                }
+                const depthByNode = new Map<string, number>()
+                let warnedCycle = false
+                let warnedDepth = false
+                for (const point of points) {
+                    const id = point.getAttribute('modelId') || ''
+                    const visited = new Set([id])
+                    let current = id
+                    let depth = 0
+                    while (parentByChild.has(current)) {
+                        const parent = parentByChild.get(current)!
+                        if (pointTypes.get(parent) === 'doc') break
+                        if (visited.has(parent)) {
+                            if (!warnedCycle) warnings.add('A cyclic SmartArt parent connection was ignored while computing indentation.')
+                            warnedCycle = true
+                            depth = 0
+                            break
+                        }
+                        visited.add(parent)
+                        current = parent
+                        depth++
+                        if (depth >= 8 && parentByChild.has(current)) {
+                            if (!warnedDepth) warnings.add('SmartArt hierarchy indentation was capped at eight levels.')
+                            warnedDepth = true
+                            depth = 8
+                            break
+                        }
+                    }
+                    depthByNode.set(id, depth)
+                }
+                hasHierarchy = [...depthByNode.values()].some(depth => depth > 0)
                 for (const point of points) {
                     const pointText = child(point, 't')
                     if (!pointText) continue
@@ -1804,7 +1925,12 @@ async function parseSmartArtTextFallback(frame: Element, rels: Map<string, PptxR
                     const body = pointText.ownerDocument.createElementNS(PRESENTATION_NS, 'p:txBody')
                     for (const node of Array.from(pointText.childNodes)) body.appendChild(node.cloneNode(true))
                     shape.appendChild(body)
-                    paragraphs.push(...parseText(shape, theme, warnings).paragraphs)
+                    const depth = depthByNode.get(point.getAttribute('modelId') || '') || 0
+                    const indentation = depth * 304_800
+                    paragraphs.push(...parseText(shape, theme, warnings).paragraphs.map(paragraph => ({
+                        ...paragraph,
+                        marginLeft: (paragraph.marginLeft || 0) + indentation
+                    })))
                 }
             } catch {
                 warnings.add('The SmartArt diagram data contains invalid XML; its text could not be recovered.')
@@ -1815,7 +1941,9 @@ async function parseSmartArtTextFallback(frame: Element, rels: Map<string, PptxR
     if (!paragraphs.some(paragraph => paragraph.runs.some(run => run.text.trim()))) {
         paragraphs = [{align: 'left', runs: [{text: 'SmartArt text unavailable', fontSizePt: 14}]}]
     }
-    warnings.add('SmartArt is shown as a plain text list; node layout, hierarchy, connectors, and formatting are not reproduced.')
+    warnings.add(hasHierarchy
+        ? 'SmartArt is shown as an indented text list from its parent connections; node layout, connectors, and formatting are not reproduced.'
+        : 'SmartArt is shown as a plain text list; node layout, hierarchy, connectors, and formatting are not reproduced.')
     const nonVisual = firstDescendant(frame, 'cNvPr')
     return {
         id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
@@ -5225,7 +5353,7 @@ function applyGroupTransform(element: PptxElement, parent: Matrix2D): PptxElemen
     }
 }
 
-async function parseSceneElements(node: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, parentTransform?: Matrix2D): Promise<PptxElement[]> {
+async function parseSceneElements(node: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, parentTransform?: Matrix2D, animationTargetIds: Set<string> = new Set()): Promise<PptxElement[]> {
     if (node.localName === 'grpSp') {
         const localTransform = groupTransformMatrix(node)
         if (!localTransform) {
@@ -5236,39 +5364,67 @@ async function parseSceneElements(node: Element, rels: Map<string, PptxRelations
         const elements: PptxElement[] = []
         for (const item of children(node)) {
             if (!['sp', 'pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(item.localName)) continue
-            elements.push(...(await parseSceneElements(item, rels, zip, theme, warnings, urls, imageUrlCache, transform)))
+            elements.push(...(await parseSceneElements(item, rels, zip, theme, warnings, urls, imageUrlCache, transform, animationTargetIds)))
         }
         return elements
     }
 
     let element: PptxElement | undefined
-    if (node.localName === 'sp' || node.localName === 'cxnSp') element = parseShape(node, theme, warnings)
+    if (node.localName === 'sp' || node.localName === 'cxnSp') element = parseShape(node, theme, warnings, {}, {}, true, rels)
     else if (node.localName === 'pic') element = await parsePicture(node, rels, zip, theme, warnings, urls, imageUrlCache)
     else if (node.localName === 'graphicFrame') {
-        element = parseTable(node, theme, warnings)
+        element = parseTable(node, theme, warnings, rels)
         if (!element && firstDescendant(node, 'chart')) element = await parseChart(node, rels, zip, theme, warnings)
         else if (!element) {
             element = await parseOlePreview(node, rels, zip, theme, warnings, urls, imageUrlCache)
-            if (!element) element = await parseSmartArtTextFallback(node, rels, zip, theme, warnings)
+            if (!element) {
+                const cachedDrawing = await parseSmartArtCachedDrawing(node, rels, zip, theme, warnings, urls, imageUrlCache, animationTargetIds, parentTransform)
+                if (cachedDrawing) return cachedDrawing
+                element = await parseSmartArtTextFallback(node, rels, zip, theme, warnings)
+            }
             if (!element) warnings.add('Unsupported graphic frames are not rendered yet.')
         }
     }
     if (element && node.localName === 'cxnSp') warnings.add('Connector geometry is not fully rendered yet.')
     if (!element) return []
+    if (!element.hyperlink) element.hyperlink = parseHyperlink(child(firstDescendant(node, 'cNvPr'), 'hlinkClick'), rels, warnings)
     return [parentTransform ? applyGroupTransform(element, parentTransform) : element]
 }
 
-async function backgroundFill(xml: XMLDocument | undefined, rels: Map<string, PptxRelationship>, theme: Record<string, string>, warnings: Set<string>, zip: JSZip, urls: string[], imageUrlCache: Map<string, string>): Promise<{color?: string; image?: PptxSlide['backgroundImage']}> {
+async function backgroundFill(xml: XMLDocument | undefined, rels: Map<string, PptxRelationship>, theme: ParsedTheme, warnings: Set<string>, zip: JSZip, urls: string[], imageUrlCache: Map<string, string>): Promise<{color?: string; image?: PptxSlide['backgroundImage']}> {
     const background = xml && firstDescendant(xml.documentElement, 'bg')
     const properties = child(background, 'bgPr')
     if (!properties) {
-        if (child(background, 'bgRef')) warnings.add('Theme slide background references are not rendered.')
+        const reference = child(background, 'bgRef')
+        if (reference) {
+            // idx 1–999 selects fmtScheme.fillStyleLst; idx 1001+ selects bgFillStyleLst.
+            // 0 and 1000 mean no background style. See Open XML BackgroundStyleReference.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.background.backgroundstylereference?view=openxml-3.0.1
+            const rawIndex = reference.getAttribute('idx')?.trim() || ''
+            const index = /^\d+$/.test(rawIndex) ? Number(rawIndex) : Number.NaN
+            if (!Number.isSafeInteger(index) || index < 0) {
+                warnings.add('A theme slide background reference with an invalid style index was ignored.')
+                return {}
+            }
+            if (index === 0 || index === 1000) return {}
+            const styles = index < 1000 ? theme.fillStyles : theme.backgroundFillStyles
+            const style = styles[index < 1000 ? index - 1 : index - 1001]
+            if (!style) {
+                warnings.add(`Theme slide background style ${index} could not be resolved.`)
+                return {}
+            }
+            const colorReference = children(reference).find(node => ['srgbClr', 'sysClr', 'schemeClr', 'hslClr', 'prstClr'].includes(node.localName))
+            const placeholderColor = readColor(colorReference, theme.colors)
+            const styleTheme = placeholderColor ? {...theme.colors, phClr: placeholderColor} : theme.colors
+            const color = fillColor(style, styleTheme, warnings)
+            return {color: color === 'transparent' ? undefined : color}
+        }
         return {}
     }
     const imageFill = child(properties, 'blipFill')
     if (!imageFill) {
         if (child(properties, 'grpFill')) warnings.add('Group slide background fills are not rendered.')
-        const color = fillColor(properties, theme, warnings)
+        const color = fillColor(properties, theme.colors, warnings)
         return {color: color === 'transparent' ? undefined : color}
     }
     const tile = child(imageFill, 'tile')
