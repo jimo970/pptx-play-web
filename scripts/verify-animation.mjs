@@ -9,6 +9,9 @@ const baseUrl = process.env.DECKLINE_BASE_URL || 'http://127.0.0.1:3000/'
 const keepFixture = process.env.DECKLINE_KEEP_FIXTURE === '1'
 const inputPptx = process.env.DECKLINE_INPUT_PPTX
 const captureOnly = process.env.DECKLINE_CAPTURE_ONLY === '1'
+const grayscaleOnly = process.env.DECKLINE_VERIFY_GRAYSCALE === '1'
+const strokeWidthOnly = process.env.DECKLINE_VERIFY_STROKE_WIDTH === '1'
+const themeBackgroundOnly = process.env.DECKLINE_VERIFY_THEME_BACKGROUND === '1'
 const browserPath = process.env.DECKLINE_BROWSER || [
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -925,7 +928,7 @@ try {
       continue
     }
     initial = await state()
-    if (captureOnly ? initial.slide && !initial.error : initial.shapes.length === 66) break
+    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : initial.shapes.length === 80) break
   }
   assert(await evaluate('globalThis.__decklineWorkerCreated === true'), 'PPTX parsing did not create a Web Worker.')
   assert(/^url\(["']?blob:/.test(initial.slideBackground?.image || ''), `An embedded slide background image must resolve to a local blob URL: ${JSON.stringify({ image: initial.slideBackground?.image, error: initial.error, warnings: initial.warnings, upload })}`)
@@ -940,7 +943,72 @@ try {
     image.src = source
   })`)
   assert(backgroundLoaded, 'The embedded slide background image must decode in the browser.')
-  if (captureOnly) {
+  if (themeBackgroundOnly) {
+    assert(initial.slide && !initial.error, `The theme-background fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+    for (const [number, color] of [[2, 'rgb(255, 0, 255)'], [3, 'rgb(0, 255, 0)']]) {
+      await evaluate(`(() => { for (const key of '${number}') window.dispatchEvent(new KeyboardEvent('keydown', { key })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) })()`)
+      await delay(900)
+      assert((await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-frame')).backgroundColor`)) === color, `Theme background style ${number === 2 ? 1001 : 1} with phClr replacement must render as ${color}.`)
+    }
+    console.log('Theme background style references verified.')
+  } else if (strokeWidthOnly) {
+    assert(initial.slide && !initial.error, `The stroke-weight fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+    const baseStrokeWidth = Number.parseFloat(shape(initial, 'Stroke weight animation').borderWidth)
+    const formulaBaseWidth = Number.parseFloat(shape(initial, 'Stroke weight formula').borderWidth)
+    const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host [title="Scale emphasis"]').click(); return started })()`)
+    const during = await stateAtElapsed(clickStartedAt, 100)
+    const animatedWidth = Number.parseFloat(shape(during, 'Stroke weight animation').borderWidth)
+    const formulaWidth = Number.parseFloat(shape(during, 'Stroke weight formula').borderWidth)
+    const setWidth = Number.parseFloat(shape(during, 'Stroke weight set').borderWidth)
+    assert(baseStrokeWidth > 0 && animatedWidth > baseStrokeWidth && animatedWidth < baseStrokeWidth * 2 && formulaWidth > formulaBaseWidth * 1.2 && formulaWidth < formulaBaseWidth * 2 && Math.abs(setWidth / baseStrokeWidth - 3) < 0.05, `stroke.weight must interpolate as an EMU width, apply formula samples, and hold p:set: ${JSON.stringify({ baseStrokeWidth, animatedWidth, formulaBaseWidth, formulaWidth, setWidth, shape: shape(during, 'Stroke weight animation'), warnings: initial.warnings.filter(warning => /stroke|animation/i.test(warning)), runtimeErrors })}`)
+    await delay(300)
+    const complete = await state()
+    assert(Math.abs(Number.parseFloat(shape(complete, 'Stroke weight animation').borderWidth) / baseStrokeWidth - 2) < 0.05 && Math.abs(Number.parseFloat(shape(complete, 'Stroke weight formula').borderWidth) / formulaBaseWidth - 1) < 0.05 && Math.abs(Number.parseFloat(shape(complete, 'Stroke weight set').borderWidth) / baseStrokeWidth - 3) < 0.05, `stroke.weight animation and p:set must hold their final widths, while the formula returns to its base width: ${JSON.stringify(complete.shapes.filter(element => element.name.startsWith('Stroke weight')))}`)
+    assert(!complete.warnings.some(warning => warning.includes('stroke.weight') && warning.includes('skipped')), `Valid stroke.weight fixtures must not be skipped: ${JSON.stringify(complete.warnings)}`)
+    console.log('stroke.weight animation and p:set verification passed.')
+  } else if (grayscaleOnly) {
+    assert(initial.slide && !initial.error, `The grayscale fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+    await delay(850)
+    const grayscaleSlide = await state()
+    assert(grayscaleSlide.slide?.startsWith('03 / 67'), `The grayscale test slide must open: ${grayscaleSlide.slide}`)
+    assert(grayscaleSlide.warnings.some(warning => warning.includes('imageData.chromakey color animation cannot be rendered because picture color-key transparency is not implemented yet')), `An imageData.chromakey color animation must be skipped with a specific rendering warning: ${JSON.stringify(grayscaleSlide.warnings)}`)
+    await evaluate(`(() => {
+      const stage = document.querySelector('.stage-shell')
+      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 501, pointerType: 'touch', clientX: 400, clientY: 300 }))
+      stage.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 501, pointerType: 'touch', clientX: 300, clientY: 300, cancelable: false }))
+    })()`)
+    await delay(80)
+    const afterPointerCancel = await state()
+    assert(afterPointerCancel.slide?.startsWith('03 / 67'), `A cancelled horizontal touch gesture must not advance the presentation: ${afterPointerCancel.slide}`)
+    await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Grayscale direct"]')?.click()`)
+    await delay(80)
+    const grayscaleDuring = await state()
+    assert(shape(grayscaleDuring, 'Grayscale direct').imageFilter === 'none' && shape(grayscaleDuring, 'Grayscale keyframes').imageFilter === 'none' && shape(grayscaleDuring, 'Grayscale p:set').imageFilter === 'grayscale(1)', `Discrete imageData.grayscale animations must honor from/keyframe starts and the immediate p:set value: ${JSON.stringify({ filters: grayscaleDuring.shapes.filter(element => element.name.startsWith('Grayscale ')).map(element => [element.name, element.imageFilter]), warnings: grayscaleDuring.warnings.filter(warning => warning.toLowerCase().includes('grayscale')) })}`)
+    const cropDirectDuring = shape(grayscaleDuring, 'Crop direct').imageCropStyle
+    const cropKeyframesDuring = shape(grayscaleDuring, 'Crop keyframes').imageCropStyle
+    assert(parseFloat(cropDirectDuring.width) > 100 && parseFloat(cropDirectDuring.width) < 166.67 && parseFloat(cropDirectDuring.left) < 0, `Linear imageData.cropLeft animation must interpolate the source rectangle: ${JSON.stringify(cropDirectDuring)}`)
+    assert(parseFloat(cropKeyframesDuring.height) > 100 && parseFloat(cropKeyframesDuring.height) < 166.67 && parseFloat(cropKeyframesDuring.top) < 0, `Linear imageData.cropTop p:tavLst values must interpolate the source rectangle: ${JSON.stringify(cropKeyframesDuring)}`)
+    assert(Math.abs(parseFloat(shape(grayscaleDuring, 'Crop p:set').imageCropStyle.width) - 133.333) < 0.01 && shape(grayscaleDuring, 'Crop p:set').imageCropStyle.left === '0%', `imageData.cropRight p:set must immediately update the source rectangle: ${JSON.stringify(shape(grayscaleDuring, 'Crop p:set').imageCropStyle)}`)
+    const gainDuring = shape(grayscaleDuring, 'Image gain').imageTone?.gain
+    const blacklevelDuring = shape(grayscaleDuring, 'Image blacklevel').imageTone?.blacklevel
+    const gammaDuring = shape(grayscaleDuring, 'Image gamma').imageTone?.gamma
+    assert(Number(gainDuring?.slope) > 1 && Number(gainDuring?.slope) < 2, `imageData.gain must interpolate through its SVG filter: ${JSON.stringify(gainDuring)}`)
+    assert(Number(blacklevelDuring?.intercept) > 0 && Number(blacklevelDuring?.intercept) < 0.2, `imageData.blacklevel keyframes must interpolate through their SVG filter: ${JSON.stringify(blacklevelDuring)}`)
+    assert(Number(gammaDuring?.exponent) === 2, `imageData.gamma p:set must map gamma 0.5 to SVG exponent 2: ${JSON.stringify(gammaDuring)}`)
+    assert(shape(grayscaleDuring, 'Image gain').imageFilter.includes('url(') && shape(grayscaleDuring, 'Image blacklevel').imageFilter.includes('url(') && shape(grayscaleDuring, 'Image gamma').imageFilter.includes('url('), 'Animated image tone filters must be attached to the corresponding picture.')
+    await delay(260)
+    const grayscaleComplete = await state()
+    assert(grayscaleComplete.shapes.filter(element => element.name.startsWith('Grayscale ')).every(element => element.imageFilter === 'grayscale(1)'), `Direct, keyframed, and p:set imageData.grayscale animations must hold their final true state: ${JSON.stringify(grayscaleComplete.shapes.filter(element => element.name.startsWith('Grayscale ')).map(element => [element.name, element.imageFilter]))}`)
+    const cropDirectComplete = shape(grayscaleComplete, 'Crop direct').imageCropStyle
+    const cropKeyframesComplete = shape(grayscaleComplete, 'Crop keyframes').imageCropStyle
+    assert(Math.abs(parseFloat(cropDirectComplete.width) - 166.6667) < 0.1 && Math.abs(parseFloat(cropDirectComplete.left) + 66.6667) < 0.1, `imageData.cropLeft animation must hold its final crop: ${JSON.stringify(cropDirectComplete)}`)
+    assert(Math.abs(parseFloat(cropKeyframesComplete.height) - 166.6667) < 0.1 && Math.abs(parseFloat(cropKeyframesComplete.top) + 66.6667) < 0.1, `imageData.cropTop keyframes must hold their final crop: ${JSON.stringify(cropKeyframesComplete)}`)
+    assert(Number(shape(grayscaleComplete, 'Image gain').imageTone?.gain?.slope) === 2, `imageData.gain must hold its final value: ${JSON.stringify(shape(grayscaleComplete, 'Image gain').imageTone)}`)
+    assert(Math.abs(Number(shape(grayscaleComplete, 'Image blacklevel').imageTone?.blacklevel?.intercept) - 0.2) < 0.001, `imageData.blacklevel must hold its final keyframe: ${JSON.stringify(shape(grayscaleComplete, 'Image blacklevel').imageTone)}`)
+    assert(Number(shape(grayscaleComplete, 'Image gamma').imageTone?.gamma?.exponent) === 2, `imageData.gamma p:set must hold its final exponent: ${JSON.stringify(shape(grayscaleComplete, 'Image gamma').imageTone)}`)
+    console.log('Image grayscale, picture crop, image tone, and cancelled touch gesture verification passed.')
+  } else if (captureOnly) {
     assert(initial.slide && !initial.error, `The PPTX did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
     const textLayout = await evaluate(`(() => [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].map(shape => {
       const text = shape.querySelector('.text-frame')
@@ -2516,32 +2584,100 @@ try {
   await delay(80)
   const textRangeSlide = await state()
   assert(!textRangeSlide.warnings.some(warning => warning.includes('Text-range motion animations are not rendered yet.')), 'Character-range motion must not be skipped by the parser.')
-  const textRangeRuns = () => evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Character transform target"] .text-run') || [])].map(run => ({ text: run.textContent, start: Number(run.dataset.charStart), end: Number(run.dataset.charEnd), transform: getComputedStyle(run).transform, maskImage: getComputedStyle(run).maskImage, color: getComputedStyle(run).color, opacity: Number(getComputedStyle(run).opacity), display: getComputedStyle(run).display })))()`)
+  const textRangeRuns = () => evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Character transform target"] .text-run') || [])].map(run => ({ text: run.textContent, start: Number(run.dataset.charStart), end: Number(run.dataset.charEnd), transform: getComputedStyle(run).transform, clipPath: getComputedStyle(run).clipPath, maskImage: getComputedStyle(run).maskImage, color: getComputedStyle(run).color, opacity: Number(getComputedStyle(run).opacity), visibility: getComputedStyle(run).visibility, display: getComputedStyle(run).display })))()`)
   const textParagraphMask = title => evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"] .text-paragraph'); return target ? getComputedStyle(target).maskImage : 'missing' })()`)
+  const textParagraphClip = title => evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"] .text-paragraph'); return target ? getComputedStyle(target).clipPath : 'missing' })()`)
+  const textRangeMasks = title => evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"]')?.querySelectorAll('.text-run') || [])].map(run => ({ text: run.textContent, start: Number(run.dataset.charStart), end: Number(run.dataset.charEnd), mask: getComputedStyle(run).maskImage, clipPath: getComputedStyle(run).clipPath })))()`)
   const textRangeBefore = await textRangeRuns()
+  const paragraphBarnStart = await textParagraphClip('Paragraph barn target')
+  const paragraphRandomBarsStart = await textParagraphMask('Paragraph random bars target')
+  const paragraphStripsStart = await textParagraphMask('Paragraph strips target')
+  const characterStripsStart = await textRangeMasks('Character strips target')
+  const paragraphDissolveStart = await textParagraphClip('Paragraph dissolve target')
+  const characterDissolveStart = await textRangeMasks('Character dissolve target')
+  const paragraphWheelStart = await textParagraphMask('Paragraph wheel target')
+  const characterWedgeStart = await textRangeMasks('Character wedge target')
+  const paragraphShapeStart = await textParagraphClip('Paragraph shape target')
   assert(textRangeSlide.slide?.startsWith('67 / 67') && textRangeBefore.length === 4 && textRangeBefore.map(run => run.text).join('') === 'PPTX' && !textRangeSlide.warnings.some(warning => warning.includes('unsupported target or text range was skipped') || warning.includes('unsupported target or property was skipped')), `Text-range scale and rotation targets must parse without a fallback warning: ${JSON.stringify({ slide: textRangeSlide.slide, runs: textRangeBefore, warnings: textRangeSlide.warnings })}`)
+  assert(paragraphBarnStart.startsWith('inset(') && paragraphBarnStart.includes('50%') && !textRangeSlide.warnings.some(warning => warning.includes('text-range') && warning.includes('barn')), `A paragraph-range barn entrance must start closed and parse without an unsupported-range warning: ${JSON.stringify({ paragraphBarnStart, warnings: textRangeSlide.warnings })}`)
+  assert(paragraphRandomBarsStart.includes('data:image/svg+xml') && !textRangeSlide.warnings.some(warning => warning.includes('text-range random bars')), `A paragraph-range random-bars entrance must start masked without an unsupported-range warning: ${JSON.stringify({ paragraphRandomBarsStart: paragraphRandomBarsStart.slice(0, 80), warnings: textRangeSlide.warnings })}`)
+  assert(paragraphStripsStart.includes('data:image/svg+xml') && characterStripsStart.length === 3 && characterStripsStart[0]?.mask === 'none' && characterStripsStart[1]?.text === 'BC' && characterStripsStart[1]?.mask.includes('data:image/svg+xml') && characterStripsStart[2]?.mask === 'none' && !textRangeSlide.warnings.some(warning => warning.includes('unsupported text-range') && warning.includes('strips')), `Paragraph- and character-range strips must mask only their targets without an unsupported-range warning: ${JSON.stringify({ paragraphStripsStart: paragraphStripsStart.slice(0, 80), characterStripsStart, warnings: textRangeSlide.warnings })}`)
+  assert(paragraphDissolveStart.startsWith('inset(') && paragraphWheelStart.includes('data:image/svg+xml') && characterDissolveStart.length === 3 && characterDissolveStart[0]?.clipPath === 'none' && characterDissolveStart[1]?.clipPath.startsWith('inset(') && characterDissolveStart[2]?.clipPath === 'none' && characterWedgeStart.length === 3 && characterWedgeStart[0]?.mask === 'none' && characterWedgeStart[1]?.mask.includes('data:image/svg+xml') && characterWedgeStart[2]?.mask === 'none' && paragraphShapeStart.startsWith('inset(') && !textRangeSlide.warnings.some(warning => warning.includes('unsupported text-range mask')), `Paragraph and character dissolve, wheel/wedge, and shape masks must parse and begin only on their targeted text ranges: ${JSON.stringify({ paragraphDissolveStart, characterDissolveStart, paragraphWheelStart: paragraphWheelStart.slice(0, 80), characterWedgeStart, paragraphShapeStart, warnings: textRangeSlide.warnings })}`)
+  const characterBarnBefore = textRangeBefore.map(run => run.clipPath)
+  assert(characterBarnBefore[0] === 'none' && characterBarnBefore[1]?.startsWith('inset(') && characterBarnBefore[1]?.includes('50%') && characterBarnBefore[2]?.startsWith('inset(') && characterBarnBefore[2]?.includes('50%') && characterBarnBefore[3] === 'none', `A character-range barn entrance must clip only the selected runs: ${JSON.stringify(characterBarnBefore)}`)
   await evaluate(`document.querySelector('[aria-label="Next animation step or slide"]')?.click()`)
-  await delay(240)
+  await delay(150)
+  const textRangeFilterDuring = await evaluate(`(() => {
+    const find = (title, selector) => document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + '] ' + selector)
+    const paragraphMask = title => getComputedStyle(find(title, '.text-paragraph')).maskImage
+    const runs = title => [...(find(title, '')?.querySelectorAll('.text-run') || [])].map(run => ({ mask: getComputedStyle(run).maskImage, clipPath: getComputedStyle(run).clipPath }))
+    return {
+      paragraphShape: paragraphMask('Paragraph shape target'),
+      paragraphDissolve: paragraphMask('Paragraph dissolve target'),
+      characterDissolve: runs('Character dissolve target'),
+      paragraphWheel: paragraphMask('Paragraph wheel target'),
+      characterWedge: runs('Character wedge target'),
+    }
+  })()`)
+  const paragraphShapeDuring = textRangeFilterDuring.paragraphShape
+  const paragraphDissolveDuring = textRangeFilterDuring.paragraphDissolve
+  const characterDissolveDuring = textRangeFilterDuring.characterDissolve
+  const paragraphWheelDuring = textRangeFilterDuring.paragraphWheel
+  const characterWedgeDuring = textRangeFilterDuring.characterWedge
+  const paragraphBarnDuring = await textParagraphClip('Paragraph barn target')
+  const paragraphRandomBarsDuring = await textParagraphMask('Paragraph random bars target')
+  const paragraphStripsDuring = await textParagraphMask('Paragraph strips target')
+  const characterStripsDuring = await textRangeMasks('Character strips target')
+  const characterBarnDuring = (await textRangeRuns()).map(run => run.clipPath)
+  await delay(450)
   const textRangeAfter = await textRangeRuns()
   assert(textRangeAfter[0]?.opacity > 0.3 && textRangeAfter[0]?.opacity < 0.8
     && textRangeAfter[1]?.opacity > 0.3 && textRangeAfter[1]?.opacity < 0.8
     && textRangeAfter[2]?.opacity === 0.35 && textRangeAfter[3]?.opacity === 0.35,
     `Numeric opacity and p:set must apply only to their character ranges: ${JSON.stringify(textRangeAfter.map(run => ({ range: [run.start, run.end], opacity: run.opacity })))}`)
+  assert(textRangeAfter[0]?.visibility === 'visible' && textRangeAfter[1]?.visibility === 'visible'
+    && textRangeAfter[2]?.visibility === 'hidden' && textRangeAfter[3]?.visibility === 'hidden',
+    `Generic style.visibility must hide only its p:charRg target: ${JSON.stringify(textRangeAfter.map(run => ({ range: [run.start, run.end], visibility: run.visibility })))}`)
+  const paragraphVisibilityAfter = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Paragraph blinds target"] .text-paragraph')).visibility`)
+  assert(paragraphVisibilityAfter === 'hidden', `Generic style.visibility must apply to its p:pRg target: ${paragraphVisibilityAfter}`)
   const rangeMatrix = transform => transform.match(/^matrix\(([^)]+)\)$/)?.[1].split(',').map(Number)
   const scaleOnly = rangeMatrix(textRangeAfter[0]?.transform || '')
   const scaleAndRotation = rangeMatrix(textRangeAfter[1]?.transform || '')
   const presetScaleAndRotation = rangeMatrix(textRangeAfter[2]?.transform || '')
   const paragraphBlindsMask = await textParagraphMask('Paragraph blinds target')
   const paragraphCheckerMask = await textParagraphMask('Paragraph checker target')
+  const paragraphBarnComplete = await textParagraphClip('Paragraph barn target')
+  const paragraphRandomBarsComplete = await textParagraphMask('Paragraph random bars target')
+  const paragraphStripsComplete = await textParagraphMask('Paragraph strips target')
+  const characterStripsComplete = await textRangeMasks('Character strips target')
+  const paragraphDissolveComplete = await textParagraphClip('Paragraph dissolve target')
+  const characterDissolveComplete = await textRangeMasks('Character dissolve target')
+  const paragraphWheelComplete = await textParagraphMask('Paragraph wheel target')
+  const characterWedgeComplete = await textRangeMasks('Character wedge target')
+  const paragraphShapeComplete = await textParagraphClip('Paragraph shape target')
+  const characterBarnComplete = textRangeAfter.map(run => run.clipPath)
   const textRangeMaskKinds = textRangeAfter.map(run => run.maskImage.includes('data:image/svg+xml') ? 'checker' : run.maskImage !== 'none' ? 'other' : 'none')
-  assert((await state()).slide?.startsWith('67 / 67') && textRangeAfter.map(run => `${run.start}-${run.end}`).join(',') === '0-1,1-2,2-3,3-4'
-    && scaleOnly && Math.hypot(scaleOnly[0], scaleOnly[1]) > 1.1 && Math.hypot(scaleOnly[2], scaleOnly[3]) > 1.05
-    && scaleAndRotation && Math.abs(scaleAndRotation[1]) > 0.01 && presetScaleAndRotation && Math.abs(presetScaleAndRotation[1]) > 0.01
-    && Math.hypot(presetScaleAndRotation[0], presetScaleAndRotation[1]) > 1.1
-    && textRangeMaskKinds.join(',') === 'none,checker,checker,none'
-    && paragraphBlindsMask.startsWith('repeating-linear-gradient(') && paragraphCheckerMask.includes('data:image/svg+xml')
-    && !textRangeSlide.warnings.some(warning => warning.includes('Text-range slide') || warning.includes('character-range checkerboard'))
-    && textRangeAfter[3]?.transform === 'none', `Paragraph and character mask animations plus p:charRg transforms must affect only their targets: ${JSON.stringify({ runRanges: textRangeAfter.map(run => [run.start, run.end]), textRangeMaskKinds, paragraphBlindsMask: paragraphBlindsMask.startsWith('repeating-linear-gradient('), paragraphCheckerMask: paragraphCheckerMask.includes('data:image/svg+xml'), warnings: textRangeSlide.warnings })}`)
+  const textRangeChecks = {
+    slide: (await state()).slide?.startsWith('67 / 67'),
+    runRanges: textRangeAfter.map(run => `${run.start}-${run.end}`).join(',') === '0-1,1-2,2-3,3-4',
+    scale: Boolean(scaleOnly && Math.hypot(scaleOnly[0], scaleOnly[1]) > 1.1 && Math.hypot(scaleOnly[2], scaleOnly[3]) > 1.05),
+    rotation: Boolean(scaleAndRotation && Math.abs(scaleAndRotation[1]) > 0.01 && presetScaleAndRotation && Math.abs(presetScaleAndRotation[1]) > 0.01 && Math.hypot(presetScaleAndRotation[0], presetScaleAndRotation[1]) > 1.1),
+    characterChecker: textRangeMaskKinds.join(',') === 'none,checker,checker,none',
+    paragraphBlindsAndChecker: paragraphBlindsMask.startsWith('repeating-linear-gradient(') && paragraphCheckerMask.includes('data:image/svg+xml'),
+    paragraphRandomBars: paragraphRandomBarsDuring.includes('data:image/svg+xml') && paragraphRandomBarsDuring !== paragraphRandomBarsStart && paragraphRandomBarsComplete.includes('data:image/svg+xml') && paragraphRandomBarsComplete !== paragraphRandomBarsDuring,
+    paragraphStrips: paragraphStripsDuring.includes('data:image/svg+xml') && paragraphStripsDuring !== paragraphStripsStart && paragraphStripsComplete.includes('data:image/svg+xml') && paragraphStripsComplete !== paragraphStripsDuring,
+    characterStrips: characterStripsDuring[0]?.mask === 'none' && characterStripsDuring[1]?.mask.includes('data:image/svg+xml') && characterStripsDuring[1]?.mask !== characterStripsStart[1]?.mask && characterStripsDuring[2]?.mask === 'none' && characterStripsComplete[0]?.mask === 'none' && characterStripsComplete[1]?.mask.includes('data:image/svg+xml') && characterStripsComplete[1]?.mask !== characterStripsDuring[1]?.mask && characterStripsComplete[2]?.mask === 'none',
+    paragraphBarn: paragraphBarnDuring.startsWith('inset(') && paragraphBarnDuring !== paragraphBarnStart && paragraphBarnComplete.startsWith('inset(') && paragraphBarnComplete !== paragraphBarnDuring && paragraphBarnComplete.includes('0px'),
+    characterBarn: characterBarnDuring[0] === 'none' && characterBarnDuring[1]?.startsWith('inset(') && characterBarnDuring[1] !== characterBarnBefore[1] && characterBarnDuring[2]?.startsWith('inset(') && characterBarnDuring[2] !== characterBarnBefore[2] && characterBarnDuring[3] === 'none' && characterBarnComplete[0] === 'none' && characterBarnComplete[1]?.startsWith('inset(') && characterBarnComplete[1] !== characterBarnDuring[1] && characterBarnComplete[2]?.startsWith('inset(') && characterBarnComplete[2] !== characterBarnDuring[2] && characterBarnComplete[3] === 'none',
+    paragraphDissolve: paragraphDissolveDuring.includes('data:image/svg+xml') && paragraphDissolveComplete.startsWith('inset(') && paragraphDissolveComplete.includes('0px'),
+    characterDissolve: characterDissolveDuring[0]?.clipPath === 'none' && characterDissolveDuring[1]?.mask.includes('data:image/svg+xml') && characterDissolveDuring[2]?.clipPath === 'none' && characterDissolveComplete[0]?.clipPath === 'none' && characterDissolveComplete[1]?.clipPath.startsWith('inset(') && characterDissolveComplete[2]?.clipPath === 'none',
+    paragraphWheel: paragraphWheelDuring.includes('data:image/svg+xml') && paragraphWheelDuring !== paragraphWheelStart && paragraphWheelComplete.includes('data:image/svg+xml') && paragraphWheelComplete !== paragraphWheelDuring,
+    characterWedge: characterWedgeDuring[0]?.mask === 'none' && characterWedgeDuring[1]?.mask.includes('data:image/svg+xml') && characterWedgeDuring[1]?.mask !== characterWedgeStart[1]?.mask && characterWedgeDuring[2]?.mask === 'none' && characterWedgeComplete[0]?.mask === 'none' && characterWedgeComplete[1]?.mask.includes('data:image/svg+xml') && characterWedgeComplete[1]?.mask !== characterWedgeDuring[1]?.mask && characterWedgeComplete[2]?.mask === 'none',
+    paragraphShape: paragraphShapeDuring.includes('data:image/svg+xml') && paragraphShapeComplete.startsWith('inset(') && paragraphShapeComplete.includes('0px'),
+    noWarnings: !textRangeSlide.warnings.some(warning => warning.includes('Text-range slide') || warning.includes('character-range checkerboard')),
+    adjacentTransform: textRangeAfter[3]?.transform === 'none',
+  }
+  assert(Object.values(textRangeChecks).every(Boolean), `Paragraph and character mask animations plus p:charRg transforms must affect only their targets: ${JSON.stringify(textRangeChecks)}`)
   const motionOnFirstCharacter = rangeMatrix(textRangeAfter[0]?.transform || '')
   const motionOnAdjacentCharacters = textRangeAfter.slice(1, 3).map(run => rangeMatrix(run.transform))
   assert(motionOnFirstCharacter && Math.abs(motionOnFirstCharacter[4]) > 20 && Math.abs(motionOnFirstCharacter[5]) > 5
@@ -2601,4 +2737,7 @@ try {
   } else {
     await rm(runtimeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
+}
+if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !themeBackgroundOnly) {
+  console.log('Volume-HLC and volume-OHLC stock chart secondary-axis verification passed.')
 }
