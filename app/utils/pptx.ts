@@ -2725,6 +2725,44 @@ function evaluateMotionFormula(formula: string, variables: Record<string, number
     return finite(value) && cursor === tokens.length ? value : undefined
 }
 
+function sampleNumericAnimationFormula(
+    keyframes: Array<{offset: number; value: number; formula?: string}>,
+    durationMs: number,
+    property: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity' | 'style.fontSize' | 'style.fontWeight' | 'stroke.weight',
+    element: PptxElement,
+    slideWidth: number,
+    slideHeight: number
+): Array<{offset: number; value: number}> | undefined {
+    const sampleCount = Math.min(900, Math.max(60, Math.ceil(durationMs / 1000 * 60)))
+    const minimum = property === 'style.fontWeight' ? 1 : property === 'style.fontSize' ? Number.MIN_VALUE : 0
+    const maximum = property === 'style.fontWeight' ? 1000 : property === 'style.fontSize' ? 100 : property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : 1
+    const samples: Array<{offset: number; value: number}> = []
+    for (let index = 0; index <= sampleCount; index++) {
+        const progress = index / sampleCount
+        const rightIndex = keyframes.findIndex(frame => frame.offset >= progress)
+        const left = rightIndex < 0
+            ? keyframes.at(-1)!
+            : keyframes[Math.max(0, rightIndex - (keyframes[rightIndex]!.offset === progress ? 0 : 1))]!
+        const right = rightIndex < 0 ? left : keyframes[rightIndex]!
+        const formula = keyframes.filter(frame => frame.offset <= progress && frame.formula !== undefined).at(-1)?.formula
+        const ratio = right.offset === left.offset ? 0 : (progress - left.offset) / (right.offset - left.offset)
+        const baseValue = left.value + (right.value - left.value) * Math.max(0, Math.min(1, ratio))
+        const value = formula
+            ? evaluateMotionFormula(formula, {
+                  ppt_x: element.x / slideWidth,
+                  ppt_y: element.y / slideHeight,
+                  ppt_w: element.width / slideWidth,
+                  ppt_h: element.height / slideHeight,
+                  [property]: baseValue,
+                  $: progress
+              })
+            : baseValue
+        if (value === undefined || value < minimum || value > maximum) return undefined
+        samples.push({offset: progress, value})
+    }
+    return samples
+}
+
 function parseAnimations(slideRoot: Element, theme: Record<string, string>, warnings: Set<string>, elements: PptxElement[], slideWidth: number, slideHeight: number): Pick<PptxSlide, 'automaticAnimations' | 'animationSteps' | 'animationSequence' | 'triggeredAnimations'> {
     const timing = firstDescendant(slideRoot, 'timing')
     if (!timing) return {}
@@ -3808,6 +3846,15 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     handledTextAnimations.add(animation)
                     continue
                 }
+                const durationMs = animationDurationMs(timeNode, timing)
+                const opacityFormulaSamples = hasFormulaKeyframes && formulaProperty && parsedKeyframes
+                    ? sampleNumericAnimationFormula(parsedKeyframes, durationMs, property as NonNullable<PptxAnimation['opacityProperty']>, element, slideWidth, slideHeight)
+                    : undefined
+                if (hasFormulaKeyframes && !opacityFormulaSamples) {
+                    warnings.add(`A generic ${property} formula used an unsupported variable or produced an out-of-range value; animation was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
                 const rangeKey = hasTextRange ? ':' + (animationTarget.paragraphRange?.start ?? '') + ':' + (animationTarget.paragraphRange?.end ?? '') + ':' + (animationTarget.characterRange?.start ?? '') + ':' + (animationTarget.characterRange?.end ?? '') : ''
                 actions.set(animationTarget.targetId + ':opacity:' + property + rangeKey, {
                     targetId: animationTarget.targetId,
@@ -3819,8 +3866,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     opacityFrom: keyframes?.[0]?.value ?? from,
                     opacityTo: keyframes?.at(-1)?.value ?? to,
                     opacityKeyframes: keyframes,
+                    opacityFormulaSamples,
                     opacityKeyframeMode: tavList ? (calculationMode as NonNullable<PptxAnimation['opacityKeyframeMode']>) : undefined,
-                    durationMs: animationDurationMs(timeNode, timing),
+                    durationMs,
                     delayMs: delayMs + startDelay(timeNode),
                     ...timing
                 })
@@ -3848,41 +3896,13 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     continue
                 }
                 const durationMs = animationDurationMs(timeNode, timing)
-                let fontWeightFormulaSamples: PptxAnimation['fontWeightFormulaSamples']
-                if (hasFormulaKeyframes && parsedKeyframes) {
-                    const sampleCount = Math.min(900, Math.max(60, Math.ceil(durationMs / 1000 * 60)))
-                    fontWeightFormulaSamples = []
-                    for (let index = 0; index <= sampleCount; index++) {
-                        const progress = index / sampleCount
-                        const rightIndex = parsedKeyframes.findIndex(frame => frame.offset >= progress)
-                        const left = rightIndex < 0
-                            ? parsedKeyframes.at(-1)!
-                            : parsedKeyframes[Math.max(0, rightIndex - (parsedKeyframes[rightIndex]!.offset === progress ? 0 : 1))]!
-                        const right = rightIndex < 0 ? left : parsedKeyframes[rightIndex]!
-                        const formula = parsedKeyframes.filter(frame => frame.offset <= progress && frame.formula !== undefined).at(-1)?.formula
-                        const ratio = right.offset === left.offset ? 0 : (progress - left.offset) / (right.offset - left.offset)
-                        const baseValue = left.value + (right.value - left.value) * Math.max(0, Math.min(1, ratio))
-                        const value = formula
-                            ? evaluateMotionFormula(formula, {
-                                  ppt_x: element.x / slideWidth,
-                                  ppt_y: element.y / slideHeight,
-                                  ppt_w: element.width / slideWidth,
-                                  ppt_h: element.height / slideHeight,
-                                  'style.fontWeight': baseValue,
-                                  $: progress
-                              })
-                            : baseValue
-                        if (value === undefined || value < 1 || value > 1000) {
-                            fontWeightFormulaSamples = undefined
-                            break
-                        }
-                        fontWeightFormulaSamples.push({offset: progress, value})
-                    }
-                    if (!fontWeightFormulaSamples) {
-                        warnings.add('A generic text font-weight formula used an unsupported variable or produced an out-of-range value; animation was skipped.')
-                        handledTextAnimations.add(animation)
-                        continue
-                    }
+                const fontWeightFormulaSamples = hasFormulaKeyframes && parsedKeyframes
+                    ? sampleNumericAnimationFormula(parsedKeyframes, durationMs, 'style.fontWeight', element, slideWidth, slideHeight)
+                    : undefined
+                if (hasFormulaKeyframes && !fontWeightFormulaSamples) {
+                    warnings.add('A generic text font-weight formula used an unsupported variable or produced an out-of-range value; animation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
                 }
                 const key = `${animationTarget.targetId}:fontWeight:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
                 actions.set(key, {
@@ -3903,17 +3923,29 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 handledTextAnimations.add(animation)
                 continue
             }
-            const validFontSizeKeyframes = Boolean(validKeyframes && keyframes?.every(frame => frame.value > 0))
-            const validValues = tavList ? validFontSizeKeyframes && rawFrom === null && rawTo === null && rawBy === null : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
-            const from = keyframes?.[0]?.value ?? (rawFrom === null ? 1 : Number(rawFrom))
-            const to = keyframes?.at(-1)?.value ?? (rawTo === null ? (rawBy === null ? undefined : from + Number(rawBy)) : Number(rawTo))
+            const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
+            const validFontSizeKeyframes = Boolean(validKeyframeTrack && parsedKeyframes?.every(frame => frame.value > 0))
+            const validValues = tavList ? validFontSizeKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || calculationMode === 'lin') : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
+            const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? 1 : Number(rawFrom))
+            const to = parsedKeyframes?.at(-1)?.value ?? (rawTo === null ? (rawBy === null ? undefined : from + Number(rawBy)) : Number(rawTo))
             if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0 || from > 100 || to > 100) {
-                warnings.add('A generic text animation with missing or out-of-range font sizes was skipped.')
+                warnings.add(hasFormulaKeyframes
+                    ? 'A generic text font-size formula animation with unsupported interpolation or invalid numeric keyframes was skipped.'
+                    : 'A generic text animation with missing or out-of-range font sizes was skipped.')
                 handledTextAnimations.add(animation)
                 continue
             }
             const timing = animationTiming(timeNode, 'Text font size')
             if (!timing) {
+                handledTextAnimations.add(animation)
+                continue
+            }
+            const durationMs = animationDurationMs(timeNode, timing)
+            const fontSizeFormulaSamples = hasFormulaKeyframes && parsedKeyframes
+                ? sampleNumericAnimationFormula(parsedKeyframes, durationMs, 'style.fontSize', element, slideWidth, slideHeight)
+                : undefined
+            if (hasFormulaKeyframes && !fontSizeFormulaSamples) {
+                warnings.add('A generic text font-size formula used an unsupported variable or produced an out-of-range value; animation was skipped.')
                 handledTextAnimations.add(animation)
                 continue
             }
@@ -3927,8 +3959,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 fontSizeFrom: from,
                 fontSizeTo: to,
                 fontSizeKeyframes: keyframes,
+                fontSizeFormulaSamples,
                 fontSizeKeyframeMode: tavList ? (calculationMode as NonNullable<PptxAnimation['fontSizeKeyframeMode']>) : undefined,
-                durationMs: animationDurationMs(timeNode, timing),
+                durationMs,
                 delayMs: delayMs + startDelay(timeNode),
                 ...timing
             })

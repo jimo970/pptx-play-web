@@ -1410,7 +1410,9 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
       continue
     }
     if (progress === null || progress < 0 || action.fontSizeFrom === undefined || action.fontSizeTo === undefined) continue
-    factor = action.fontSizeKeyframes?.length
+    factor = action.fontSizeFormulaSamples?.length
+      ? animationKeyframeValue(action.fontSizeFormulaSamples, 'lin', progress)
+      : action.fontSizeKeyframes?.length
       ? animationKeyframeValue(action.fontSizeKeyframes, action.fontSizeKeyframeMode, progress)
       : action.fontSizeFrom + (action.fontSizeTo - action.fontSizeFrom) * progress
   }
