@@ -1359,7 +1359,8 @@ function animationColor(element: PptxElement, property: NonNullable<PptxAnimatio
 
 function textColorAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
   const color = animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd)
-  return color ? { color } : {}
+  if (!color) return {}
+  return { color: animatedRunColor(color, animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)) }
 }
 
 function textRangeOpacityAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
@@ -1367,7 +1368,7 @@ function textRangeOpacityAnimationStyle(element: PptxElement, paragraphIndex: nu
   return opacity === 1 ? {} : { opacity }
 }
 
-function textFontSizeAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, run: PptxElement['paragraphs'][number]['runs'][number], fontScale = element.textFontScale ?? 1): CSSProperties {
+function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, run: PptxElement['paragraphs'][number]['runs'][number], fontScale = element.textFontScale ?? 1, script: ScriptFont = 'latin'): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'fontSize') return false
     const paragraphRange = action.paragraphRange
@@ -1405,22 +1406,117 @@ function textFontSizeAnimationStyle(element: PptxElement, paragraphIndex: number
       weight = run.bold ? 700 : 400
       continue
     }
-    if (progress === null || progress < 0 || action.fontWeightFrom === undefined || action.fontWeightTo === undefined) continue
+    if (progress === null || progress < 0) continue
+    if (action.fontWeightReset) {
+      weight = run.bold ? 700 : 400
+      continue
+    }
+    if (action.fontWeightFrom === undefined || action.fontWeightTo === undefined) continue
     weight = action.fontWeightFormulaSamples?.length
       ? animationKeyframeValue(action.fontWeightFormulaSamples, 'lin', progress)
       : action.fontWeightKeyframes?.length
       ? animationKeyframeValue(action.fontWeightKeyframes, action.fontWeightKeyframeMode, progress)
       : action.fontWeightFrom + (action.fontWeightTo - action.fontWeightFrom) * progress
   }
+  let italic: boolean | undefined
+  let fontFamily: CSSProperties['fontFamily'] | undefined
+  let underline: boolean | undefined
+  let lineThrough: boolean | undefined
+  let verticalAlign: CSSProperties['verticalAlign'] | undefined
+  let verticalAlignChanged = false
+  let textShadow: CSSProperties['textShadow']
+  let textShadowChanged = false
+  let textEmbossEnabled = false
+  let textEmbossChanged = false
+  const baseFontFamily = script === 'eastAsia' ? run.fontFamilyEastAsia : script === 'complexScript' ? run.fontFamilyComplexScript : run.fontFamily
+  let textOutline: string | undefined
+  let textOutlineChanged = false
+  const baseTextOutline = run.outlineColor !== undefined && run.outlineWidth !== undefined
+    ? `${run.outlineWidth * scale.value}px ${run.outlineColor}`
+    : '0px transparent'
+  const textStyleActions = animationsByTarget.value.get(element.id)?.filter((action) => {
+    if (action.effect !== 'textStyle') return false
+    const paragraphRange = action.paragraphRange
+    const characterRange = action.characterRange
+    const iterationIndex = iterationIndexFor(action, characterStart, characterEnd)
+    return (!paragraphRange || paragraphIndex >= paragraphRange.start && paragraphIndex <= paragraphRange.end)
+      && (!characterRange || characterStart < characterRange.end && characterEnd > characterRange.start)
+      && (!action.iteration || iterationIndex !== undefined && iterationIndex >= 0)
+  }) || []
+  for (const action of textStyleActions) {
+    const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
+    let value: PptxAnimation['textStyleFrom']
+    if (progress === -2 && action.textStyleProperty === 'textTransform') {
+      verticalAlign = run.baselineOffsetEm === undefined ? 'baseline' : `${run.baselineOffsetEm}em`
+      verticalAlignChanged = true
+      continue
+    } else if (progress === -2 && action.textStyleProperty === 'outline') {
+      textOutline = baseTextOutline
+      textOutlineChanged = true
+      continue
+    } else if (progress === -2 && action.textStyleProperty === 'textShadow') {
+      textShadow = runTextShadowStyle(element, run, paragraphIndex, characterStart, characterEnd)
+      textShadowChanged = true
+      continue
+    } else if (progress === -2 && action.textStyleProperty === 'emboss') {
+      textEmbossEnabled = false
+      textEmbossChanged = true
+      continue
+    } else if (progress === -2) {
+      if (action.textStyleProperty === 'fontFamily') value = baseFontFamily || ''
+      else if (action.textStyleProperty === 'fontStyle') value = Boolean(run.italic)
+      else if (action.textStyleProperty === 'underline') value = Boolean(run.underline)
+      else if (action.textStyleProperty === 'lineThrough') value = Boolean(run.lineThrough)
+    }
+    else if (progress === null || progress < 0) continue
+    else if (action.textStyleKeyframes?.length) {
+      value = action.textStyleKeyframes[0]!.value
+      for (const frame of action.textStyleKeyframes) {
+        if (frame.offset > progress) break
+        value = frame.value
+      }
+    } else if (progress >= 1) value = action.textStyleTo
+    else value = action.textStyleFrom
+    if (value === undefined) continue
+    if (action.textStyleProperty === 'fontStyle') italic = value as boolean
+    else if (action.textStyleProperty === 'fontFamily') fontFamily = cssFontFamily(String(value))
+    else if (action.textStyleProperty === 'underline') underline = value as boolean
+    else if (action.textStyleProperty === 'lineThrough') lineThrough = value as boolean
+    else if (action.textStyleProperty === 'textTransform') {
+      verticalAlign = value === 'sub' || value === 'super' ? value : 'baseline'
+      verticalAlignChanged = true
+    } else if (action.textStyleProperty === 'outline') {
+      textOutline = value === true ? baseTextOutline : '0px transparent'
+      textOutlineChanged = true
+    } else if (action.textStyleProperty === 'textShadow') {
+      textShadow = value === 'none' ? 'none' : runTextShadowStyle(element, run, paragraphIndex, characterStart, characterEnd)
+      textShadowChanged = true
+    } else if (action.textStyleProperty === 'emboss') {
+      textEmbossEnabled = value === 'emboss'
+      textEmbossChanged = true
+    }
+  }
+  const textDecorationLine = [
+    (underline ?? run.underline) ? 'underline' : undefined,
+    (lineThrough ?? run.lineThrough) ? 'line-through' : undefined,
+  ].filter(Boolean).join(' ')
+  const embossOffset = Math.max(0.5, (run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value / 12)
   return {
     ...(factor === 1 ? {} : { fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value * factor}px` }),
     ...(weight === undefined ? {} : { fontWeight: weight }),
+    ...(fontFamily === undefined ? {} : { fontFamily }),
+    ...(italic === undefined ? {} : { fontStyle: italic ? 'italic' : 'normal' }),
+    ...(underline === undefined && lineThrough === undefined ? {} : { textDecorationLine: textDecorationLine || 'none' }),
+    ...(verticalAlignChanged ? { verticalAlign } : {}),
+    ...(textOutlineChanged ? { WebkitTextStroke: textOutline } : {}),
+    ...(textShadowChanged ? { textShadow } : {}),
+    ...(textEmbossChanged ? { filter: textEmbossEnabled ? `drop-shadow(-${embossOffset}px -${embossOffset}px 0 rgba(255, 255, 255, 0.65)) drop-shadow(${embossOffset}px ${embossOffset}px 0 rgba(0, 0, 0, 0.65))` : 'none' } : {}),
   }
 }
 
 function textTransformAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => {
-    if (!['scale', 'rotation', 'motion'].includes(action.effect) || !(action.paragraphRange || action.characterRange)) return false
+    if (!['scale', 'rotation', 'motion', 'slide'].includes(action.effect) || !(action.paragraphRange || action.characterRange)) return false
     return (!action.paragraphRange || paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
       && (!action.characterRange || characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
   }) || []

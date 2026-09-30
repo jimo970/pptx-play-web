@@ -294,12 +294,18 @@ export interface PptxTransitionPlayback {
     transition: NonNullable<PptxSlide['transition']>
 }
 
+type TextStyleAnimationProperty = 'fontStyle' | 'fontFamily' | 'underline' | 'lineThrough' | 'textTransform' | 'outline' | 'textShadow' | 'emboss'
+type TextStyleAnimationValue = boolean | 'none' | 'normal' | 'sub' | 'super' | string
+type AnimatedVisibility = 'visible' | 'hidden'
+type AnimatedImageCropProperty = 'left' | 'top' | 'right' | 'bottom'
+type AnimatedImageToneProperty = 'gain' | 'blacklevel' | 'gamma'
+
 export interface PptxAnimation {
     targetId: string
     paragraphRange?: {start: number; end: number}
     characterRange?: {start: number; end: number}
     iteration?: {intervalMs: number; ranges: Array<{start: number; end: number}>; backwards?: boolean}
-    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'opacity' | 'media'
+    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'textStyle' | 'visibility' | 'grayscale' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
     direction: 'in' | 'out'
     durationMs: number
     delayMs: number
@@ -335,15 +341,43 @@ export interface PptxAnimation {
     fontSizeTo?: number
     fontSizeKeyframes?: Array<{offset: number; value: number}>
     fontSizeKeyframeMode?: 'lin' | 'discrete'
+    fontSizeFormulaSamples?: Array<{offset: number; value: number}>
     fontWeightFrom?: number
     fontWeightTo?: number
+    fontWeightReset?: boolean
     fontWeightKeyframes?: Array<{offset: number; value: number}>
     fontWeightKeyframeMode?: 'lin' | 'discrete'
     fontWeightFormulaSamples?: Array<{offset: number; value: number}>
+    strokeWidthFrom?: number
+    strokeWidthTo?: number
+    strokeWidthKeyframes?: Array<{offset: number; value: number}>
+    strokeWidthKeyframeMode?: 'lin' | 'discrete'
+    strokeWidthFormulaSamples?: Array<{offset: number; value: number}>
+    textStyleProperty?: TextStyleAnimationProperty
+    textStyleFrom?: TextStyleAnimationValue
+    textStyleTo?: TextStyleAnimationValue
+    textStyleKeyframes?: Array<{offset: number; value: TextStyleAnimationValue}>
+    visibilityFrom?: AnimatedVisibility
+    visibilityTo?: AnimatedVisibility
+    visibilityKeyframes?: Array<{offset: number; value: AnimatedVisibility}>
+    grayscaleFrom?: boolean
+    grayscaleTo?: boolean
+    grayscaleKeyframes?: Array<{offset: number; value: boolean}>
+    imageCropProperty?: AnimatedImageCropProperty
+    imageCropFrom?: number
+    imageCropTo?: number
+    imageCropKeyframes?: Array<{offset: number; value: number}>
+    imageCropKeyframeMode?: 'lin' | 'discrete'
+    imageToneProperty?: AnimatedImageToneProperty
+    imageToneFrom?: number
+    imageToneTo?: number
+    imageToneKeyframes?: Array<{offset: number; value: number}>
+    imageToneKeyframeMode?: 'lin' | 'discrete'
     opacityFrom?: number
     opacityTo?: number
     opacityKeyframes?: Array<{offset: number; value: number}>
     opacityKeyframeMode?: 'lin' | 'discrete'
+    opacityFormulaSamples?: Array<{offset: number; value: number}>
     mediaCommand?: 'play' | 'pause' | 'togglePause' | 'stop'
     mediaActionKey?: string
     mediaDurationMs?: number
@@ -2757,6 +2791,24 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             : (action.effect === 'media' ? (action.mediaDurationMs ?? 0) : action.durationMs === 0 ? 0 : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity)) +
               (action.iteration ? action.iteration.intervalMs * (action.iteration.ranges.length - 1) : 0)
     const startDelay = (timeNode: Element | undefined) => milliseconds(child(child(timeNode, 'stCondLst'), 'cond')?.getAttribute('delay'))
+    const parseTextStyleValue = (property: TextStyleAnimationProperty, raw: string | null): TextStyleAnimationValue | undefined => {
+        const rawValue = raw?.trim()
+        if (property === 'fontFamily') return rawValue && rawValue.length <= 128 && /^[\p{L}\p{N} ._-]+$/u.test(rawValue) ? rawValue : undefined
+        const value = rawValue?.toLowerCase()
+        if (property === 'fontStyle') return value === 'italic' ? true : value === 'normal' || value === 'none' ? false : undefined
+        if (property === 'underline' || property === 'lineThrough' || property === 'outline') return value === 'true' ? true : value === 'false' ? false : undefined
+        if (property === 'textShadow') return value === 'none' || value === 'normal' || value === 'auto' ? value : undefined
+        if (property === 'emboss') return value === 'none' || value === 'normal' || value === 'emboss' ? value : undefined
+        return value === 'none' || value === 'normal' || value === 'sub' || value === 'super' ? value : undefined
+    }
+    const hasCompleteTextOutline = (element: PptxElement) => {
+        const runs = element.paragraphs.flatMap(paragraph => paragraph.runs).filter(run => run.text.length > 0)
+        return runs.length > 0 && runs.every(run => run.outlineWidth !== undefined && run.outlineWidth > 0 && run.outlineColor !== undefined && run.outlineColor !== 'transparent')
+    }
+    const hasCompleteTextShadow = (element: PptxElement) => {
+        const runs = element.paragraphs.flatMap(paragraph => paragraph.runs).filter(run => run.text.length > 0)
+        return runs.length > 0 && runs.every(run => Boolean(run.shadow))
+    }
     const handledEffects = new Set<Element>()
     const handledScales = new Set<Element>()
     const handledRotations = new Set<Element>()
@@ -3333,19 +3385,36 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
             const tavList = child(animation, 'tavLst')
             const calculationMode = animation.getAttribute('calcmode') || 'lin'
+            const textStyleProperty = property === 'style.fontStyle' ? 'fontStyle' : property === 'style.fontFamily' ? 'fontFamily' : property === 'style.textDecorationUnderline' ? 'underline' : property === 'style.textDecorationLineThrough' ? 'lineThrough' : property === 'style.textTransform' ? 'textTransform' : property === 'style.textEffectOutline' ? 'outline' : property === 'style.textShadow' ? 'textShadow' : property === 'style.textEffectEmboss' ? 'emboss' : undefined
+            const isVisibilityProperty = property === 'style.visibility'
+            const isGrayscaleProperty = property === 'imageData.grayscale'
+            const imageCropProperty = property === 'imageData.cropLeft' ? 'left'
+                : property === 'imageData.cropTop' ? 'top'
+                : property === 'imageData.cropRight' ? 'right'
+                : property === 'imageData.cropBottom' ? 'bottom'
+                : undefined
+            const imageToneProperty = property === 'imageData.gain' ? 'gain'
+                : property === 'imageData.blacklevel' || property === 'imageData.blackleve' ? 'blacklevel'
+                : property === 'imageData.gamma' ? 'gamma'
+                : undefined
+            const hasTextRange = Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
             if (
                 !animationTarget.targetId ||
-                !['style.fontSize', 'style.fontWeight', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(property || '') ||
+                !['style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline', 'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow', 'style.textEffectEmboss', 'style.visibility', 'imageData.grayscale', 'imageData.cropLeft', 'imageData.cropTop', 'imageData.cropRight', 'imageData.cropBottom', 'imageData.gain', 'imageData.blacklevel', 'imageData.blackleve', 'imageData.gamma', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'stroke.weight', 'shadow.opacity'].includes(property || '') ||
                 !element ||
-                (['style.fontSize', 'style.fontWeight'].includes(property || '') && !element.paragraphs.length) ||
-                (property === 'fill.opacity' && (element.kind !== 'shape' || element.fill.includes('gradient('))) ||
-                (property === 'stroke.opacity' && (!['shape', 'line'].includes(element.kind) || element.stroke.includes('gradient('))) ||
-                (property === 'shadow.opacity' && !element.shadow && !element.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))) ||
+                (property === 'stroke.weight' && (!['shape', 'line'].includes(element.kind) || hasTextRange)) ||
+                (['style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline', 'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow', 'style.textEffectEmboss'].includes(property || '') && !element.paragraphs.length) ||
+                (isGrayscaleProperty && (element.kind !== 'picture' || hasTextRange)) ||
+                (imageCropProperty && (element.kind !== 'picture' || hasTextRange)) ||
+                (imageToneProperty && (element.kind !== 'picture' || hasTextRange)) ||
+                (property === 'fill.opacity' && !hasTextRange && (element.kind !== 'shape' || element.fill.includes('gradient('))) ||
+                (property === 'stroke.opacity' && !hasTextRange && (!['shape', 'line'].includes(element.kind) || element.stroke.includes('gradient('))) ||
+                (property === 'shadow.opacity' && !hasTextRange && !element.shadow && !element.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))) ||
                 animationTarget.hasUnsupportedTextRange ||
                 !hasValidCharacterRange(animationTarget, element) ||
-                (animation.getAttribute('valueType') && animation.getAttribute('valueType') !== 'num') ||
+                (animation.getAttribute('valueType') && animation.getAttribute('valueType') !== (textStyleProperty || isVisibilityProperty || isGrayscaleProperty ? 'str' : 'num')) ||
                 !['lin', 'discrete'].includes(calculationMode) ||
-                (calculationMode === 'discrete' && !tavList) ||
+                (calculationMode === 'discrete' && !tavList && !textStyleProperty && !isVisibilityProperty && !isGrayscaleProperty) ||
                 (tavList && children(tavList).some(node => node.localName !== 'tav'))
             ) {
                 warnings.add('A generic object animation with an unsupported target or interpolation was skipped.')
@@ -3387,19 +3456,347 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 ? parsedKeyframes.map(({offset, value}) => ({offset, value}))
                 : undefined
             const validKeyframes = Boolean(keyframes?.length)
-            if (!['style.fontSize', 'style.fontWeight'].includes(property || '')) {
-                const hasTextRange = Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
-                if (hasTextRange && property !== 'style.opacity') {
-                    warnings.add('Text-range fill, stroke, and shadow opacity animations are not rendered yet.')
+            if (textStyleProperty) {
+                const textStyleKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const value = valueNode?.localName === 'strVal' ? parseTextStyleValue(textStyleProperty, valueNode.getAttribute('val')) : undefined
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: TextStyleAnimationValue} => Boolean(frame))
+                    : undefined
+                const validTextStyleKeyframes = Boolean(textStyleKeyframes?.length === keyframeNodes.length && textStyleKeyframes.every((frame, index) => index === 0 || frame.offset > textStyleKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseTextStyleValue(textStyleProperty, rawFrom)
+                const to = rawTo === null ? undefined : parseTextStyleValue(textStyleProperty, rawTo)
+                const unsupportedOutlineRange = textStyleProperty === 'outline' && Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
+                const requestsMissingOutline = textStyleProperty === 'outline'
+                    && (tavList ? textStyleKeyframes?.some(frame => frame.value === true) : from === true || to === true)
+                    && !hasCompleteTextOutline(element)
+                const unsupportedTextShadow = textStyleProperty === 'textShadow' && (hasTextRange || !hasCompleteTextShadow(element))
+                const validValues = calculationMode === 'discrete' && (tavList
+                    ? validTextStyleKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
+                    && !unsupportedOutlineRange && !requestsMissingOutline && !unsupportedTextShadow
+                if (!validValues) {
+                    warnings.add(unsupportedTextShadow
+                        ? 'A text shadow animation without complete static shadows or with a text range was skipped.'
+                        : unsupportedOutlineRange || requestsMissingOutline
+                        ? 'A text outline animation without complete static outlines or with a text range was skipped.'
+                        : 'A generic text style animation with unsupported values, formulas, or interpolation was skipped.')
                     handledTextAnimations.add(animation)
                     continue
                 }
-                const validOpacityKeyframes = Boolean(validKeyframes && keyframes?.every(frame => frame.value <= 1))
-                const validValues = tavList ? validOpacityKeyframes && rawFrom === null && rawTo === null && rawBy === null : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
-                const from = rawFrom === null ? 0 : Number(rawFrom)
-                const to = rawTo !== null ? Number(rawTo) : rawBy !== null ? from + Number(rawBy) : undefined
+                if (textStyleProperty === 'emboss') warnings.add('A text emboss animation is approximated with CSS drop shadows; lighting and bevel depth may differ from Office.')
+                const timing = animationTiming(timeNode, 'Text style')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = `${animationTarget.targetId}:textStyle:${textStyleProperty}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    effect: 'textStyle',
+                    direction: 'in',
+                    textStyleProperty,
+                    textStyleFrom: from,
+                    textStyleTo: to,
+                    textStyleKeyframes,
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (isVisibilityProperty) {
+                // Microsoft defines visible/hidden as the string presets for style.visibility.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
+                const parseVisibility = (raw: string | null): AnimatedVisibility | undefined => {
+                    const value = raw?.trim().toLowerCase()
+                    return value === 'visible' || value === 'hidden' ? value : undefined
+                }
+                const visibilityKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const value = valueNode?.localName === 'strVal' ? parseVisibility(valueNode.getAttribute('val')) : undefined
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: AnimatedVisibility} => Boolean(frame))
+                    : undefined
+                const validVisibilityKeyframes = Boolean(visibilityKeyframes?.length === keyframeNodes.length && visibilityKeyframes.every((frame, index) => index === 0 || frame.offset > visibilityKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseVisibility(rawFrom)
+                const to = rawTo === null ? undefined : parseVisibility(rawTo)
+                const validValues = calculationMode === 'discrete' && (tavList
+                    ? validVisibilityKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
+                if (!validValues) {
+                    warnings.add('A style.visibility animation with unsupported values or interpolation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Visibility')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = `${animationTarget.targetId}:visibility:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    effect: 'visibility',
+                    direction: 'in',
+                    visibilityFrom: from,
+                    visibilityTo: to,
+                    visibilityKeyframes,
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (isGrayscaleProperty) {
+                // Microsoft defines imageData.grayscale as a discrete false/true string property.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa
+                const parseGrayscale = (raw: string | null): boolean | undefined => {
+                    const value = raw?.trim().toLowerCase()
+                    return value === 'true' ? true : value === 'false' ? false : undefined
+                }
+                const grayscaleKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const value = valueNode?.localName === 'strVal' ? parseGrayscale(valueNode.getAttribute('val')) : undefined
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: boolean} => Boolean(frame))
+                    : undefined
+                const validGrayscaleKeyframes = Boolean(grayscaleKeyframes?.length === keyframeNodes.length && grayscaleKeyframes.every((frame, index) => index === 0 || frame.offset > grayscaleKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseGrayscale(rawFrom)
+                const to = rawTo === null ? undefined : parseGrayscale(rawTo)
+                const validValues = calculationMode === 'discrete' && (tavList
+                    ? validGrayscaleKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
+                if (!validValues) {
+                    warnings.add('An imageData.grayscale animation with unsupported values, formulas, or interpolation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Image grayscale')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = `${animationTarget.targetId}:grayscale:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'grayscale',
+                    direction: 'in',
+                    grayscaleFrom: from,
+                    grayscaleTo: to,
+                    grayscaleKeyframes,
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (imageCropProperty) {
+                // MS-OE376 lists all four imageData.crop* attributes as animation values.
+                // Office stores them as ST_Fraction values; this renderer supports visible positive crop fractions.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7e506612-7a40-4d4e-95f4-e1f36173fe14
+                const parseCrop = (raw: string | null): number | undefined => {
+                    const value = raw?.trim()
+                    if (!value) return undefined
+                    const fixed = /^(-?\d+)f$/i.exec(value)
+                    const parsed = fixed ? Number(fixed[1]) / 65_536 : Number(value)
+                    return Number.isFinite(parsed) && parsed >= 0 && parsed < 1 ? parsed : undefined
+                }
+                const cropKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const rawValue = valueNode && ['fltVal', 'strVal', 'intVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
+                        const value = parseCrop(rawValue)
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: number} => Boolean(frame))
+                    : undefined
+                const validCropKeyframes = Boolean(cropKeyframes?.length === keyframeNodes.length && cropKeyframes.every((frame, index) => index === 0 || frame.offset > cropKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseCrop(rawFrom)
+                const to = rawTo === null ? undefined : parseCrop(rawTo)
+                const oppositeProperty = imageCropProperty === 'left' ? 'right'
+                    : imageCropProperty === 'right' ? 'left'
+                    : imageCropProperty === 'top' ? 'bottom' : 'top'
+                const oppositeCrop = element.imageCrop?.[oppositeProperty] || 0
+                const cropValues = cropKeyframes?.map(frame => frame.value)
+                    || [from ?? element.imageCrop?.[imageCropProperty] ?? 0, ...(to === undefined ? [] : [to])]
+                const fitsStaticOppositeCrop = cropValues.every(value => value + oppositeCrop < 1)
+                const validValues = tavList
+                    ? ['lin', 'discrete'].includes(calculationMode) && validCropKeyframes && rawFrom === null && rawTo === null && rawBy === null && fitsStaticOppositeCrop
+                    : calculationMode === 'lin' && to !== undefined && rawBy === null && (rawFrom === null || from !== undefined) && fitsStaticOppositeCrop
+                if (!validValues) {
+                    warnings.add('An imageData.crop animation with unsupported values, formulas, or interpolation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Image crop')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = `${animationTarget.targetId}:imageCrop:${imageCropProperty}:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'imageCrop',
+                    direction: 'in',
+                    imageCropProperty,
+                    imageCropFrom: from,
+                    imageCropTo: to,
+                    imageCropKeyframes: cropKeyframes,
+                    imageCropKeyframeMode: calculationMode as 'lin' | 'discrete',
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (imageToneProperty) {
+                // MS-OE376 lists gain, blacklevel (spelled blackleve there), and gamma as imageData animation attributes.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa
+                // Office uses ST_Fraction for these attributes and bounds blacklevel to [-0.5, 0.5].
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7e506612-7a40-4d4e-95f4-e1f36173fe14
+                const parseToneValue = (raw: string | null): number | undefined => {
+                    const value = raw?.trim()
+                    if (!value) return undefined
+                    const fixed = /^(-?\d+)f$/i.exec(value)
+                    const parsed = fixed ? Number(fixed[1]) / 65_536 : Number(value)
+                    if (!Number.isFinite(parsed)) return undefined
+                    if (imageToneProperty === 'blacklevel') return parsed >= -0.5 && parsed <= 0.5 ? parsed : undefined
+                    if (imageToneProperty === 'gamma') return parsed > 0 && parsed <= 32_767 ? parsed : undefined
+                    return parsed >= -32_768 && parsed <= 32_767 ? parsed : undefined
+                }
+                const toneKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const rawValue = valueNode && ['fltVal', 'strVal', 'intVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
+                        const value = parseToneValue(rawValue)
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: number} => Boolean(frame))
+                    : undefined
+                const validToneKeyframes = Boolean(toneKeyframes?.length === keyframeNodes.length && toneKeyframes.every((frame, index) => index === 0 || frame.offset > toneKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseToneValue(rawFrom)
+                const to = rawTo === null ? undefined : parseToneValue(rawTo)
+                const validValues = tavList
+                    ? ['lin', 'discrete'].includes(calculationMode) && validToneKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : calculationMode === 'lin' && to !== undefined && rawBy === null && (rawFrom === null || from !== undefined)
+                if (!validValues) {
+                    warnings.add(`An ${property} animation with unsupported values, formulas, or interpolation was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Image tone')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = `${animationTarget.targetId}:imageTone:${imageToneProperty}:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'imageTone',
+                    direction: 'in',
+                    imageToneProperty,
+                    imageToneFrom: from,
+                    imageToneTo: to,
+                    imageToneKeyframes: toneKeyframes,
+                    imageToneKeyframeMode: calculationMode as 'lin' | 'discrete',
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            // The Open XML SDK lists stroke.weight as an animation property; VML defines unitless stroke widths in EMU.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.attributename?view=openxml-3.0.1
+            // https://learn.microsoft.com/en-us/windows/win32/vml/msdn-online-vml-strokeweight-attribute
+            if (property === 'stroke.weight') {
+                const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
+                const strokeWidthKeyframes = hasFormulaKeyframes ? parsedKeyframes : keyframes
+                const validStrokeWidthKeyframes = Boolean(validKeyframeTrack && strokeWidthKeyframes?.every(frame => frame.value <= MAX_ANIMATED_STROKE_WIDTH_EMU))
+                const validValues = tavList
+                    ? validStrokeWidthKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || calculationMode === 'lin')
+                    : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
+                const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? element.strokeWidth : Number(rawFrom))
+                const to = parsedKeyframes?.at(-1)?.value ?? (rawTo !== null ? Number(rawTo) : rawBy !== null ? from + Number(rawBy) : undefined)
+                if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from > MAX_ANIMATED_STROKE_WIDTH_EMU || to < 0 || to > MAX_ANIMATED_STROKE_WIDTH_EMU) {
+                    warnings.add(hasFormulaKeyframes
+                        ? 'A stroke.weight formula animation with unsupported interpolation or numeric keyframes was skipped.'
+                        : 'A stroke.weight animation with missing or out-of-range numeric values was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Stroke weight')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const durationMs = animationDurationMs(timeNode, timing)
+                const strokeWidthFormulaSamples = hasFormulaKeyframes && parsedKeyframes
+                    ? sampleNumericAnimationFormula(parsedKeyframes, durationMs, 'stroke.weight', element, slideWidth, slideHeight)
+                    : undefined
+                if (hasFormulaKeyframes && !strokeWidthFormulaSamples) {
+                    warnings.add('A stroke.weight formula used an unsupported variable or produced an out-of-range value; animation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                actions.set(`${animationTarget.targetId}:strokeWidth`, {
+                    targetId: animationTarget.targetId,
+                    effect: 'strokeWidth',
+                    direction: 'in',
+                    strokeWidthFrom: from,
+                    strokeWidthTo: to,
+                    strokeWidthKeyframes: keyframes,
+                    strokeWidthKeyframeMode: tavList ? (calculationMode as NonNullable<PptxAnimation['strokeWidthKeyframeMode']>) : undefined,
+                    strokeWidthFormulaSamples,
+                    durationMs,
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (!['style.fontSize', 'style.fontWeight'].includes(property || '')) {
+                const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
+                const formulaProperty = ['style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(property || '')
+                const validOpacityKeyframes = formulaProperty && hasFormulaKeyframes
+                    ? Boolean(validKeyframeTrack && parsedKeyframes?.every(frame => frame.value <= 1))
+                    : Boolean(validKeyframes && keyframes?.every(frame => frame.value <= 1))
+                const validValues = tavList
+                    ? validOpacityKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || formulaProperty && calculationMode === 'lin')
+                    : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
+                const from = (formulaProperty ? parsedKeyframes?.[0]?.value : keyframes?.[0]?.value) ?? (rawFrom === null ? 0 : Number(rawFrom))
+                const to = (formulaProperty ? parsedKeyframes?.at(-1)?.value : keyframes?.at(-1)?.value) ?? (rawTo !== null ? Number(rawTo) : rawBy !== null ? from + Number(rawBy) : undefined)
                 if (!validValues || (!tavList && (to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from > 1 || to < 0 || to > 1))) {
-                    warnings.add('A generic opacity animation with missing or out-of-range values was skipped.')
+                    warnings.add(hasFormulaKeyframes
+                        ? 'A generic opacity formula animation with an unsupported property, interpolation, or numeric keyframe was skipped.'
+                        : 'A generic opacity animation with missing or out-of-range values was skipped.')
                     handledTextAnimations.add(animation)
                     continue
                 }
@@ -3976,6 +4373,79 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const behavior = child(set, 'cBhvr')
             const animationTarget = target(behavior || set)
             const element = elements.find(item => item.id === animationTarget.targetId)
+            // Microsoft defines p:set value handling in `set` and the accepted text-style presets in `to`.
+            // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7d6aef67-5dbc-456c-bcf5-f08011bbf5bf
+            // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
+            if (attribute === 'style.fontStyle' || attribute === 'style.fontFamily' || attribute === 'style.textDecorationUnderline' || attribute === 'style.textDecorationLineThrough' || attribute === 'style.textTransform' || attribute === 'style.textEffectOutline' || attribute === 'style.textShadow' || attribute === 'style.textEffectEmboss') {
+                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                    warnings.add(`A ${attribute} p:set animation with an unsupported target was skipped.`)
+                    continue
+                }
+                const property: TextStyleAnimationProperty = attribute === 'style.fontStyle' ? 'fontStyle' : attribute === 'style.fontFamily' ? 'fontFamily' : attribute === 'style.textDecorationUnderline' ? 'underline' : attribute === 'style.textDecorationLineThrough' ? 'lineThrough' : attribute === 'style.textTransform' ? 'textTransform' : attribute === 'style.textEffectOutline' ? 'outline' : attribute === 'style.textShadow' ? 'textShadow' : 'emboss'
+                const textStyleTo = parseTextStyleValue(property, child(child(set, 'to'), 'strVal')?.getAttribute('val') ?? null)
+                if (textStyleTo === undefined) {
+                    warnings.add(`A ${attribute} p:set animation with an unsupported value was skipped.`)
+                    continue
+                }
+                if (property === 'outline' && (animationTarget.paragraphRange || animationTarget.characterRange || textStyleTo && !hasCompleteTextOutline(element))) {
+                    warnings.add('A text outline p:set without complete static outlines or with a text range was skipped.')
+                    continue
+                }
+                if (property === 'textShadow' && (animationTarget.paragraphRange || animationTarget.characterRange || !hasCompleteTextShadow(element))) {
+                    warnings.add('A text shadow p:set without complete static shadows or with a text range was skipped.')
+                    continue
+                }
+                if (property === 'emboss') warnings.add('A text emboss animation is approximated with CSS drop shadows; lighting and bevel depth may differ from Office.')
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set text style')
+                if (!timing) continue
+                const key = `${animationTarget.targetId}:textStyle:set:${property}:${timeNode?.getAttribute('id') || actions.size}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    effect: 'textStyle',
+                    direction: 'in',
+                    textStyleProperty: property,
+                    textStyleTo,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
+            if (attribute === 'style.fontWeight') {
+                // MS-OE376 specifies the p:set string presets none, normal, and bold for style.fontWeight.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
+                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                    warnings.add('A style.fontWeight p:set animation with an unsupported target was skipped.')
+                    continue
+                }
+                const fontWeightValue = value?.trim().toLowerCase()
+                if (!['none', 'normal', 'bold'].includes(fontWeightValue || '')) {
+                    warnings.add('A style.fontWeight p:set animation with an unsupported value was skipped.')
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set font weight')
+                if (!timing) continue
+                const fontWeight = fontWeightValue === 'bold' ? 700 : 400
+                const key = `${animationTarget.targetId}:fontWeight:set:${timeNode?.getAttribute('id') || actions.size}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    effect: 'fontWeight',
+                    direction: 'in',
+                    fontWeightFrom: fontWeight,
+                    fontWeightTo: fontWeight,
+                    fontWeightReset: fontWeightValue === 'none',
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
             // p:set holds one fixed style.fontSize factor; Microsoft's animation example uses 1.5 for 150%.
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.setbehavior?view=openxml-3.0.1
             // https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-animation
