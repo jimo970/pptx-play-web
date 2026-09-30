@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import type { PptxDocument, PptxSlide, PptxTransitionPlayback, PptxTriggerPlayback } from '~/utils/pptx'
+import type { PptxDocument, PptxHyperlink, PptxSlide, PptxTransitionPlayback, PptxTriggerPlayback } from '~/utils/pptx'
 import { parsePptxInWorker, stopPptxParserWorker } from '~/utils/pptx-parser-client'
 import { presenterChannelName, type PresenterMessage } from '~/utils/presenter-channel'
 import { useSlideTransition } from '~/composables/useSlideTransition'
 
 const fileInput = ref<HTMLInputElement | null>(null)
+let fileLoadGeneration = 0
 const deck = shallowRef<PptxDocument | null>(null)
+const deckGeneration = ref(0)
 const currentIndex = ref(0)
 const animationStep = ref(0)
 const errorMessage = ref('')
@@ -333,6 +335,7 @@ function openPicker() {
 }
 
 function clearDocument() {
+  deckGeneration.value++
   presenterView.value = false
   sorterView.value = false
   draggedSlideIndex.value = null
@@ -362,22 +365,32 @@ function clearDocument() {
 
 async function loadFile(file?: File) {
   if (!file) return
+  const generation = ++fileLoadGeneration
   errorMessage.value = ''
+  if (isLoading.value) stopPptxParserWorker()
   if (!file.name.toLowerCase().endsWith('.pptx')) {
     errorMessage.value = 'Please choose a .pptx file. Legacy .ppt files are not supported.'
+    isLoading.value = false
+    if (fileInput.value) fileInput.value.value = ''
     return
   }
   isLoading.value = true
   try {
     const nextDocument = await parsePptxInWorker(file)
+    if (generation !== fileLoadGeneration) {
+      nextDocument.objectUrls.forEach(URL.revokeObjectURL)
+      return
+    }
     clearDocument()
     deck.value = nextDocument
     currentIndex.value = 0
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'The presentation could not be opened.'
+    if (generation === fileLoadGeneration) errorMessage.value = error instanceof Error ? error.message : 'The presentation could not be opened.'
   } finally {
-    isLoading.value = false
-    if (fileInput.value) fileInput.value.value = ''
+    if (generation === fileLoadGeneration) {
+      isLoading.value = false
+      if (fileInput.value) fileInput.value.value = ''
+    }
   }
 }
 
@@ -601,7 +614,7 @@ function onPointerMove(event: PointerEvent) {
   setZoom(pinchStartZoom * Math.hypot(second!.x - first!.x, second!.y - first!.y) / pinchStartDistance)
 }
 
-function onPointerUp(event: PointerEvent) {
+function onPointerUp(event: PointerEvent, allowSwipe = true) {
   if (event.pointerType !== 'touch') return
   touchPoints.delete(event.pointerId)
   if (wasPinching) {
@@ -614,6 +627,10 @@ function onPointerUp(event: PointerEvent) {
     }
     return
   }
+  if (!allowSwipe) {
+    pointerStartX.value = null
+    return
+  }
   if (pointerStartX.value === null) return
   const distance = event.clientX - pointerStartX.value
   pointerStartX.value = null
@@ -622,6 +639,10 @@ function onPointerUp(event: PointerEvent) {
   if (distance < 0) nextSlide()
   else previousSlide()
   window.setTimeout(() => { suppressClick.value = false }, 400)
+}
+
+function onPointerCancel(event: PointerEvent) {
+  onPointerUp(event, false)
 }
 
 function onWheel(event: WheelEvent) {
@@ -763,6 +784,7 @@ onMounted(() => {
   void nextTick(updateThumbnailWindow)
 })
 onBeforeUnmount(() => {
+  fileLoadGeneration++
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', scheduleThumbnailUpdate)
   if (thumbnailFrame) cancelAnimationFrame(thumbnailFrame)

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -808,10 +808,22 @@ try {
   await call('Page.enable')
   await call('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
     const NativeWorker = globalThis.Worker
+    globalThis.__decklineDelayNextWorkerPost = false
+    globalThis.__decklineWorkerDelayMs = 0
     globalThis.Worker = class extends NativeWorker {
       constructor(...args) {
         super(...args)
         globalThis.__decklineWorkerCreated = true
+      }
+      postMessage(message, transfer) {
+        const send = () => transfer === undefined ? super.postMessage(message) : super.postMessage(message, transfer)
+        if (globalThis.__decklineDelayNextWorkerPost) {
+          globalThis.__decklineDelayNextWorkerPost = false
+          globalThis.__decklineWorkerPostDelayed = true
+          setTimeout(() => { try { send() } catch {} }, globalThis.__decklineWorkerDelayMs)
+          return
+        }
+        send()
       }
     }
     const nativeOpen = globalThis.open.bind(globalThis)
@@ -831,14 +843,77 @@ try {
     await delay(100)
   }
   assert(inputObjectId, 'PPTX file input was not found.')
+  await evaluate(`new Promise((resolve, reject) => {
+    const deadline = performance.now() + 5000
+    const check = () => {
+      if (document.querySelector('#__nuxt')?.__vue_app__) resolve(true)
+      else if (performance.now() >= deadline) reject(new Error('The Nuxt app did not hydrate before file input testing.'))
+      else requestAnimationFrame(check)
+    }
+    check()
+  })`)
+  const uploadPath = async path => {
+    const input = await call('Runtime.evaluate', { expression: `document.querySelector('input[type=file]')` })
+    await call('DOM.setFileInputFiles', { objectId: input.result.objectId, files: [path] })
+    return evaluate(`(() => { const input = document.querySelector('input[type=file]'); const name = input.files?.[0]?.name; if (name) input.dispatchEvent(new Event('change', { bubbles: true })); return name })()`)
+  }
+  const waitForError = async expected => {
+    let lastError
+    let lastState
+    for (let attempt = 0; attempt < 50; attempt++) {
+      lastError = await evaluate(`document.querySelector('.error-card')?.textContent?.replace(/\\s+/g, ' ').trim()`)
+      if (lastError?.includes(expected)) return lastError
+      lastState = await evaluate(`({ file: document.querySelector('input[type=file]')?.files?.[0]?.name, body: document.body.innerText.replace(/\\s+/g, ' ').slice(-240), loading: Boolean(document.querySelector('.loading-overlay')) })`)
+      await delay(50)
+    }
+    throw new Error(`The upload error did not contain "${expected}". Last message: ${lastError || '(none)'}; state: ${JSON.stringify(lastState)}`)
+  }
+  if (!grayscaleOnly && !strokeWidthOnly && !themeBackgroundOnly) {
+    const corruptArchivePath = join(runtimeDir, 'damaged.pptx')
+    await writeFile(corruptArchivePath, Buffer.from('not a zip archive'))
+    await uploadPath(corruptArchivePath)
+    assert((await waitForError('appears damaged or incomplete')).includes('Couldn’t open this presentation'), 'A damaged ZIP must display a specific upload error.')
+    const encryptedPresentationPath = join(runtimeDir, 'encrypted.pptx')
+    await writeFile(encryptedPresentationPath, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0, 0, 0, 0]))
+    await uploadPath(encryptedPresentationPath)
+    assert((await waitForError('encrypted or uses the legacy .ppt format')).includes('Couldn’t open this presentation'), 'An encrypted or legacy presentation must display a specific upload error.')
+    const oversizedArchivePath = join(runtimeDir, 'oversized-archive.pptx')
+    const oversizedArchive = new JSZip()
+    oversizedArchive.file('placeholder.bin', 'x')
+    const oversizedArchiveBytes = Buffer.from(await oversizedArchive.generateAsync({ type: 'uint8array', compression: 'STORE' }))
+    const centralDirectoryOffset = oversizedArchiveBytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]))
+    assert(centralDirectoryOffset >= 0, 'The expanded-size archive fixture has no central directory.')
+    oversizedArchiveBytes.writeUInt32LE(251 * 1024 * 1024, centralDirectoryOffset + 24)
+    await writeFile(oversizedArchivePath, oversizedArchiveBytes)
+    await uploadPath(oversizedArchivePath)
+    assert((await waitForError('expands beyond the 250 MB browser safety limit')).includes('Couldn’t open this presentation'), 'A ZIP with an excessive declared expanded size must display the safety-limit error.')
+  }
+  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !themeBackgroundOnly) {
+    const latestFilePath = join(runtimeDir, 'latest-wins.pptx')
+    await copyFile(fixturePath, latestFilePath)
+    await evaluate(`globalThis.__decklineWorkerDelayMs = 700; globalThis.__decklineDelayNextWorkerPost = true`)
+    await uploadPath(fixturePath)
+    assert(await evaluate('globalThis.__decklineWorkerPostDelayed === true'), 'The stale-file race fixture did not delay the first parser request.')
+    await uploadPath(latestFilePath)
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await evaluate(`document.querySelector('.deck-title')?.textContent === 'latest-wins.pptx' && !document.querySelector('.loading-overlay')`)) break
+      await delay(50)
+    }
+    await delay(850)
+    assert(await evaluate(`document.querySelector('.deck-title')?.textContent === 'latest-wins.pptx' && !document.querySelector('.error-card')`), 'A slower stale parse must not replace the most recently selected presentation.')
+  }
   let upload
   for (let attempt = 0; attempt < 10; attempt++) {
     const currentInput = await call('Runtime.evaluate', { expression: `document.querySelector('input[type=file]')` })
     inputObjectId = currentInput.result.objectId
     await call('DOM.setFileInputFiles', { objectId: inputObjectId, files: [inputPptx || fixturePath] })
     upload = await evaluate(`(() => { const input = document.querySelector('input[type=file]'); const result = { count: input.files?.length, name: input.files?.[0]?.name }; input.dispatchEvent(new Event('change', { bubbles: true })); return result })()`)
-    await delay(200)
-    if (await evaluate(`document.querySelector('.deck-title')?.textContent !== 'No presentation open' || Boolean(document.querySelector('.error-card'))`)) break
+    for (let waitAttempt = 0; waitAttempt < 100; waitAttempt++) {
+      const ready = await evaluate(`(() => (document.querySelector('.deck-title')?.textContent === ${JSON.stringify(upload.name)} && !document.querySelector('.loading-overlay')) || Boolean(document.querySelector('.error-card')))()`)
+      if (ready) break
+      await delay(50)
+    }
+    if (await evaluate(`document.querySelector('.deck-title')?.textContent === ${JSON.stringify(upload.name)} || Boolean(document.querySelector('.error-card'))`)) break
   }
 
   let initial
