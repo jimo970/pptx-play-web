@@ -835,8 +835,9 @@ function elementStyle(element: PptxElement): CSSProperties {
   const fillOpacity = animationOpacity(element, 'fill.opacity')
   const animatedStroke = animationColor(element, 'stroke.color')
   const stroke = applyColorOpacity(animatedStroke || element.stroke, animationOpacity(element, 'stroke.opacity'))
+  const strokeWidth = animationStrokeWidth(element)
   const customGeometry = element.geometry === 'custom' && Boolean(element.customPaths?.length)
-  const showStroke = element.kind === 'shape' && !customGeometry && element.strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient')
+  const showStroke = element.kind === 'shape' && !customGeometry && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient')
   const transform = matrix
     ? [translations, `matrix(${matrix.slice(0, 4).join(',')},${matrix[4] * scale.value},${matrix[5] * scale.value})${hasScaleAnimation || hasRotationAnimation ? ` translate(${element.width * scale.value / 2}px,${element.height * scale.value / 2}px)${hasRotationAnimation ? ` rotate(${rotationDelta}deg)` : ''}${hasScaleAnimation ? ` scale(${scaleX},${scaleY})` : ''} translate(${-element.width * scale.value / 2}px,${-element.height * scale.value / 2}px)` : ''}`].filter(Boolean).join(' ')
     : [translations, rotation ? `rotate(${rotation}deg)` : '', flips, hasScaleAnimation ? `scale(${scaleX},${scaleY})` : ''].filter(Boolean).join(' ')
@@ -850,7 +851,7 @@ function elementStyle(element: PptxElement): CSSProperties {
     transformOrigin: matrix ? '0 0' : undefined,
     background: element.kind === 'shape' && !customGeometry ? applyColorOpacity(fill, fillOpacity) : undefined,
     borderColor: showStroke ? stroke : undefined,
-    borderWidth: showStroke ? `${element.strokeWidth * scale.value}px` : undefined,
+    borderWidth: showStroke ? `${strokeWidth * scale.value}px` : undefined,
     borderStyle: showStroke ? cssLineStyle(element.strokeDash) : undefined,
     boxShadow: shadow && !customGeometry ? `${Math.cos(angle) * shadow.distance * scale.value}px ${Math.sin(angle) * shadow.distance * scale.value}px ${shadow.blur * scale.value}px ${applyColorOpacity(shadowColor || shadow.color, animationOpacity(element, 'shadow.opacity'))}` : undefined,
   }
@@ -865,9 +866,10 @@ function customGeometryFill(element: PptxElement, path: NonNullable<PptxElement[
 
 function customGeometryStroke(element: PptxElement, path: NonNullable<PptxElement['customPaths']>[number]): string {
   const animatedStroke = animationColor(element, 'stroke.color')
-  if (path.stroke && element.strokeWidth > 0 && !animatedStroke && /^(?:linear|radial)-gradient\(/i.test(element.stroke)) return `url(#${customGradientId(element, 'stroke')})`
+  const strokeWidth = animationStrokeWidth(element)
+  if (path.stroke && strokeWidth > 0 && !animatedStroke && /^(?:linear|radial)-gradient\(/i.test(element.stroke)) return `url(#${customGradientId(element, 'stroke')})`
   const stroke = applyColorOpacity(animatedStroke || element.stroke, animationOpacity(element, 'stroke.opacity'))
-  return path.stroke && element.strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient') ? stroke : 'none'
+  return path.stroke && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient') ? stroke : 'none'
 }
 
 function customGradientId(element: PptxElement, kind: 'fill' | 'stroke'): string {
@@ -926,7 +928,7 @@ function customGeometryGradients(element: PptxElement): CustomSvgGradient[] {
 }
 
 function customGeometryStrokeWidth(element: PptxElement): string {
-  return `${element.strokeWidth * scale.value}px`
+  return `${animationStrokeWidth(element) * scale.value}px`
 }
 
 function customGeometryStrokeStyle(element: PptxElement): CSSProperties {
@@ -939,7 +941,8 @@ function customGeometryStrokeStyle(element: PptxElement): CSSProperties {
     lgDashDotDot: [6, 2, 1, 2, 1, 2], sysDashDotDot: [3, 2, 1, 2, 1, 2],
   }
   const pattern = Array.isArray(element.strokeDash) ? element.strokeDash : patterns[element.strokeDash || '']
-  const width = Array.isArray(element.strokeDash) ? element.strokeWidth * scale.value : Math.max(element.strokeWidth * scale.value, 1)
+  const strokeWidth = animationStrokeWidth(element) * scale.value
+  const width = Array.isArray(element.strokeDash) ? strokeWidth : Math.max(strokeWidth, 1)
   return {
     ...(pattern ? { strokeDasharray: pattern.map(length => `${length * width}px`).join(' ') } : {}),
     strokeLinecap: element.strokeDash === 'dot' || element.strokeDash === 'sysDot' ? 'round' : element.strokeCap || 'butt',
@@ -1316,11 +1319,32 @@ function animationOpacity(
       continue
     }
     if (progress === null || progress < 0 || action.opacityFrom === undefined || action.opacityTo === undefined) continue
+    const formulaSamples = action.opacityFormulaSamples
     const keyframes = action.opacityKeyframes
-    if (keyframes?.length) opacity = animationKeyframeValue(keyframes, action.opacityKeyframeMode, progress)
+    if (formulaSamples?.length) opacity = animationKeyframeValue(formulaSamples, 'lin', progress)
+    else if (keyframes?.length) opacity = animationKeyframeValue(keyframes, action.opacityKeyframeMode, progress)
     else opacity = action.opacityFrom + (action.opacityTo - action.opacityFrom) * progress
   }
   return opacity
+}
+
+function animationStrokeWidth(element: PptxElement): number {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'strokeWidth') || []
+  let strokeWidth = element.strokeWidth
+  for (const action of actions) {
+    const progress = animationProgress(action)
+    if (progress === -2) {
+      strokeWidth = element.strokeWidth
+      continue
+    }
+    if (progress === null || progress < 0 || action.strokeWidthFrom === undefined || action.strokeWidthTo === undefined) continue
+    strokeWidth = action.strokeWidthFormulaSamples?.length
+      ? animationKeyframeValue(action.strokeWidthFormulaSamples, 'lin', progress)
+      : action.strokeWidthKeyframes?.length
+        ? animationKeyframeValue(action.strokeWidthKeyframes, action.strokeWidthKeyframeMode, progress)
+        : action.strokeWidthFrom + (action.strokeWidthTo - action.strokeWidthFrom) * progress
+  }
+  return strokeWidth
 }
 
 function animationColor(element: PptxElement, property: NonNullable<PptxAnimation['colorProperty']>, paragraphIndex?: number, characterStart?: number, characterEnd?: number): string | undefined {
@@ -2470,7 +2494,7 @@ function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
             <path :d="lineEndPath(element.lineTailEnd.type)" :fill="element.lineTailEnd.type === 'arrow' ? 'none' : 'currentColor'" :stroke="element.lineTailEnd.type === 'arrow' ? 'currentColor' : 'none'" />
           </marker>
         </defs>
-        <line x1="0" y1="0" :x2="element.width > 0 ? 1000 : 0" :y2="element.height > 0 ? 1000 : 0" :stroke="lineStrokeColor(element)" :stroke-width="Math.max(element.strokeWidth * scale, 1)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
+        <line x1="0" y1="0" :x2="element.width > 0 ? 1000 : 0" :y2="element.height > 0 ? 1000 : 0" :stroke="lineStrokeColor(element)" :stroke-width="Math.max(animationStrokeWidth(element) * scale, 1)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
       </svg>
     </div>
     <span v-if="backgroundTileWarning" class="media-warning" role="status">{{ backgroundTileWarning }}</span>

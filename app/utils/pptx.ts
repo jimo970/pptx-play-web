@@ -3,6 +3,9 @@ import {inverseTimingProgress, type TimingCurve} from './animation-timing'
 import {isSupportedChartNumberFormat} from './chart-number-format'
 import {hslToRgb} from './color'
 
+// ponytail: cap animated strokes at about 10,500 CSS px before stage scaling; raise only for real decks that need wider strokes.
+const MAX_ANIMATED_STROKE_WIDTH_EMU = 100_000_000
+
 export interface PptxRun {
     text: string
     fontFamily?: string
@@ -3444,7 +3447,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                               const rawValue = valueNode && ['fltVal', 'strVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
                               const value = rawValue?.trim() ? Number(rawValue) : Number.NaN
                               const formula = node.hasAttribute('fmla') ? node.getAttribute('fmla')?.trim() : undefined
-                              return offset !== undefined && offset >= 0 && offset <= 1 && Number.isFinite(value) && value >= 0 && value <= 1000
+                              return offset !== undefined && offset >= 0 && offset <= 1 && Number.isFinite(value) && value >= 0 && value <= (property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : 1000)
                                   && (formula === undefined || Boolean(formula && formula.length <= 16_384))
                                   ? {offset, value, formula}
                                   : undefined
@@ -4473,6 +4476,34 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     direction: 'in',
                     fontSizeFrom: fontSize,
                     fontSizeTo: fontSize,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
+            if (attribute === 'stroke.weight') {
+                if (!animationTarget.targetId || !element || !['shape', 'line'].includes(element.kind) || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                    warnings.add('A stroke.weight p:set animation with an unsupported target was skipped.')
+                    continue
+                }
+                const to = child(set, 'to')
+                const rawValue = child(to, 'fltVal')?.getAttribute('val') ?? child(to, 'intVal')?.getAttribute('val') ?? child(to, 'strVal')?.getAttribute('val')
+                const strokeWidth = rawValue?.trim() ? Number(rawValue) : Number.NaN
+                if (!Number.isFinite(strokeWidth) || strokeWidth < 0 || strokeWidth > MAX_ANIMATED_STROKE_WIDTH_EMU) {
+                    warnings.add('A stroke.weight p:set animation with a missing or out-of-range value was skipped.')
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set stroke weight')
+                if (!timing) continue
+                const key = `${animationTarget.targetId}:strokeWidth:set:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'strokeWidth',
+                    direction: 'in',
+                    strokeWidthFrom: strokeWidth,
+                    strokeWidthTo: strokeWidth,
                     durationMs: animationDurationMs(timeNode, timing, 1),
                     delayMs: delayMs + startDelay(timeNode),
                     ...timing
