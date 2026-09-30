@@ -409,6 +409,33 @@ function goToSlide(index: number) {
   animationStep.value = 0
 }
 
+function activateHyperlink(hyperlink: PptxHyperlink) {
+  if (!deck.value) return
+  if (hyperlink.kind === 'external') {
+    try {
+      const url = new URL(hyperlink.url)
+      if (['http:', 'https:', 'mailto:'].includes(url.protocol) && !url.username && !url.password) {
+        window.open(url.href, '_blank', 'noopener,noreferrer')
+      }
+    } catch {
+      // Invalid URLs are ignored even if a model is constructed outside the PPTX parser.
+    }
+    return
+  }
+
+  let targetIndex: number
+  if (hyperlink.kind === 'slide') {
+    targetIndex = deck.value.slides.findIndex(slide => slide.packagePath === hyperlink.targetPath)
+  } else {
+    targetIndex = hyperlink.jump === 'firstslide' ? 0
+      : hyperlink.jump === 'lastslide' ? deck.value.slides.length - 1
+        : hyperlink.jump === 'nextslide' ? currentIndex.value + 1
+          : hyperlink.jump === 'previousslide' ? currentIndex.value - 1
+            : (hyperlink.slideNumber || 0) - 1
+  }
+  if (targetIndex >= 0 && targetIndex < deck.value.slides.length) goToSlide(targetIndex)
+}
+
 function updateThumbnailWindow() {
   const list = thumbnailList.value
   const total = thumbnailCount.value
@@ -660,7 +687,23 @@ function openContextMenu(event: MouseEvent) {
   }
 }
 
-function onStageClick() {
+function activateHyperlinkFromElement(target: HTMLElement) {
+  try {
+    activateHyperlink(JSON.parse(target.dataset.pptxHyperlink || '') as PptxHyperlink)
+  } catch {
+    // Invalid link metadata is ignored without advancing the presentation.
+  }
+}
+
+function onStageClick(event: MouseEvent) {
+  const eventTarget = event.target instanceof Element ? event.target : undefined
+  const hyperlinkTarget = eventTarget?.closest<HTMLElement>('[data-pptx-hyperlink]')
+  if (hyperlinkTarget && !eventTarget?.closest('audio, video, button')) {
+    event.preventDefault()
+    event.stopPropagation()
+    activateHyperlinkFromElement(hyperlinkTarget)
+    return
+  }
   if (contextMenu.value) {
     contextMenu.value = null
     return
@@ -671,6 +714,16 @@ function onStageClick() {
   }
   if (screenOverlay.value) screenOverlay.value = null
   else if (deck.value && currentSlide.value && (animationStep.value < animationCount.value || currentSlide.value.advanceOnClick !== false)) nextSlide()
+}
+
+function onStageHyperlinkKeyActivate(event: KeyboardEvent) {
+  const hyperlinkTarget = event.target instanceof Element
+    ? event.target.closest<HTMLElement>('.slide-element[role="link"][data-pptx-hyperlink]')
+    : null
+  if (!hyperlinkTarget) return
+  event.preventDefault()
+  event.stopPropagation()
+  activateHyperlinkFromElement(hyperlinkTarget)
 }
 
 function scheduleSlideAdvance() {
@@ -796,17 +849,18 @@ onBeforeUnmount(() => {
           @pointerdown="onPointerDown"
           @pointermove="onPointerMove"
           @pointerup="onPointerUp"
-          @pointercancel="onPointerUp"
+          @pointercancel="onPointerCancel"
           @wheel.prevent="onWheel"
           @contextmenu.prevent="openContextMenu"
           @click="onStageClick"
+          @keydown.enter="onStageHyperlinkKeyActivate"
         >
           <div class="stage-grid" />
           <div ref="transitionUnderlay" class="slide-transition-underlay" :class="{ 'is-pulling': currentSlide?.transition?.effect === 'pull', 'is-splitting-in': currentSlide?.transition?.effect === 'split' && currentSlide.transition.direction === 'in' }" aria-hidden="true" />
           <div ref="continuingMediaHost" class="continuing-media-host" aria-hidden="true" />
           <div v-if="isDragging" class="upload-overlay">DROP YOUR PRESENTATION</div>
             <div v-if="currentSlide && deck" ref="stageSlideHost" class="slide-host" :data-slide-number="currentNumber" :data-transition-effect="currentSlide.transition?.effect" :data-transition-preset="currentSlide.transition?.presetName" :style="{ '--slide-ratio': String(deck.width / deck.height), transform: `scale(${zoom})` }">
-            <SlideStage :key="currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" @trigger-playback="triggerPlayback = $event" />
+            <SlideStage :key="deckGeneration + '-' + currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" @trigger-playback="triggerPlayback = $event" @activate-hyperlink="activateHyperlink" />
             <svg
               class="ink-layer"
               :class="{ 'is-active': activeTool !== 'pointer' }"

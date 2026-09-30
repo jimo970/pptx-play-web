@@ -155,6 +155,7 @@ type PptxLineEnd = {type: 'none' | 'triangle' | 'stealth' | 'diamond' | 'oval' |
 export interface PptxElement {
     id: string
     name: string
+    hyperlink?: PptxHyperlink
     kind: 'shape' | 'picture' | 'video' | 'audio' | 'line' | 'placeholder' | 'table' | 'chart'
     geometry: string
     customPaths?: PptxCustomPath[]
@@ -202,6 +203,7 @@ export interface PptxElement {
 
 export interface PptxSlide {
     id: string
+    packagePath?: string
     name: string
     elements: PptxElement[]
     background: string
@@ -567,6 +569,47 @@ async function loadRelationships(zip: JSZip, path: string): Promise<Map<string, 
                 ]
             })
     )
+}
+
+function parseHyperlink(node: Element | undefined, rels: Map<string, PptxRelationship> | undefined, warnings: Set<string>): PptxHyperlink | undefined {
+    if (!node) return undefined
+    const tooltip = node.getAttribute('tooltip') || undefined
+    const action = (node.getAttribute('action') || '').trim().toLowerCase()
+    const jump = /^ppaction:\/\/hlinkshowjump\?jump=(firstslide|lastslide|nextslide|previousslide|[1-9]\d*)$/.exec(action)?.[1]
+    if (jump) {
+        if (/^\d+$/.test(jump)) return {kind: 'showJump', jump: 'number', slideNumber: Number(jump), tooltip}
+        return {kind: 'showJump', jump: jump as 'firstslide' | 'lastslide' | 'nextslide' | 'previousslide', tooltip}
+    }
+
+    const relationId = namespacedAttr(node, 'id')
+    const relation = relationId ? rels?.get(relationId) : undefined
+    if (action === 'ppaction://hlinksldjump' || (!action && relation?.type.endsWith('/slide'))) {
+        if (relation && !relation.external && relation.type.endsWith('/slide')) return {kind: 'slide', targetPath: relation.target, tooltip}
+        warnings.add('A slide hyperlink with an invalid relationship was ignored.')
+        return undefined
+    }
+    if (action) {
+        warnings.add('An unsupported presentation hyperlink action was ignored.')
+        return undefined
+    }
+    if (!relation) {
+        warnings.add('A hyperlink with a missing relationship was ignored.')
+        return undefined
+    }
+    if (!relation.external || !relation.type.endsWith('/hyperlink')) {
+        warnings.add('A non-external hyperlink relationship was ignored.')
+        return undefined
+    }
+    try {
+        const url = new URL(relation.target)
+        if (['http:', 'https:', 'mailto:'].includes(url.protocol) && !url.username && !url.password) {
+            return {kind: 'external', url: url.href, tooltip}
+        }
+    } catch {
+        // Invalid or relative targets are not navigable URLs.
+    }
+    warnings.add('A hyperlink with an unsafe or unsupported URL was ignored.')
+    return undefined
 }
 
 function validateArchiveSize(zip: JSZip): void {
@@ -1303,25 +1346,33 @@ function parseText(
     if (shapeAutoFit) warnings.add('a:spAutoFit shape resizing uses browser font metrics; PowerPoint may produce different dimensions.')
     if (rawFontScale !== null && parsedFontScale === undefined) warnings.add('An invalid a:normAutofit fontScale was ignored.')
     if (rawLineSpaceReduction !== null && parsedLineSpaceReduction === undefined) warnings.add('An invalid a:normAutofit lnSpcReduction was ignored.')
-    const listParagraphStyles = paragraphDefaultsByLevel(child(txBody, 'lstStyle'), theme, warnings)
+    const listParagraphStyles = paragraphDefaultsByLevel(child(txBody, 'lstStyle'), theme, warnings, rels)
     const paragraphs: PptxParagraph[] = children(txBody, 'p').map(paragraph => {
         const props = child(paragraph, 'pPr')
         const level = props?.hasAttribute('lvl') ? numberAttr(props, 'lvl') : 0
-        const resolved = mergeParagraphDefaults(inheritedParagraphStyles[level], listParagraphStyles[level], parseParagraphDefaults(props, theme, warnings))
+        const resolved = mergeParagraphDefaults(inheritedParagraphStyles[level], listParagraphStyles[level], parseParagraphDefaults(props, theme, warnings, rels))
         const paragraphStyle = mergeTextStyles(inheritedStyle, resolved.text)
+        warnTextDecorationStyleConflict(paragraphStyle, warnings)
         const runs: PptxRun[] = []
         for (const run of children(paragraph)) {
             if (run.localName === 'br') {
                 // DrawingML a:br is a forced line break between runs in one paragraph.
                 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.break
-                runs.push({text: '\n', ...mergeTextStyles(paragraphStyle, textStyle(child(run, 'rPr'), theme, warnings))})
+                const styleNode = child(run, 'rPr')
+                const style = mergeTextStyles(paragraphStyle, textStyle(styleNode, theme, warnings))
+                warnTextDecorationStyleConflict(style, warnings)
+                const hyperlink = parseHyperlink(child(styleNode, 'hlinkClick'), rels, warnings)
+                runs.push({text: '\n', ...style, ...(hyperlink ? {hyperlink} : {})})
                 continue
             }
             if (!['r', 'fld'].includes(run.localName)) continue
             const textNode = child(run, 't')
             if (!textNode) continue
             const style = child(run, 'rPr') || child(run, 'endParaRPr')
-            runs.push({text: textNode.textContent || '', ...mergeTextStyles(paragraphStyle, textStyle(style, theme, warnings))})
+            const runStyle = mergeTextStyles(paragraphStyle, textStyle(style, theme, warnings))
+            warnTextDecorationStyleConflict(runStyle, warnings)
+            const hyperlink = parseHyperlink(child(style, 'hlinkClick'), rels, warnings)
+            runs.push({text: textNode.textContent || '', ...runStyle, ...(hyperlink ? {hyperlink} : {})})
         }
         if (!runs.length && paragraph.textContent?.trim()) runs.push({text: paragraph.textContent.trim(), ...paragraphStyle})
         return {
@@ -1541,6 +1592,7 @@ function parseShape(shape: Element, theme: Record<string, string>, warnings: Set
     return {
         id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
         name: nonVisual?.getAttribute('name') || 'Shape',
+        hyperlink: parseHyperlink(child(nonVisual, 'hlinkClick'), rels, warnings),
         kind: geometry === 'line' ? 'line' : 'shape',
         geometry,
         customPaths,
@@ -1608,6 +1660,7 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
     return {
         id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
         name: nonVisual?.getAttribute('name') || 'Table',
+        hyperlink: parseHyperlink(child(nonVisual, 'hlinkClick'), rels, warnings),
         kind: 'table',
         geometry: 'rect',
         ...transform,
@@ -4707,6 +4760,19 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             })
         }
         if (!slides.length) throw new Error('No readable slides were found in this presentation.')
+        const slidePaths = new Set(slides.map(slide => slide.packagePath))
+        for (const slide of slides) {
+            for (const element of slide.elements) {
+                const hyperlinks = [
+                    element.hyperlink,
+                    ...element.paragraphs.flatMap(paragraph => paragraph.runs.map(run => run.hyperlink)),
+                    ...(element.table?.rows.flatMap(row => row.cells.flatMap(cell => cell.paragraphs.flatMap(paragraph => paragraph.runs.map(run => run.hyperlink)))) || [])
+                ]
+                if (hyperlinks.some(link => link?.kind === 'slide' && !slidePaths.has(link.targetPath))) {
+                    warnings.add('An internal slide hyperlink points to a missing slide and was ignored.')
+                }
+            }
+        }
         return {name: file.name, width, height, slides, warnings: [...warnings], objectUrls: urls}
     } catch (error) {
         urls.forEach(URL.revokeObjectURL)

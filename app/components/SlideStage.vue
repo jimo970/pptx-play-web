@@ -2,9 +2,10 @@
 import { computed, nextTick, reactive, useId, watch, type CSSProperties } from 'vue'
 import { formatChartNumber } from '~/utils/chart-number-format'
 import { hslToRgb } from '~/utils/color'
-import type { PptxAnimation, PptxChart, PptxChartDataLabelPosition, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxParagraph, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx'
+import { getPptxChartStacking } from '~/utils/pptx'
+import type { PptxAnimation, PptxChart, PptxChartDataLabelPosition, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxHyperlink, PptxParagraph, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx'
 import { inverseTimingProgress, timingProgress } from '~/utils/animation-timing'
-import { barnClipPath, dissolveClipPath, gridTransitionClipPath, gridTransitionMaskImage, randomBarClipPath, shapeEffectClipPath, stripsClipPath, wheelClipPath } from '~/utils/transitionMasks'
+import { barnClipPath, clipPathMaskImage, dissolveClipPath, gridTransitionClipPath, gridTransitionMaskImage, randomBarClipPath, shapeEffectClipPath, stripsClipPath, wheelClipPath } from '~/utils/transitionMasks'
 
 const EMU_PER_POINT = 12_700
 const EAST_ASIAN_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u
@@ -364,7 +365,10 @@ const props = withDefaults(defineProps<{
   playbackPreview?: boolean
   triggerPlayback?: PptxTriggerPlayback[]
 }>(), { animationStep: 0, thumbnail: false, playbackPreview: false })
-const emit = defineEmits<{ 'trigger-playback': [playback: PptxTriggerPlayback[]] }>()
+const emit = defineEmits<{
+  'trigger-playback': [playback: PptxTriggerPlayback[]]
+  'activate-hyperlink': [hyperlink: PptxHyperlink]
+}>()
 
 const backgroundImageSize = ref<{ sourceUrl: string; url: string; width: number; height: number; repeatX: number; repeatY: number }>()
 const backgroundTileWarning = ref('')
@@ -1895,7 +1899,23 @@ function runNavigationTriggeredAnimations(triggerEvent: 'onNext' | 'onPrev') {
   startTriggeredAnimations(matching)
 }
 
-function onElementClick(event: Event, elementId: string) {
+function canActivateHyperlink(hyperlink?: PptxHyperlink): hyperlink is PptxHyperlink {
+  return Boolean(hyperlink) && !props.thumbnail && !props.playbackPreview && props.triggerPlayback === undefined
+}
+
+function hyperlinkHref(hyperlink?: PptxHyperlink): string {
+  return hyperlink?.kind === 'external' ? hyperlink.url : '#slide-link'
+}
+
+function onHyperlinkClick(event: Event, hyperlink?: PptxHyperlink) {
+  if (!canActivateHyperlink(hyperlink)) return
+  event.preventDefault()
+  event.stopPropagation()
+  emit('activate-hyperlink', hyperlink)
+}
+
+function onElementClick(event: Event, elementId: string, hyperlink?: PptxHyperlink) {
+  if (canActivateHyperlink(hyperlink)) return
   runTriggeredAnimations(event, elementId, 'onClick')
 }
 
@@ -1911,15 +1931,26 @@ function onElementMouseLeave(event: Event, elementId: string) {
   runTriggeredAnimations(event, elementId, 'onMouseOut')
 }
 
-function onElementKeyActivate(event: Event, elementId: string) {
+function onElementKeyActivate(event: Event, elementId: string, hyperlink?: PptxHyperlink) {
+  if (canActivateHyperlink(hyperlink)) {
+    if (event instanceof KeyboardEvent && event.key === 'Enter') onHyperlinkClick(event, hyperlink)
+    return
+  }
   const sequence = props.slide.triggeredAnimations?.find(item => item.trigger.type === 'shape' && item.trigger.id === elementId)
   runTriggeredAnimations(event, elementId, sequence?.trigger.type === 'shape' ? sequence.trigger.event : 'onClick')
+}
+
+function usesRightToLeftColumns(element: PptxElement): boolean {
+  return element.textColumnsRightToLeft === true
+    && (element.textColumnCount ?? 1) > 1
+    && (!element.textOrientation || element.textOrientation === 'horz')
 }
 
 function textFrameStyle(element: PptxElement): CSSProperties {
   const verticalText = element.textOrientation === 'vert' || element.textOrientation === 'vert270'
   const eastAsianVerticalText = element.textOrientation === 'eaVert'
   const wordArtVerticalText = element.textOrientation === 'wordArtVert'
+  const wordArtVerticalRtlText = element.textOrientation === 'wordArtVertRtl'
   const mongolianVerticalText = element.textOrientation === 'mongolianVert'
   const columnCount = element.textColumnCount ?? 1
   const rect = element.customTextRect
@@ -2219,17 +2250,19 @@ function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
         'shape-line': element.kind === 'line',
         'slide-placeholder': element.kind === 'placeholder',
         'is-animation-trigger': hasTrigger(element.id),
+        'is-hyperlink': canActivateHyperlink(element.hyperlink),
       }"
-      :role="hasTrigger(element.id) ? 'button' : undefined"
-      :tabindex="hasTrigger(element.id) ? 0 : undefined"
-      :aria-label="hasTrigger(element.id) ? `Play animation from ${element.name}` : undefined"
+      :role="canActivateHyperlink(element.hyperlink) ? 'link' : hasTrigger(element.id) ? 'button' : undefined"
+      :tabindex="canActivateHyperlink(element.hyperlink) || hasTrigger(element.id) ? 0 : undefined"
+      :aria-label="element.hyperlink?.tooltip || (hasTrigger(element.id) ? `Play animation from ${element.name}` : undefined)"
+      :data-pptx-hyperlink="canActivateHyperlink(element.hyperlink) ? JSON.stringify(element.hyperlink) : undefined"
       :style="[elementStyle(element), geometryStyle(element.geometry), animationStyle(element)]"
-      :title="element.name"
-      @click="onElementClick($event, element.id)"
+      :title="element.hyperlink?.tooltip || element.name"
+      @click="onElementClick($event, element.id, element.hyperlink)"
       @dblclick="onElementDoubleClick($event, element.id)"
       @mouseenter="onElementMouseEnter($event, element.id)"
       @mouseleave="onElementMouseLeave($event, element.id)"
-      @keydown.enter.space.stop.prevent="onElementKeyActivate($event, element.id)"
+      @keydown.enter.space.stop.prevent="onElementKeyActivate($event, element.id, element.hyperlink)"
     >
       <svg v-if="element.kind === 'shape' && element.geometry === 'custom' && element.customPaths?.length" class="custom-geometry" viewBox="0 0 1000 1000" preserveAspectRatio="none" :style="customGeometryStyle(element)" aria-hidden="true">
         <defs>
@@ -2294,11 +2327,12 @@ function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
           <tr v-for="(row, rowIndex) in element.table.rows" :key="rowIndex" :style="{ height: `${row.height / Math.max(element.table.rows.reduce((sum, item) => sum + item.height, 0), 1) * 100}%` }">
             <template v-for="(cell, cellIndex) in row.cells" :key="cellIndex">
               <td v-if="!cell.hidden" :colspan="cell.colSpan" :rowspan="cell.rowSpan" :data-autofit="cell.textAutoFitDynamic ? 'normal' : undefined" :data-row-index="rowIndex" :data-cell-index="cellIndex" :style="tableCellStyle(cell)">
-                <div class="table-cell-text" :style="tableCellTextStyle(cell)">
-                  <div v-for="(entry, paragraphIndex) in paragraphEntries(cell.paragraphs)" :key="paragraphIndex" class="text-paragraph" :style="paragraphStyle(entry.paragraph, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), cell.textLineSpacingReduction)">
-                    <span v-if="entry.marker" class="paragraph-marker" aria-hidden="true">{{ entry.marker }}</span>
+                <div class="table-cell-text" :style="tableCellTextStyle(cell, row.height)">
+                  <div v-for="(entry, paragraphIndex) in paragraphEntries(cell.paragraphs)" :key="paragraphIndex" class="text-paragraph" :style="paragraphStyle(entry.paragraph, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), cell.textLineSpacingReduction, cell.textColumnsRightToLeft && (cell.textColumnCount ?? 1) > 1 ? 'ltr' : undefined)">
+                    <img v-if="entry.paragraph.bullet?.kind === 'image' && entry.paragraph.bullet.url" class="paragraph-picture-bullet" :src="entry.paragraph.bullet.url" :style="paragraphBulletStyle(entry.paragraph)" alt="" aria-hidden="true">
+                    <span v-else-if="entry.marker" class="paragraph-marker" :style="paragraphBulletStyle(entry.paragraph)" aria-hidden="true">{{ entry.marker }}</span>
                     <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
-                      <span v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)" :key="segmentIndex" class="text-run" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell)), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, segment.start, segment.end), textFontSizeAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell)), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]">{{ segment.text }}</span>
+                      <component v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), paragraphIndex, segment.start, segment.end), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRunAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), segment.script), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]">{{ segment.text }}</component>
                     </template>
                   </div>
                 </div>
@@ -2313,11 +2347,12 @@ function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
           v-for="(entry, index) in paragraphEntries(element.paragraphs)"
           :key="index"
           class="text-paragraph"
-          :style="[paragraphStyle(entry.paragraph, effectiveTextFontScale(element), element.textLineSpacingReduction), paragraphAnimationStyle(element, index)]"
+          :style="[paragraphStyle(entry.paragraph, effectiveTextFontScale(element), element.textLineSpacingReduction, usesRightToLeftColumns(element) ? 'ltr' : undefined), paragraphAnimationStyle(element, index)]"
         >
-          <span v-if="entry.marker" class="paragraph-marker" aria-hidden="true">{{ entry.marker }}</span>
+          <img v-if="entry.paragraph.bullet?.kind === 'image' && entry.paragraph.bullet.url" class="paragraph-picture-bullet" :src="entry.paragraph.bullet.url" :style="paragraphBulletStyle(entry.paragraph)" alt="" aria-hidden="true">
+          <span v-else-if="entry.marker" class="paragraph-marker" :style="paragraphBulletStyle(entry.paragraph)" aria-hidden="true">{{ entry.marker }}</span>
           <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
-            <span v-for="(segment, segmentIndex) in runSegments(run, element, index, runIndex)" :key="segmentIndex" class="text-run" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element)), textColorAnimationStyle(element, index, segment.start, segment.end), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, segment.start, segment.end), textFontSizeAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element)), textTransformAnimationStyle(element, index, segment.start, segment.end)]">{{ segment.text }}</span>
+            <component v-for="(segment, segmentIndex) in runSegments(run, element, index, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element), index, segment.start, segment.end), textColorAnimationStyle(element, index, segment.start, segment.end), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, index, segment.start, segment.end), textRunAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element), segment.script), textTransformAnimationStyle(element, index, segment.start, segment.end)]">{{ segment.text }}</component>
           </template>
         </div>
       </div>
