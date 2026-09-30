@@ -996,8 +996,15 @@ function customGeometryStyle(element: PptxElement): CSSProperties {
 }
 
 function imageStyle(element: PptxElement): CSSProperties {
-  const crop = element.imageCrop
-  if (!crop) return { width: '100%', height: '100%' }
+  const hasCropAnimation = animationsByTarget.value.get(element.id)?.some(item => item.effect === 'imageCrop')
+  const crop = element.imageCrop || hasCropAnimation ? imageCrop(element) : undefined
+  const grayscale = element.kind === 'picture' && imageGrayscale(element)
+  const filters = [
+    imageToneEnabled(element) ? `url(#${imageToneFilterId(element)})` : undefined,
+    grayscale ? 'grayscale(1)' : undefined,
+  ].filter((filter): filter is string => Boolean(filter))
+  const filter = filters.length ? filters.join(' ') : undefined
+  if (!crop) return { width: '100%', height: '100%', filter }
   const width = 1 - crop.left - crop.right
   const height = 1 - crop.top - crop.bottom
   return {
@@ -1005,7 +1012,74 @@ function imageStyle(element: PptxElement): CSSProperties {
     height: `${100 / height}%`,
     left: `${-crop.left / width * 100}%`,
     top: `${-crop.top / height * 100}%`,
+    filter,
   }
+}
+
+function imageCrop(element: PptxElement): NonNullable<PptxElement['imageCrop']> {
+  const base = element.imageCrop || {left: 0, top: 0, right: 0, bottom: 0}
+  const crop = {...base}
+  for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'imageCrop') || []) {
+    const property = action.imageCropProperty
+    if (!property || (action.imageCropTo === undefined && !action.imageCropKeyframes?.length)) continue
+    const progress = animationProgress(action)
+    if (progress === -2) {
+      crop[property] = base[property]
+      continue
+    }
+    if (progress === null || progress < 0) continue
+    const value = action.imageCropKeyframes?.length
+      ? animationKeyframeValue(action.imageCropKeyframes, action.imageCropKeyframeMode, progress)
+      : (action.imageCropFrom ?? crop[property]) + ((action.imageCropTo ?? 0) - (action.imageCropFrom ?? crop[property])) * progress
+    const opposite = property === 'left' ? 'right' : property === 'right' ? 'left' : property === 'top' ? 'bottom' : 'top'
+    if (value >= 0 && value < 1 && value + crop[opposite] < 1) crop[property] = value
+  }
+  return crop
+}
+
+function imageGrayscale(element: PptxElement): boolean {
+  let grayscale = false
+  for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'grayscale') || []) {
+    const progress = animationProgress(action)
+    if (progress === null || progress < 0) continue
+    let value: boolean = action.grayscaleFrom ?? grayscale
+    if (action.grayscaleKeyframes?.length) {
+      for (const frame of action.grayscaleKeyframes) {
+        if (frame.offset > progress) break
+        value = frame.value
+      }
+    } else if (progress >= 1) value = action.grayscaleTo ?? value
+    grayscale = value
+  }
+  return grayscale
+}
+
+function imageTone(element: PptxElement): {gain: number; blacklevel: number; gamma: number} {
+  const tone = {gain: 1, blacklevel: 0, gamma: 1}
+  for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'imageTone') || []) {
+    const property = action.imageToneProperty
+    if (!property || (action.imageToneTo === undefined && !action.imageToneKeyframes?.length)) continue
+    const progress = animationProgress(action)
+    if (progress === -2) {
+      tone[property] = property === 'blacklevel' ? 0 : 1
+      continue
+    }
+    if (progress === null || progress < 0) continue
+    const from = action.imageToneFrom ?? tone[property]
+    const value = action.imageToneKeyframes?.length
+      ? animationKeyframeValue(action.imageToneKeyframes, action.imageToneKeyframeMode, progress)
+      : from + ((action.imageToneTo ?? from) - from) * progress
+    if (Number.isFinite(value)) tone[property] = value
+  }
+  return tone
+}
+
+function imageToneEnabled(element: PptxElement): boolean {
+  return element.kind === 'picture' && Boolean(animationsByTarget.value.get(element.id)?.some(item => item.effect === 'imageTone'))
+}
+
+function imageToneFilterId(element: PptxElement): string {
+  return `${customGradientScope}-image-tone-${element.id}`.replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
 function mediaPlaybackRange(media: HTMLMediaElement, element: PptxElement) {
@@ -2448,6 +2522,27 @@ function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
         </g>
       </svg>
       <div v-else-if="(element.kind === 'picture' || element.kind === 'video') && element.imageUrl" class="image-viewport" aria-hidden="true">
+        <svg v-for="tone in (imageToneEnabled(element) ? [imageTone(element)] : [])" :key="element.id" class="image-tone-defs" aria-hidden="true" width="0" height="0">
+          <defs>
+            <filter :id="imageToneFilterId(element)" class="image-tone-filter" color-interpolation-filters="sRGB">
+              <feComponentTransfer>
+                <feFuncR class="image-tone-gain" type="linear" :slope="tone.gain" :intercept="(1 - tone.gain) / 2" />
+                <feFuncG class="image-tone-gain" type="linear" :slope="tone.gain" :intercept="(1 - tone.gain) / 2" />
+                <feFuncB class="image-tone-gain" type="linear" :slope="tone.gain" :intercept="(1 - tone.gain) / 2" />
+              </feComponentTransfer>
+              <feComponentTransfer>
+                <feFuncR class="image-tone-blacklevel" type="linear" slope="1" :intercept="tone.blacklevel" />
+                <feFuncG class="image-tone-blacklevel" type="linear" slope="1" :intercept="tone.blacklevel" />
+                <feFuncB class="image-tone-blacklevel" type="linear" slope="1" :intercept="tone.blacklevel" />
+              </feComponentTransfer>
+              <feComponentTransfer>
+                <feFuncR class="image-tone-gamma" type="gamma" amplitude="1" :exponent="1 / tone.gamma" offset="0" />
+                <feFuncG class="image-tone-gamma" type="gamma" amplitude="1" :exponent="1 / tone.gamma" offset="0" />
+                <feFuncB class="image-tone-gamma" type="gamma" amplitude="1" :exponent="1 / tone.gamma" offset="0" />
+              </feComponentTransfer>
+            </filter>
+          </defs>
+        </svg>
         <img class="slide-image" :src="element.imageUrl" :alt="element.name" :style="imageStyle(element)">
       </div>
       <table v-else-if="element.kind === 'table' && element.table" class="slide-table">
@@ -2505,6 +2600,7 @@ function tableCellTextStyle(cell: PptxTableCell): CSSProperties {
 
 <style scoped>
 .image-viewport { position: relative; width: 100%; height: 100%; overflow: hidden; }
+.image-tone-defs { position: absolute; width: 0; height: 0; overflow: visible; pointer-events: none; }
 .custom-geometry { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .slide-image { position: absolute; max-width: none; }
 .slide-video { position: absolute; max-width: none; object-fit: fill; }

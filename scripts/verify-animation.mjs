@@ -447,10 +447,18 @@ try {
     shapes: [...(currentHost?.querySelectorAll('.slide-element') || [])].map(element => {
       const rect = element.getBoundingClientRect()
       const frame = element.closest('.slide-frame').getBoundingClientRect()
+      const toneFilter = element.querySelector('.image-tone-filter')
       return {
         name: element.title,
         kind: element.dataset.elementKind,
         imageSource: element.querySelector('.slide-image')?.getAttribute('src'),
+        imageFilter: element.querySelector('.slide-image') ? getComputedStyle(element.querySelector('.slide-image')).filter : undefined,
+        imageCropStyle: element.querySelector('.slide-image') ? Object.fromEntries(['width', 'height', 'left', 'top'].map(property => [property, element.querySelector('.slide-image').style[property]])) : undefined,
+        imageTone: toneFilter ? {
+          gain: {slope: toneFilter.querySelector('.image-tone-gain')?.getAttribute('slope')},
+          blacklevel: {intercept: toneFilter.querySelector('.image-tone-blacklevel')?.getAttribute('intercept')},
+          gamma: {exponent: toneFilter.querySelector('.image-tone-gamma')?.getAttribute('exponent')},
+        } : undefined,
         visibility: getComputedStyle(element).visibility,
         opacity: getComputedStyle(element).opacity,
         backgroundImage: getComputedStyle(element).backgroundImage,

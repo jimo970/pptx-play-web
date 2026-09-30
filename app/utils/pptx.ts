@@ -3347,13 +3347,21 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const behavior = child(animation, 'cBhvr')
             const animationTarget = target(behavior || animation)
             const property = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent?.trim()
+            if (property === 'imageData.chromakey') {
+                // The p:attrName schema includes imageData.chromakey, but this renderer does not apply color-key transparency.
+                // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.attributename?view=openxml-3.0.1
+                // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.vml.imagedata?view=openxml-3.0.1
+                warnings.add('An imageData.chromakey color animation cannot be rendered because picture color-key transparency is not implemented yet.')
+                handledColors.add(animation)
+                continue
+            }
             const element = elements.find(item => item.id === animationTarget.targetId)
             const colorSpace = animation.getAttribute('clrSpc') || 'rgb'
             const colorDirection = animation.getAttribute('dir') || 'cw'
             const invalidTarget =
                 !element ||
                 animationTarget.hasUnsupportedTextRange ||
-                ((animationTarget.paragraphRange || animationTarget.characterRange) && property !== 'style.color') ||
+                ((animationTarget.paragraphRange || animationTarget.characterRange) && !['style.color', 'shadow.color'].includes(property || '')) ||
                 !hasValidCharacterRange(animationTarget, element) ||
                 (property === 'fillcolor' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
                 (property === 'stroke.color' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))) ||
@@ -4623,6 +4631,99 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     durationMs: animationDurationMs(timeNode, timing, 1),
                     delayMs: delayMs + startDelay(timeNode),
                     ...timing
+                })
+                continue
+            }
+            if (attribute === 'imageData.grayscale') {
+                if (!animationTarget.targetId || element?.kind !== 'picture' || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange) {
+                    warnings.add('An imageData.grayscale p:set animation requires a whole-picture target.')
+                    continue
+                }
+                const grayscaleValue = value?.trim().toLowerCase()
+                if (grayscaleValue !== 'true' && grayscaleValue !== 'false') {
+                    warnings.add('An imageData.grayscale p:set animation with an unsupported value was skipped.')
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const key = `${animationTarget.targetId}:grayscale:set:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'grayscale',
+                    direction: 'in',
+                    grayscaleTo: grayscaleValue === 'true',
+                    durationMs: 0,
+                    delayMs: delayMs + startDelay(timeNode)
+                })
+                continue
+            }
+            const imageCropProperty = attribute === 'imageData.cropLeft' ? 'left'
+                : attribute === 'imageData.cropTop' ? 'top'
+                : attribute === 'imageData.cropRight' ? 'right'
+                : attribute === 'imageData.cropBottom' ? 'bottom'
+                : undefined
+            if (imageCropProperty) {
+                if (!animationTarget.targetId || element?.kind !== 'picture' || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange) {
+                    warnings.add(`A ${attribute} p:set animation requires a whole-picture target.`)
+                    continue
+                }
+                const to = child(set, 'to')
+                const rawCrop = child(to, 'strVal')?.getAttribute('val') ?? child(to, 'fltVal')?.getAttribute('val') ?? child(to, 'intVal')?.getAttribute('val')
+                const cropText = rawCrop?.trim() || ''
+                const fixedCrop = /^(-?\d+)f$/i.exec(cropText)
+                const cropValue = cropText ? fixedCrop ? Number(fixedCrop[1]) / 65_536 : Number(cropText) : Number.NaN
+                const oppositeProperty = imageCropProperty === 'left' ? 'right'
+                    : imageCropProperty === 'right' ? 'left'
+                    : imageCropProperty === 'top' ? 'bottom' : 'top'
+                if (!Number.isFinite(cropValue) || cropValue < 0 || cropValue >= 1 || cropValue + (element.imageCrop?.[oppositeProperty] || 0) >= 1) {
+                    warnings.add(`A ${attribute} p:set animation with an unsupported crop value was skipped.`)
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const key = `${animationTarget.targetId}:imageCrop:${imageCropProperty}:set:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'imageCrop',
+                    direction: 'in',
+                    imageCropProperty,
+                    imageCropFrom: cropValue,
+                    imageCropTo: cropValue,
+                    durationMs: 0,
+                    delayMs: delayMs + startDelay(timeNode)
+                })
+                continue
+            }
+            const imageToneProperty = attribute === 'imageData.gain' ? 'gain'
+                : attribute === 'imageData.blacklevel' || attribute === 'imageData.blackleve' ? 'blacklevel'
+                : attribute === 'imageData.gamma' ? 'gamma'
+                : undefined
+            if (imageToneProperty) {
+                if (!animationTarget.targetId || element?.kind !== 'picture' || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange) {
+                    warnings.add(`A ${attribute} p:set animation requires a whole-picture target.`)
+                    continue
+                }
+                const to = child(set, 'to')
+                const rawValue = child(to, 'strVal')?.getAttribute('val') ?? child(to, 'fltVal')?.getAttribute('val') ?? child(to, 'intVal')?.getAttribute('val')
+                const text = rawValue?.trim() || ''
+                const fixed = /^(-?\d+)f$/i.exec(text)
+                const toneValue = text ? fixed ? Number(fixed[1]) / 65_536 : Number(text) : Number.NaN
+                const validToneValue = Number.isFinite(toneValue) && (imageToneProperty === 'blacklevel'
+                    ? toneValue >= -0.5 && toneValue <= 0.5
+                    : imageToneProperty === 'gamma' ? toneValue > 0 && toneValue <= 32_767 : toneValue >= -32_768 && toneValue <= 32_767)
+                if (!validToneValue) {
+                    warnings.add(`A ${attribute} p:set animation with an unsupported value was skipped.`)
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const key = `${animationTarget.targetId}:imageTone:${imageToneProperty}:set:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'imageTone',
+                    direction: 'in',
+                    imageToneProperty,
+                    imageToneFrom: toneValue,
+                    imageToneTo: toneValue,
+                    durationMs: 0,
+                    delayMs: delayMs + startDelay(timeNode)
                 })
                 continue
             }
