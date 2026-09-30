@@ -75,6 +75,17 @@ export function randomBarClipPath(width: number, height: number, orientation: 'h
   return `path("${paths.join(' ')}")`
 }
 
+export function clipPathMaskImage(clipPath: string, width: number, height: number): string | undefined {
+  const match = /^path\((?:(evenodd),\s*)?"([\s\S]*)"\)$/.exec(clipPath)
+  if (!match) return undefined
+  const maskWidth = Math.max(1, width)
+  const maskHeight = Math.max(1, height)
+  const fillRule = match[1] || 'nonzero'
+  const path = match[2] || ''
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${maskWidth}" height="${maskHeight}" viewBox="0 0 ${maskWidth} ${maskHeight}" preserveAspectRatio="none"><path fill="white" fill-rule="${fillRule}" d="${path}"/></svg>`
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
+}
+
 export function combClipPath(width: number, height: number, orientation: 'horz' | 'vert', progress: number): string {
   const amount = Math.max(0, Math.min(progress, 1))
   const axisLength = orientation === 'horz' ? width : height
@@ -146,6 +157,7 @@ export function shapeEffectClipPath(shape: 'circle' | 'diamond' | 'box' | 'plus'
     return `path(evenodd, "${outer} ${plusPath(width, height, 1 - visible)}")`
   }
   if (shape === 'diamond') {
+    if (direction === 'in' && visible === 1) return 'inset(0)'
     const radiusX = width * visible, radiusY = height * visible
     if (visible === 0) return 'inset(50%)'
     const inner = `M${cx} ${cy - radiusY} L${cx + radiusX} ${cy} L${cx} ${cy + radiusY} L${cx - radiusX} ${cy} Z`

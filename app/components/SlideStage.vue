@@ -1720,6 +1720,32 @@ function animationSlide(element: PptxElement): [number, number] {
   return value
 }
 
+function animationTargetsRange(action: PptxAnimation, paragraphIndex?: number, characterStart?: number, characterEnd?: number): boolean {
+  if (characterStart !== undefined && characterEnd !== undefined) {
+    return Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+  }
+  if (paragraphIndex !== undefined) {
+    return Boolean(action.paragraphRange && !action.characterRange && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
+  }
+  return !action.paragraphRange && !action.characterRange
+}
+
+function animationIterationIndex(action: PptxAnimation, paragraphIndex?: number, characterStart?: number, characterEnd?: number): number | undefined {
+  if (characterStart !== undefined && characterEnd !== undefined) return iterationIndexFor(action, characterStart, characterEnd)
+  return paragraphIndex === undefined ? undefined : iterationIndexFor(action, paragraphIndex, paragraphIndex + 1)
+}
+
+function animationClipMaskStyle(element: PptxElement, clipPath: string, textRange: boolean): CSSProperties {
+  if (!textRange) return { clipPath }
+  const mask = clipPathMaskImage(clipPath, element.width * scale.value, element.height * scale.value)
+  if (!mask) return { clipPath }
+  return {
+    maskImage: mask, WebkitMaskImage: mask,
+    maskSize: '100% 100%', WebkitMaskSize: '100% 100%',
+    maskRepeat: 'no-repeat', WebkitMaskRepeat: 'no-repeat',
+  }
+}
+
 function animationWipe(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'wipe') return false
@@ -1822,8 +1848,9 @@ function animationChecker(element: PptxElement, paragraphIndex?: number, charact
   }
 }
 
-function animationShapeMask(element: PptxElement): CSSProperties {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'shape') || []
+function animationShapeMask(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'shape'
+    && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
   const first = actions[0]
   if (!first?.shapeFilter || !first.shapeDirection) return {}
   let current: { shape: 'circle' | 'diamond' | 'box' | 'plus'; direction: 'in' | 'out'; progress: number } = {
@@ -1834,7 +1861,7 @@ function animationShapeMask(element: PptxElement): CSSProperties {
   let reset = false
   for (const action of actions) {
     if (!action.shapeFilter || !action.shapeDirection) continue
-    const phase = animationProgress(action)
+    const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
     if (phase === -2) {
       reset = true
       continue
@@ -1848,17 +1875,19 @@ function animationShapeMask(element: PptxElement): CSSProperties {
     }
   }
   if (reset || !current) return {}
-  return { clipPath: shapeEffectClipPath(current.shape, element.width * scale.value, element.height * scale.value, current.progress, current.direction) }
+  const clipPath = shapeEffectClipPath(current.shape, element.width * scale.value, element.height * scale.value, current.progress, current.direction)
+  return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
-function animationDissolve(element: PptxElement): CSSProperties {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'dissolve') || []
+function animationDissolve(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'dissolve'
+    && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
   const first = actions[0]
   if (!first) return {}
   let progress = first.direction === 'in' ? 0 : 1
   let reset = false
   for (const action of actions) {
-    const phase = animationProgress(action)
+    const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
     if (phase === -2) {
       reset = true
       continue
@@ -1868,18 +1897,20 @@ function animationDissolve(element: PptxElement): CSSProperties {
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  return { clipPath: dissolveClipPath(element.width * scale.value, element.height * scale.value, progress, element.id) }
+  const clipPath = dissolveClipPath(element.width * scale.value, element.height * scale.value, progress, element.id)
+  return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
-function animationWheel(element: PptxElement): CSSProperties {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'wheel') || []
+function animationWheel(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'wheel'
+    && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
   const first = actions[0]
   if (!first?.wheelSpokes) return {}
   let progress = first.direction === 'in' ? 0 : 1
   let spokes = first.wheelSpokes
   let reset = false
   for (const action of actions) {
-    const phase = animationProgress(action)
+    const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
     if (phase === -2) {
       reset = true
       continue
@@ -1890,18 +1921,21 @@ function animationWheel(element: PptxElement): CSSProperties {
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  return { clipPath: wheelClipPath(element.width * scale.value, element.height * scale.value, spokes, progress) }
+  const clipPath = wheelClipPath(element.width * scale.value, element.height * scale.value, spokes, progress)
+  return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
-function animationRandomBars(element: PptxElement): CSSProperties {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'randomBars') || []
+function animationRandomBars(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'randomBars'
+    && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
   const first = actions[0]
   if (!first?.randomBarOrientation) return {}
   let progress = first.direction === 'in' ? 0 : 1
   let orientation = first.randomBarOrientation
   let reset = false
   for (const action of actions) {
-    const phase = animationProgress(action)
+    const iterationIndex = animationIterationIndex(action, paragraphIndex, characterStart, characterEnd)
+    const phase = animationProgress(action, iterationIndex)
     if (phase === -2) {
       reset = true
       continue
@@ -1912,18 +1946,21 @@ function animationRandomBars(element: PptxElement): CSSProperties {
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  return { clipPath: randomBarClipPath(element.width * scale.value, element.height * scale.value, orientation, progress, element.id) }
+  const clipPath = randomBarClipPath(element.width * scale.value, element.height * scale.value, orientation, progress, element.id)
+  return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
-function animationStrips(element: PptxElement): CSSProperties {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'strips') || []
+function animationStrips(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'strips'
+    && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
   const first = actions[0]
   if (!first?.stripsDirection) return {}
   let progress = first.direction === 'in' ? 0 : 1
   let direction = first.stripsDirection
   let reset = false
   for (const action of actions) {
-    const phase = animationProgress(action)
+    const iterationIndex = animationIterationIndex(action, paragraphIndex, characterStart, characterEnd)
+    const phase = animationProgress(action, iterationIndex)
     if (phase === -2) {
       reset = true
       continue
@@ -1934,11 +1971,13 @@ function animationStrips(element: PptxElement): CSSProperties {
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  return { clipPath: stripsClipPath(element.width * scale.value, element.height * scale.value, direction, progress) }
+  const clipPath = stripsClipPath(element.width * scale.value, element.height * scale.value, direction, progress)
+  return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
-function animationBarn(element: PptxElement): CSSProperties {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'barn') || []
+function animationBarn(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'barn'
+    && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
   const first = actions[0]
   if (!first?.barnOrientation || !first.barnMotion) return {}
   let orientation = first.barnOrientation
@@ -1947,7 +1986,8 @@ function animationBarn(element: PptxElement): CSSProperties {
   let reset = false
   for (const action of actions) {
     if (!action.barnOrientation || !action.barnMotion) continue
-    const phase = animationProgress(action)
+    const iterationIndex = animationIterationIndex(action, paragraphIndex, characterStart, characterEnd)
+    const phase = animationProgress(action, iterationIndex)
     if (phase === -2) {
       reset = true
       continue
@@ -2036,19 +2076,47 @@ function animationStyle(element: PptxElement): CSSProperties {
 function paragraphAnimationStyle(element: PptxElement, index: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     const range = action.paragraphRange
-    return range && !action.iteration && index >= range.start && index <= range.end
+    return range && action.effect !== 'barn' && !action.iteration && index >= range.start && index <= range.end
   })
-  return { ...animationCss(actions), ...animationWipe(element, index), ...animationBlinds(element, index), ...animationChecker(element, index) }
+  const [slideX, slideY] = animationSlide(element, index)
+  return {
+    ...animationCss(actions),
+    ...(slideX || slideY ? { transform: `translate(${slideX * scale.value}px, ${slideY * scale.value}px)` } : {}),
+    ...animationWipe(element, index),
+    ...animationBlinds(element, index),
+    ...animationChecker(element, index),
+    ...animationBarn(element, index),
+    ...animationShapeMask(element, index),
+    ...animationDissolve(element, index),
+    ...animationWheel(element, index),
+    ...animationRandomBars(element, index),
+    ...animationStrips(element, index),
+  }
 }
 
-function characterAnimationStyle(element: PptxElement, start: number, end: number): CSSProperties {
+function characterAnimationStyle(element: PptxElement, paragraphIndex: number, start: number, end: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     const range = action.characterRange
     const overlaps = range && start < range.end && end > range.start
     if (action.iteration) return Boolean(overlaps || !range) && (iterationIndexFor(action, start, end) ?? -1) >= 0
     return Boolean(overlaps)
   })
-  return { ...animationCss(actions, start, end), ...animationWipe(element, undefined, start, end), ...animationBlinds(element, undefined, start, end), ...animationChecker(element, undefined, start, end) }
+  const animatedStyle = animationCss(actions?.filter(action => action.effect !== 'barn'), start, end)
+  const textOpacity = animationOpacity(element, 'style.opacity', paragraphIndex, start, end)
+  const opacity = typeof animatedStyle.opacity === 'number' ? animatedStyle.opacity * textOpacity : undefined
+  return {
+    ...animatedStyle,
+    ...(opacity === undefined ? {} : { opacity }),
+    ...animationWipe(element, undefined, start, end),
+    ...animationBlinds(element, undefined, start, end),
+    ...animationChecker(element, undefined, start, end),
+    ...animationBarn(element, undefined, start, end),
+    ...animationShapeMask(element, undefined, start, end),
+    ...animationDissolve(element, undefined, start, end),
+    ...animationWheel(element, undefined, start, end),
+    ...animationRandomBars(element, undefined, start, end),
+    ...animationStrips(element, undefined, start, end),
+  }
 }
 
 function hasTrigger(elementId: string) {

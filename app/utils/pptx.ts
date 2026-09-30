@@ -3214,11 +3214,16 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             if (['in', 'out'].includes(transition || '') && (['fade', 'none', 'cut'].includes(filter || '') || wipe || blinds || checker || randomBar || strips || barn || slide || dissolve || shapeFilter || wheel || wedge)) {
                 const paragraphWipe = Boolean(wipe && animationTarget.paragraphRange && !animationTarget.characterRange)
                 const characterWipe = Boolean(wipe && animationTarget.characterRange && !animationTarget.paragraphRange)
+                const textRangeMask = Boolean(animationTarget.paragraphRange) !== Boolean(animationTarget.characterRange)
+                const textRandomBars = Boolean(randomBar && textRangeMask)
+                const textStrips = Boolean(strips && textRangeMask)
+                const textBarn = Boolean(barn && textRangeMask)
+                const textShapeMask = Boolean((dissolve || shapeFilter || wheel || wedge) && textRangeMask)
                 // Microsoft documents pRg with checkerboard(across) as a valid paragraph-targeted animation.
                 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.paragraphindexrange?view=openxml-3.0.1
-                const unsupportedTextMask = randomBar || strips || barn || slide || dissolve || shapeFilter || wheel || wedge || (wipe && !paragraphWipe && !characterWipe)
+                const unsupportedTextMask = (randomBar && !textRandomBars) || (strips && !textStrips) || (barn && !textBarn) || ((dissolve || shapeFilter || wheel || wedge) && !textShapeMask) || (wipe && !paragraphWipe && !characterWipe)
                 if (unsupportedTextMask && (animationTarget.paragraphRange || animationTarget.characterRange)) {
-                    warnings.add('Text-range slide, random bars, strips, barn, dissolve, wheel, and shape-mask animations are not rendered yet.')
+                    warnings.add('An unsupported text-range mask combination was skipped.')
                     handledEffects.add(effect)
                     continue
                 }
