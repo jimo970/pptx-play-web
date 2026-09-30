@@ -35,11 +35,24 @@ type CustomSvgGradient = CustomSvgLinearGradient | CustomSvgRadialGradient
 interface ChartVisual {
   plot: { left: number; top: number; width: number; height: number }
   ticks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
-  axisTicks: Array<{ axis: 'category' | 'value'; x1: number; y1: number; x2: number; y2: number }>
+  xTicks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
+  axisTicks: Array<{ axis: 'category' | 'value' | 'valueSecondary' | 'xValue'; axisId?: string; x1: number; y1: number; x2: number; y2: number }>
+  secondaryValueAxes: Array<{
+    id: string
+    horizontal: boolean
+    line: { x1: number; y1: number; x2: number; y2: number }
+    ticks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
+    majorGridlines: boolean
+    majorTickMark?: PptxChartTickMark
+    deleted?: boolean
+  }>
+  radarGrid: Array<{ d: string }>
+  radarSpokes: Array<{ x1: number; y1: number; x2: number; y2: number }>
   categories: Array<{ text: string; x: number; y: number; anchor: string }>
-  bars: Array<{ x: number; y: number; width: number; height: number; color: string }>
-  lines: Array<{ d: string; color: string }>
-  markers: Array<{ x: number; y: number; color: string }>
+  bars: Array<{ x: number; y: number; width: number; height: number; color: string; stroke?: string }>
+  areas: Array<{ d: string; color: string; opacity?: number }>
+  lines: Array<{ d: string; color: string; width?: number }>
+  markers: Array<{ x: number; y: number; color: string; radius?: number }>
   slices: Array<{ d: string; color: string }>
   legend: Array<{ text: string; x: number; y: number; color: string }>
   legendClip?: { id: string; x: number; y: number; width: number; height: number }
@@ -56,20 +69,93 @@ function defaultLegendOrigin(position: ChartLegendPosition | undefined, axis: 'x
 }
 
 function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
+  const combo = chart.series.some(series => series.chartType)
+  const seriesType = (series: PptxChart['series'][number]) => series.chartType || chart.type
+  const axisEntryForSeries = (series: PptxChart['series'][number]) => chart.valueAxes?.find(item => item.id === series.valueAxisId)
+  const primaryAxisId = chart.valueAxes?.find(item => item.primary)?.id
+  const axisValuesForId = (axisId?: string) => chart.series
+    .filter(series => !axisId || (series.valueAxisId || primaryAxisId) === axisId)
+    .flatMap(series => series.values.filter((value): value is number => value !== null && value !== undefined))
+  const scatter = chart.type === 'scatter'
+  const bubble = chart.type === 'bubble'
+  const radar = chart.type === 'radar'
+  const stock = chart.type === 'stock' ? chart.stock : undefined
+  const xyChart = scatter || bubble
   const position = chart.legend?.position
   const plotPosition = chart.legend?.overlay ? undefined : position
   const plot = plotPosition === 'left' ? { left: 330, top: 75, width: 608, height: 390 }
     : plotPosition === 'right' ? { left: 88, top: 75, width: 650, height: 390 }
       : plotPosition === 'top' ? { left: 88, top: 145, width: 850, height: 320 }
         : { left: 88, top: 75, width: 850, height: 390 }
-  const values = chart.series.flatMap(series => series.values.filter((value): value is number => value !== null && value !== undefined))
-  const dataMin = Math.min(0, ...values)
-  const dataMax = Math.max(0, ...values)
+  const radarCenterX = plot.left + plot.width / 2
+  const radarCenterY = plot.top + plot.height / 2
+  const radarRadiusX = plot.width * 0.38
+  const radarRadiusY = plot.height * 0.38
+  const radarPoint = (index: number, fraction = 1, padding = 0) => {
+    const angle = -Math.PI / 2 + Math.PI * 2 * index / Math.max(chart.categories.length, 1)
+    return {
+      x: radarCenterX + Math.cos(angle) * (radarRadiusX * fraction + padding),
+      y: radarCenterY + Math.sin(angle) * (radarRadiusY * fraction + padding),
+      angle,
+    }
+  }
+  const values = stock
+    ? [stock.highIndex, stock.lowIndex, stock.closeIndex, stock.openIndex].filter((index): index is number => index !== undefined).flatMap(index => chart.series[index]?.values.filter((value): value is number => value !== null && value !== undefined) || [])
+    : combo ? axisValuesForId(primaryAxisId)
+      : chart.series.flatMap(series => series.values.filter((value): value is number => value !== null && value !== undefined))
+  const stacking = !combo && ['bar', 'line', 'area'].includes(chart.type) && chart.grouping && chart.grouping !== 'clustered'
+    ? getPptxChartStacking(chart.series, chart.grouping)
+    : undefined
+  const stackedSegments = new Map<number, ReturnType<typeof getPptxChartStacking>['segments'][number]>()
+  if (combo) {
+    const groupIndexes = new Map<number, number[]>()
+    chart.series.forEach((series, index) => {
+      const groupIndex = series.chartGroupIndex ?? 0
+      groupIndexes.set(groupIndex, [...(groupIndexes.get(groupIndex) || []), index])
+    })
+    for (const [groupIndex, indexes] of groupIndexes) {
+      const grouping = chart.series[indexes[0]!]!.grouping || 'clustered'
+      if (grouping === 'clustered') continue
+      const groupSeries = indexes.map(index => chart.series[index]!)
+      const groupStacking = getPptxChartStacking(groupSeries, grouping)
+      indexes.forEach((index, seriesIndex) => stackedSegments.set(index, groupStacking.segments[seriesIndex]!))
+    }
+  }
+  const stackedSegmentFor = (seriesIndex: number) => combo ? stackedSegments.get(seriesIndex) : stacking?.segments[seriesIndex]
+  const axisBoundsForSeries = (series: PptxChart['series'][number]) => {
+    const axis = axisEntryForSeries(series)?.axis || chart.valueAxis
+    if (!combo && stacking) {
+      const minimum = chart.valueAxis?.min ?? stacking.min
+      const upper = chart.valueAxis?.max ?? (stacking.max === minimum ? minimum + 1 : stacking.max)
+      return {axis, minimum, upper}
+    }
+    const values = axisValuesForId(series.valueAxisId || primaryAxisId)
+    const dataMin = values.length ? Math.min(0, ...values) : 0
+    const dataMax = values.length ? Math.max(0, ...values) : 1
+    const minimum = axis?.min ?? dataMin
+    return {axis, minimum, upper: axis?.max ?? (dataMax === minimum ? minimum + 1 : dataMax)}
+  }
+  const seriesValuePosition = (series: PptxChart['series'][number], value: number) => {
+    const {axis, minimum: axisMinimum, upper: axisUpper} = axisBoundsForSeries(series)
+    const fraction = (value - axisMinimum) / (axisUpper - axisMinimum)
+    const axisFraction = axis?.reverse ? 1 - fraction : fraction
+    return chart.direction === 'horizontal'
+      ? plot.left + plot.width * axisFraction
+      : plot.top + plot.height * (1 - axisFraction)
+  }
+  const dataMin = stacking?.min ?? (xyChart && values.length ? Math.min(...values) : Math.min(0, ...values))
+  const dataMax = stacking?.max ?? (xyChart && values.length ? Math.max(...values) : Math.max(0, ...values))
   const minimum = chart.valueAxis?.min ?? dataMin
   const upper = chart.valueAxis?.max ?? (dataMax === dataMin ? dataMin + 1 : dataMax)
+  const xValues = chart.series.flatMap(series => (series.xValues || []).filter((value): value is number => value !== null && value !== undefined))
+  const xDataMin = xyChart && xValues.length ? Math.min(...xValues) : 0
+  const xDataMax = xyChart && xValues.length ? Math.max(...xValues) : 1
+  const xMinimum = chart.xAxis?.min ?? (xDataMin === xDataMax ? xDataMin - (Math.abs(xDataMin) * 0.05 || 0.5) : xDataMin)
+  const xUpper = chart.xAxis?.max ?? (xDataMin === xDataMax ? xDataMax + (Math.abs(xDataMax) * 0.05 || 0.5) : xDataMax)
   const categoryCount = Math.max(chart.categories.length, 1)
   const horizontalValueAxis = chart.direction === 'horizontal'
   const valueAxisSide = chart.valueAxis?.position ?? (horizontalValueAxis ? 'b' : 'l')
+  const xAxisSide = chart.xAxis?.position ?? 'b'
   const categoryAxisSide = chart.categoryAxisPosition ?? (horizontalValueAxis ? 'l' : 'b')
   const valueTickLabelPosition = chart.valueAxis?.tickLabelPosition ?? 'nextTo'
   const categoryTickLabelPosition = chart.categoryAxisTickLabelPosition ?? 'nextTo'
@@ -78,10 +164,17 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     const fraction = (value - minimum) / (upper - minimum)
     return chart.valueAxis?.reverse ? 1 - fraction : fraction
   }
+  const xAxisFraction = (value: number) => {
+    const fraction = (value - xMinimum) / (xUpper - xMinimum)
+    return chart.xAxis?.reverse ? 1 - fraction : fraction
+  }
+  const xPosition = (value: number) => plot.left + plot.width * xAxisFraction(value)
   const valuePosition = (value: number) => plot.top + plot.height * (1 - axisFraction(value))
   const categoryCrossingFraction = chart.categoryAxisCrossesAt !== undefined
     ? (clamp(chart.categoryAxisCrossesAt, 1, categoryCount) - 0.5) / categoryCount
     : chart.valueAxis?.crosses === 'min' ? 0 : chart.valueAxis?.crosses === 'max' ? 1 : undefined
+  const xyValueAxisCrossingX = xPosition(clamp(chart.valueAxis?.crossesAt ?? (chart.valueAxis?.crosses === 'min' ? xMinimum : chart.valueAxis?.crosses === 'max' ? xUpper : clamp(0, xMinimum, xUpper)), xMinimum, xUpper))
+  const xyXAxisCrossingY = valuePosition(clamp(chart.xAxis?.crossesAt ?? (chart.xAxis?.crosses === 'min' ? minimum : chart.xAxis?.crosses === 'max' ? upper : clamp(0, minimum, upper)), minimum, upper))
   const valueAxisCrossingPosition = categoryCrossingFraction === undefined ? undefined
     : horizontalValueAxis ? plot.top + plot.height * categoryCrossingFraction
       : plot.left + plot.width * categoryCrossingFraction
@@ -89,37 +182,99 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   const categoryAxisCrossingCoordinate = horizontalValueAxis
     ? plot.left + plot.width * axisFraction(clamp(categoryAxisCrossingValue, minimum, upper))
     : valuePosition(clamp(categoryAxisCrossingValue, minimum, upper))
-  const valueAxisLineCoordinate = valueAxisCrossingPosition ?? (horizontalValueAxis
+  const valueAxisLineCoordinate = xyChart ? xyValueAxisCrossingX : valueAxisCrossingPosition ?? (horizontalValueAxis
     ? valueAxisSide === 't' ? plot.top : plot.top + plot.height
     : valueAxisSide === 'r' ? plot.left + plot.width : plot.left)
-  const valueAxisLine = horizontalValueAxis
-    ? { x1: plot.left, y1: valueAxisLineCoordinate, x2: plot.left + plot.width, y2: valueAxisLineCoordinate }
-    : { x1: valueAxisLineCoordinate, y1: plot.top, x2: valueAxisLineCoordinate, y2: plot.top + plot.height }
+  const valueAxisLine = xyChart
+    ? { x1: valueAxisLineCoordinate, y1: plot.top, x2: valueAxisLineCoordinate, y2: plot.top + plot.height }
+    : horizontalValueAxis
+      ? { x1: plot.left, y1: valueAxisLineCoordinate, x2: plot.left + plot.width, y2: valueAxisLineCoordinate }
+      : { x1: valueAxisLineCoordinate, y1: plot.top, x2: valueAxisLineCoordinate, y2: plot.top + plot.height }
   const unit = chart.valueAxis?.majorUnit
   const tickValues = unit
     ? Array.from({ length: Math.min(101, Math.floor((upper - minimum) / unit + 1e-9) + 1) }, (_, index) => Number((minimum + index * unit).toPrecision(12)))
     : Array.from({ length: 5 }, (_, index) => minimum + (upper - minimum) * index / 4)
   const ticks = tickValues.map(value => {
-    const x = plot.left + plot.width * axisFraction(value)
-    const y = valuePosition(value)
+    const x = radar ? radarCenterX : plot.left + plot.width * axisFraction(value)
+    const y = radar ? radarCenterY - radarRadiusY * axisFraction(value) : valuePosition(value)
     return {
       value,
-      label: formatChartNumber(value, chart.valueAxis?.numberFormat),
+      label: formatChartNumber(value, chart.valueAxis?.numberFormat ?? (chart.grouping === 'percentStacked' ? '0%' : undefined)),
       showLabel: valueTickLabelPosition !== 'none' && !chart.valueAxis?.deleted,
       x,
       y,
-      labelX: horizontalValueAxis ? x : valueTickLabelPosition === 'high' ? plot.left + plot.width + 10 : valueTickLabelPosition === 'low' ? plot.left - 10 : valueAxisLineCoordinate + (valueAxisSide === 'r' ? 10 : -10),
-      labelY: horizontalValueAxis ? valueTickLabelPosition === 'high' ? plot.top + plot.height + 22 : valueTickLabelPosition === 'low' ? plot.top - 10 : valueAxisLineCoordinate + (valueAxisSide === 't' ? -10 : 22) : y + 5,
-      labelAnchor: horizontalValueAxis ? 'middle' : valueTickLabelPosition === 'high' ? 'start' : valueTickLabelPosition === 'low' ? 'end' : valueAxisSide === 'r' ? 'start' : 'end',
+      labelX: radar ? radarCenterX - 10 : horizontalValueAxis ? x : valueTickLabelPosition === 'high' ? plot.left + plot.width + 10 : valueTickLabelPosition === 'low' ? plot.left - 10 : valueAxisLineCoordinate + (valueAxisSide === 'r' ? 10 : -10),
+      labelY: radar ? y + 5 : horizontalValueAxis ? valueTickLabelPosition === 'high' ? plot.top + plot.height + 22 : valueTickLabelPosition === 'low' ? plot.top - 10 : valueAxisLineCoordinate + (valueAxisSide === 't' ? -10 : 22) : y + 5,
+      labelAnchor: radar ? 'end' : horizontalValueAxis ? 'middle' : valueTickLabelPosition === 'high' ? 'start' : valueTickLabelPosition === 'low' ? 'end' : valueAxisSide === 'r' ? 'start' : 'end',
     }
   })
+  const secondaryValueAxes: ChartVisual['secondaryValueAxes'] = (chart.valueAxes || []).filter(item => !item.primary).map(({id, axis}) => {
+    const values = axisValuesForId(id)
+    const minimum = axis.min ?? (values.length ? Math.min(0, ...values) : 0)
+    const upper = axis.max ?? Math.max(minimum + 1, 0, ...values)
+    const horizontal = horizontalValueAxis
+    const side = axis.position ?? (horizontal ? 't' : 'r')
+    const lineCoordinate = horizontal
+      ? side === 't' ? plot.top : plot.top + plot.height
+      : side === 'l' ? plot.left : plot.left + plot.width
+    const axisLine = horizontal
+      ? {x1: plot.left, y1: lineCoordinate, x2: plot.left + plot.width, y2: lineCoordinate}
+      : {x1: lineCoordinate, y1: plot.top, x2: lineCoordinate, y2: plot.top + plot.height}
+    const unit = axis.majorUnit
+    const axisTickValues = unit
+      ? Array.from({length: Math.min(101, Math.floor((upper - minimum) / unit + 1e-9) + 1)}, (_, index) => Number((minimum + index * unit).toPrecision(12)))
+      : Array.from({length: 5}, (_, index) => minimum + (upper - minimum) * index / 4)
+    const tickPosition = (value: number) => {
+      const fraction = (value - minimum) / (upper - minimum)
+      const normalized = axis.reverse ? 1 - fraction : fraction
+      return horizontal ? plot.left + plot.width * normalized : plot.top + plot.height * (1 - normalized)
+    }
+    const labelPosition = axis.tickLabelPosition ?? 'nextTo'
+    const axisTicks = axisTickValues.map(value => {
+      const position = tickPosition(value)
+      return {
+        value,
+        label: formatChartNumber(value, axis.numberFormat),
+        showLabel: !axis.deleted && labelPosition !== 'none',
+        x: horizontal ? position : lineCoordinate,
+        y: horizontal ? lineCoordinate : position,
+        labelX: horizontal ? position : lineCoordinate + (side === 'l' ? -10 : 10),
+        labelY: horizontal ? lineCoordinate + (side === 't' ? -10 : 22) : position + 5,
+        labelAnchor: horizontal ? 'middle' : side === 'l' ? 'end' : 'start',
+      }
+    })
+    return {id, horizontal, line: axisLine, ticks: axisTicks, majorGridlines: !!axis.majorGridlines, ...(axis.majorTickMark ? {majorTickMark: axis.majorTickMark} : {}), ...(axis.deleted ? {deleted: true} : {})}
+  })
+  const xUnit = chart.xAxis?.majorUnit
+  const xTickValues = xUnit
+    ? Array.from({ length: Math.min(101, Math.floor((xUpper - xMinimum) / xUnit + 1e-9) + 1) }, (_, index) => Number((xMinimum + index * xUnit).toPrecision(12)))
+    : Array.from({ length: 5 }, (_, index) => xMinimum + (xUpper - xMinimum) * index / 4)
+  const xTickLabelPosition = chart.xAxis?.tickLabelPosition ?? 'nextTo'
+  const xTicks = xyChart ? xTickValues.map(value => {
+    const x = xPosition(value)
+    return {
+      value,
+      label: formatChartNumber(value, chart.xAxis?.numberFormat),
+      showLabel: xTickLabelPosition !== 'none' && !chart.xAxis?.deleted,
+      x,
+      y: xyXAxisCrossingY,
+      labelX: x,
+      labelY: xTickLabelPosition === 'high' ? plot.top - 10
+        : xTickLabelPosition === 'low' ? plot.top + plot.height + 22
+          : xyXAxisCrossingY + (xAxisSide === 't' ? -10 : 22),
+      labelAnchor: 'middle',
+    }
+  }) : []
   const axisTicks: ChartVisual['axisTicks'] = []
-  const addAxisTick = (axis: 'category' | 'value', mark: PptxChartTickMark | undefined, x: number, y: number, horizontal: boolean, inwardDirection: number) => {
+  const radarGrid: ChartVisual['radarGrid'] = []
+  const radarSpokes: ChartVisual['radarSpokes'] = []
+  const addAxisTick = (axis: 'category' | 'value' | 'valueSecondary' | 'xValue', mark: PptxChartTickMark | undefined, x: number, y: number, horizontal: boolean, inwardDirection: number, axisId?: string) => {
     if (!mark || mark === 'none') return
     const start = mark === 'cross' ? -5 : 0
     const end = mark === 'cross' ? 5 : mark === 'in' ? 5 : -5
     axisTicks.push({
       axis,
+      ...(axisId ? {axisId} : {}),
       x1: horizontal ? x + start * inwardDirection : x,
       y1: horizontal ? y : y + start * inwardDirection,
       x2: horizontal ? x + end * inwardDirection : x,
@@ -127,10 +282,30 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     })
   }
   const valueTickInwardDirection = horizontalValueAxis ? valueAxisSide === 't' ? 1 : -1 : valueAxisSide === 'l' ? 1 : -1
-  if (!chart.valueAxis?.deleted) for (const tick of ticks) addAxisTick('value', chart.valueAxis?.majorTickMark, horizontalValueAxis ? tick.x : valueAxisLineCoordinate, horizontalValueAxis ? valueAxisLineCoordinate : tick.y, !horizontalValueAxis, valueTickInwardDirection)
+  if (!chart.valueAxis?.deleted) {
+    if (radar) for (const tick of ticks) addAxisTick('value', chart.valueAxis?.majorTickMark, radarCenterX, tick.y, true, 1)
+    else for (const tick of ticks) addAxisTick('value', chart.valueAxis?.majorTickMark, horizontalValueAxis ? tick.x : valueAxisLineCoordinate, horizontalValueAxis ? valueAxisLineCoordinate : tick.y, !horizontalValueAxis, valueTickInwardDirection)
+  }
+  if (xyChart && !chart.xAxis?.deleted) {
+    const inwardDirection = xAxisSide === 't' ? 1 : -1
+    for (const tick of xTicks) addAxisTick('xValue', chart.xAxis?.majorTickMark, tick.x, tick.y, true, inwardDirection)
+  }
+  for (const axis of secondaryValueAxes) {
+    if (axis.deleted) continue
+    const inwardDirection = axis.horizontal
+      ? axis.line.y1 === plot.top ? 1 : -1
+      : axis.line.x1 === plot.left ? 1 : -1
+    for (const tick of axis.ticks) addAxisTick('valueSecondary', axis.majorTickMark, tick.x, tick.y, !axis.horizontal, inwardDirection, axis.id)
+  }
   const categoryTickInwardDirection = horizontalValueAxis ? categoryAxisSide === 'l' ? 1 : -1 : categoryAxisSide === 't' ? 1 : -1
-  if (!chart.categoryAxisDeleted && chart.categoryAxisMajorTickMark && chart.categoryAxisMajorTickMark !== 'none') {
-    for (let index = 0; index < categoryCount; index++) {
+  if (!xyChart && !chart.categoryAxisDeleted && chart.categoryAxisMajorTickMark && chart.categoryAxisMajorTickMark !== 'none') {
+    if (radar) chart.categories.forEach((_category, index) => {
+      const point = radarPoint(index)
+      const start = chart.categoryAxisMajorTickMark === 'cross' ? -5 : chart.categoryAxisMajorTickMark === 'in' ? -5 : 0
+      const end = chart.categoryAxisMajorTickMark === 'cross' ? 5 : chart.categoryAxisMajorTickMark === 'in' ? 0 : 5
+      axisTicks.push({axis: 'category', x1: point.x + Math.cos(point.angle) * start, y1: point.y + Math.sin(point.angle) * start, x2: point.x + Math.cos(point.angle) * end, y2: point.y + Math.sin(point.angle) * end})
+    })
+    else for (let index = 0; index < categoryCount; index++) {
       const centerX = plot.left + plot.width * (index + 0.5) / categoryCount
       const centerY = plot.top + plot.height * (index + 0.5) / categoryCount
       addAxisTick('category', chart.categoryAxisMajorTickMark, horizontalValueAxis ? categoryAxisCrossingCoordinate : centerX, horizontalValueAxis ? centerY : categoryAxisCrossingCoordinate, horizontalValueAxis, categoryTickInwardDirection)
@@ -138,86 +313,378 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   }
   const categories: ChartVisual['categories'] = []
   const bars: ChartVisual['bars'] = []
+  const areas: ChartVisual['areas'] = []
   const lines: ChartVisual['lines'] = []
   const markers: ChartVisual['markers'] = []
   const slices: ChartVisual['slices'] = []
   const legend: ChartVisual['legend'] = []
   const dataLabels: ChartVisual['dataLabels'] = []
+  if (combo) chart.series.forEach((series, seriesIndex) => {
+    if (seriesType(series) !== 'area') return
+    const axis = axisEntryForSeries(series)?.axis || chart.valueAxis
+    const {minimum, upper} = axisBoundsForSeries(series)
+    const lowerValue = axis?.crossesAt ?? (axis?.crosses === 'max' ? upper : axis?.crosses === 'min' ? minimum : clamp(0, minimum, upper))
+    let upperPoints: Array<{x: number; y: number}> = []
+    let lowerPoints: Array<{x: number; y: number}> = []
+    const flushArea = () => {
+      if (upperPoints.length > 1) {
+        const points = [...upperPoints, ...lowerPoints.reverse()]
+        areas.push({d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`, color: series.color})
+      }
+      upperPoints = []
+      lowerPoints = []
+    }
+    for (let index = 0; index < categoryCount; index++) {
+      const value = series.values[index]
+      if (value == null) {
+        flushArea()
+        continue
+      }
+      const stackedSegment = stackedSegmentFor(seriesIndex)?.[index]
+      const centerX = plot.left + plot.width * (index + 0.5) / categoryCount
+      const centerY = plot.top + plot.height * (index + 0.5) / categoryCount
+      upperPoints.push(horizontalValueAxis
+        ? {x: seriesValuePosition(series, stackedSegment?.end ?? value), y: centerY}
+        : {x: centerX, y: seriesValuePosition(series, stackedSegment?.end ?? value)})
+      lowerPoints.push(horizontalValueAxis
+        ? {x: seriesValuePosition(series, stackedSegment?.start ?? lowerValue), y: centerY}
+        : {x: centerX, y: seriesValuePosition(series, stackedSegment?.start ?? lowerValue)})
+    }
+    flushArea()
+  })
   const formatValue = (value: number, series: PptxChart['series'][number], index: number) => formatChartNumber(value, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat)
   const labelPosition = (series: PptxChart['series'][number], index: number, fallback: PptxChartDataLabelPosition) => series.dataLabelPositionOverrides[index] ?? series.dataLabelPosition ?? chart.dataLabelPosition ?? fallback
   const pushDataLabel = (text: string, x: number, y: number, anchor: string) => dataLabels.push({ text, lines: text.split(/\r?\n/), x, y, anchor })
-  const formatDataLabel = (series: PptxChart['series'][number], index: number, value: number, category: string, total?: number) => {
+  const formatDataLabel = (series: PptxChart['series'][number], index: number, value: number, category: string, total?: number, bubbleSize?: number) => {
     const showValue = series.valueLabelOverrides[index] ?? series.showValueLabels
     const showCategory = series.categoryNameLabelOverrides[index] ?? series.showCategoryNameLabels
     const showSeries = series.seriesNameLabelOverrides[index] ?? series.showSeriesNameLabels
     const isPieLike = chart.type === 'pie' || chart.type === 'doughnut'
     const showPercent = isPieLike && (series.percentLabelOverrides[index] ?? series.showPercentLabels)
+    const showBubbleSize = bubble && bubbleSize !== undefined && (series.bubbleSizeLabelOverrides[index] ?? series.showBubbleSizeLabels)
     const parts = [
       showValue ? formatValue(value, series, index) : undefined,
       showCategory ? category : undefined,
       showSeries ? series.name : undefined,
       showPercent && total ? formatChartNumber(value / total, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat ?? '0.0%') : undefined,
+      showBubbleSize ? formatValue(bubbleSize, series, index) : undefined,
     ].filter((part): part is string => part !== undefined)
     if (!parts.length) return undefined
     const defaultSeparator = isPieLike && !showValue && showCategory && !showSeries && showPercent ? '\n' : ','
     return parts.join(series.labelSeparatorOverrides[index] ?? series.labelSeparator ?? chart.labelSeparator ?? defaultSeparator)
   }
-
-  if (chart.type === 'pie' || chart.type === 'doughnut') {
-    const series = chart.series[0]!
+  if (stock) {
+    const highSeries = chart.series[stock.highIndex]
+    const lowSeries = chart.series[stock.lowIndex]
+    const closeSeries = chart.series[stock.closeIndex]
+    const openSeries = stock.openIndex === undefined ? undefined : chart.series[stock.openIndex]
+    const highLowSegments: string[] = []
+    const dropSegments: string[] = []
+    const priceIndices = [stock.openIndex, stock.highIndex, stock.lowIndex, stock.closeIndex].filter((index): index is number => index !== undefined)
+    const bodyWidth = plot.width / categoryCount * 100 / (100 + stock.gapWidth)
+    const volumeSeries = stock.volumeGapWidth === undefined || stock.volumeIndex === undefined ? undefined : chart.series[stock.volumeIndex]
+    if (volumeSeries) {
+      const {minimum: volumeMinimum, upper: volumeUpper} = axisBoundsForSeries(volumeSeries)
+      const zeroY = seriesValuePosition(volumeSeries, clamp(0, volumeMinimum, volumeUpper))
+      const volumeWidth = plot.width / categoryCount * 100 / (100 + (stock.volumeGapWidth ?? 150))
+      for (let index = 0; index < chart.categories.length; index++) {
+        const value = volumeSeries.values[index]
+        if (value == null) continue
+        const x = plot.left + plot.width * (index + 0.5) / categoryCount
+        const valueY = seriesValuePosition(volumeSeries, value)
+        const top = Math.min(zeroY, valueY)
+        const bottom = Math.max(zeroY, valueY)
+        bars.push({x: x - volumeWidth / 2, y: top, width: volumeWidth, height: Math.max(1, bottom - top), color: volumeSeries.pointColors[index] || volumeSeries.color})
+        const label = formatDataLabel(volumeSeries, index, value, chart.categories[index] || String(index + 1))
+        if (label !== undefined) {
+          const position = labelPosition(volumeSeries, index, 'outEnd')
+          let labelX = x
+          let labelY = value >= 0 ? top - 8 : bottom + 20
+          let anchor = 'middle'
+          if (position === 'ctr') labelY = (zeroY + valueY) / 2 + 6
+          else if (position === 'inBase') labelY = value >= 0 ? zeroY - 8 : zeroY + 18
+          else if (position === 'inEnd') labelY = value >= 0 ? valueY + 18 : valueY - 4
+          else if (position === 'b') labelY = bottom + 20
+          else if (position === 'l') { labelX -= volumeWidth / 2 + 8; labelY = (zeroY + valueY) / 2 + 6; anchor = 'end' }
+          else if (position === 'r') { labelX += volumeWidth / 2 + 8; labelY = (zeroY + valueY) / 2 + 6; anchor = 'start' }
+          pushDataLabel(label, labelX, labelY, anchor)
+        }
+      }
+    }
+    for (let index = 0; index < chart.categories.length; index++) {
+      const highValue = highSeries?.values[index]
+      const lowValue = lowSeries?.values[index]
+      const closeValue = closeSeries?.values[index]
+      const openValue = openSeries?.values[index]
+      if (highValue == null || lowValue == null || closeValue == null || (openSeries && openValue == null)) continue
+      const x = plot.left + plot.width * (index + 0.5) / categoryCount
+      const highY = valuePosition(Math.max(highValue, lowValue))
+      const lowY = valuePosition(Math.min(highValue, lowValue))
+      const closeY = valuePosition(closeValue)
+      if (stock.showHighLowLines) highLowSegments.push(`M ${x} ${highY} L ${x} ${lowY}`)
+      if (openSeries && openValue != null) {
+        const openY = valuePosition(openValue)
+        if (stock.showUpDownBars) {
+          const color = closeValue >= openValue ? stock.upColor : stock.downColor
+          bars.push({x: x - bodyWidth / 2, y: Math.min(openY, closeY), width: bodyWidth, height: Math.max(1, Math.abs(closeY - openY)), color})
+        }
+        highLowSegments.push(`M ${x - 7} ${openY} L ${x} ${openY}`, `M ${x} ${closeY} L ${x + 7} ${closeY}`)
+      } else {
+        highLowSegments.push(`M ${x - 7} ${closeY} L ${x + 7} ${closeY}`)
+      }
+      if (stock.showDropLines) dropSegments.push(`M ${x} ${closeY} L ${x} ${categoryAxisCrossingCoordinate}`)
+      const label = formatDataLabel(closeSeries!, index, closeValue, chart.categories[index] || String(index + 1))
+      if (label !== undefined) {
+        const position = labelPosition(closeSeries!, index, 'r')
+        const labelX = position === 'l' ? x - 10 : position === 'r' ? x + 10 : x
+        const labelY = position === 't' ? closeY - 12 : position === 'b' ? closeY + 20 : closeY + 5
+        pushDataLabel(label, labelX, labelY, position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle')
+      }
+    }
+    if (highLowSegments.length) lines.push({d: highLowSegments.join(' '), color: stock.highLowColor, width: 2})
+    if (dropSegments.length) lines.push({d: dropSegments.join(' '), color: '#94a3b8', width: 1})
+    if (!chart.categoryAxisDeleted && categoryTickLabelPosition !== 'none') {
+      const categoryLabelY = categoryTickLabelPosition === 'high'
+        ? chart.valueAxis?.reverse ? plot.top + plot.height + 25 : plot.top - 10
+        : categoryTickLabelPosition === 'low'
+          ? chart.valueAxis?.reverse ? plot.top - 10 : plot.top + plot.height + 25
+          : categoryAxisSide === 't' ? categoryAxisCrossingCoordinate - 10 : categoryAxisCrossingCoordinate + 25
+      chart.categories.forEach((text, index) => categories.push({text, x: plot.left + plot.width * (index + 0.5) / categoryCount, y: categoryLabelY, anchor: 'middle'}))
+    }
+    for (const index of [...(volumeSeries && stock.volumeIndex !== undefined ? [stock.volumeIndex] : []), ...priceIndices]) {
+      const series = chart.series[index]
+      if (series && !chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({text: series.name, x: 88 + legend.length * 220, y: 530, color: series.color})
+    }
+  } else if (chart.type === 'area' && !combo) {
+    chart.series.forEach((series, seriesIndex) => {
+      let upperPoints: Array<{x: number; y: number}> = []
+      let lowerPoints: Array<{x: number; y: number}> = []
+      const flushArea = () => {
+        if (upperPoints.length > 1) {
+          const points = [...upperPoints, ...lowerPoints.reverse()]
+          areas.push({d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`, color: series.color})
+        }
+        upperPoints = []
+        lowerPoints = []
+      }
+      for (let index = 0; index < categoryCount; index++) {
+        const value = series.values[index]
+        if (value === null || value === undefined) {
+          flushArea()
+          continue
+        }
+        const x = plot.left + plot.width * (index + 0.5) / categoryCount
+        const segment = stacking?.segments[seriesIndex]?.[index]
+        const upperValue = stacking ? segment?.end ?? value : value
+        const lowerValue = stacking ? segment?.start ?? 0 : categoryAxisCrossingValue
+        const upperY = valuePosition(upperValue)
+        const lowerY = valuePosition(lowerValue)
+        upperPoints.push({x, y: upperY})
+        lowerPoints.push({x, y: lowerY})
+        const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
+        if (label !== undefined) {
+          const position = labelPosition(series, index, stacking ? 'ctr' : 'outEnd')
+          const labelY = position === 'ctr' ? (upperY + lowerY) / 2 + 5
+            : position === 'inBase' ? lowerY - 8
+              : position === 'inEnd' ? upperY + 18
+                : position === 'b' ? Math.max(upperY, lowerY) + 20
+                  : Math.min(upperY, lowerY) - 8
+          pushDataLabel(label, x, labelY, 'middle')
+        }
+      }
+      flushArea()
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({text: series.name, x: 88 + (legend.length % 4) * 220, y: 530 + Math.floor(legend.length / 4) * 22, color: series.color})
+    })
+  }
+  else if (bubble) {
+    const sizes = chart.series.flatMap(series => (series.bubbleSizes || []).filter((size): size is number => size !== null && size !== undefined && size !== 0 && (size > 0 || chart.showNegativeBubbles === true)))
+    const maximumSize = sizes.reduce((maximum, size) => Math.max(maximum, Math.abs(size)), 0)
+    // ponytail: normalized bubbles top out at 24% of the plot's short side; native-size calibration needs reference screenshots.
+    const maximumRadius = Math.min(plot.width, plot.height) * 0.08 * (chart.bubbleScale ?? 100) / 100
+    chart.series.forEach((series, seriesIndex) => {
+      const pointCount = Math.max(series.xValues?.length || 0, series.values.length, series.bubbleSizes?.length || 0)
+      for (let index = 0; index < pointCount; index++) {
+        const xValue = series.xValues?.[index]
+        const yValue = series.values[index]
+        const bubbleSize = series.bubbleSizes?.[index]
+        if (xValue == null || yValue == null || bubbleSize == null || bubbleSize === 0 || (bubbleSize < 0 && chart.showNegativeBubbles !== true) || maximumSize <= 0) continue
+        const fraction = Math.abs(bubbleSize) / maximumSize
+        const radius = maximumRadius * (chart.bubbleSizeRepresents === 'w' ? fraction : Math.sqrt(fraction))
+        if (radius <= 0) continue
+        const x = xPosition(xValue)
+        const y = valuePosition(yValue)
+        const color = series.pointColors[index] || (chart.bubbleVaryColors ? chart.palette[index % chart.palette.length] || series.color : series.color)
+        markers.push({ x, y, color, radius })
+        const label = formatDataLabel(series, index, yValue, String(xValue), undefined, bubbleSize)
+        if (label !== undefined) {
+          const labelType = labelPosition(series, index, 'r')
+          const labelX = labelType === 'l' ? x - radius - 4 : labelType === 'r' ? x + radius + 4 : x
+          const labelY = labelType === 't' ? y - radius - 4 : labelType === 'b' ? y + radius + 18 : y + 5
+          pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle')
+        }
+      }
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, color: series.color })
+    })
+  } else if (scatter) {
+    chart.series.forEach((series, seriesIndex) => {
+      let path = ''
+      let segmentOpen = false
+      const pointCount = Math.max(series.xValues?.length || 0, series.values.length)
+      for (let index = 0; index < pointCount; index++) {
+        const xValue = series.xValues?.[index]
+        const yValue = series.values[index]
+        if (xValue == null || yValue == null) {
+          segmentOpen = false
+          continue
+        }
+        const x = xPosition(xValue)
+        const y = valuePosition(yValue)
+        if (series.scatterShowLine) {
+          path += `${segmentOpen ? ' L' : ' M'} ${x} ${y}`
+          segmentOpen = true
+        }
+        if (series.scatterShowMarker) markers.push({ x, y, color: series.color })
+        const label = formatDataLabel(series, index, yValue, String(xValue))
+        if (label !== undefined) {
+          const labelType = labelPosition(series, index, 'r')
+          const labelX = labelType === 'l' ? x - 10 : labelType === 'r' ? x + 10 : x
+          const labelY = labelType === 't' ? y - 12 : labelType === 'b' ? y + 24 : y + 5
+          pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle')
+        }
+      }
+      if (path) lines.push({ d: path, color: series.color })
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, color: series.color })
+    })
+  } else if (chart.type === 'pie' || chart.type === 'doughnut') {
     const centerX = plot.left + plot.width / 2
     const centerY = plot.top + plot.height / 2
     const radius = Math.min(plot.width, plot.height) * 0.47
-    const innerRadius = chart.type === 'doughnut' ? radius * (chart.holeSize ?? 50) / 100 : 0
-    const points = chart.categories.flatMap((text, index) => {
-      const value = series.values[index]
-      return value != null && value > 0 ? [{ text, index, value, color: series.pointColors[index] || chart.palette[index % chart.palette.length] || series.color }] : []
-    })
-    const total = points.reduce((sum, point) => sum + point.value, 0)
-    let angle = -Math.PI / 2 + (chart.firstSliceAngle ?? 0) * Math.PI / 180
-    for (const point of points) {
-      const sweep = point.value / total * Math.PI * 2
-      const startX = centerX + Math.cos(angle) * radius
-      const startY = centerY + Math.sin(angle) * radius
-      const endAngle = angle + sweep
-      const endX = centerX + Math.cos(endAngle) * radius
-      const endY = centerY + Math.sin(endAngle) * radius
-      const endInnerX = centerX + Math.cos(endAngle) * innerRadius
-      const endInnerY = centerY + Math.sin(endAngle) * innerRadius
-      const startInnerX = centerX + Math.cos(angle) * innerRadius
-      const startInnerY = centerY + Math.sin(angle) * innerRadius
-      const fullCircle = sweep >= Math.PI * 2 - 0.0001
-      const d = innerRadius > 0
-        ? fullCircle
-          ? `M ${startX} ${startY} A ${radius} ${radius} 0 1 1 ${centerX - Math.cos(angle) * radius} ${centerY - Math.sin(angle) * radius} A ${radius} ${radius} 0 1 1 ${startX} ${startY} L ${startInnerX} ${startInnerY} A ${innerRadius} ${innerRadius} 0 1 0 ${centerX - Math.cos(angle) * innerRadius} ${centerY - Math.sin(angle) * innerRadius} A ${innerRadius} ${innerRadius} 0 1 0 ${startInnerX} ${startInnerY} Z`
-          : `M ${startX} ${startY} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} L ${endInnerX} ${endInnerY} A ${innerRadius} ${innerRadius} 0 ${sweep > Math.PI ? 1 : 0} 0 ${startInnerX} ${startInnerY} Z`
-        : fullCircle
-          ? `M ${centerX} ${centerY} L ${startX} ${startY} A ${radius} ${radius} 0 1 1 ${centerX - Math.cos(angle) * radius} ${centerY - Math.sin(angle) * radius} A ${radius} ${radius} 0 1 1 ${startX} ${startY} Z`
-          : `M ${centerX} ${centerY} L ${startX} ${startY} A ${radius} ${radius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`
-      slices.push({ d, color: point.color })
-      const label = formatDataLabel(series, point.index, point.value, point.text, total)
-      if (label !== undefined) {
-        const labelAngle = angle + sweep / 2
-        const position = labelPosition(series, point.index, 'ctr')
-        const labelRadius = chart.type === 'doughnut'
-          ? position === 'outEnd' ? radius * 1.12
-            : position === 'inEnd' ? innerRadius + (radius - innerRadius) * 0.82
-              : position === 'inBase' ? innerRadius + (radius - innerRadius) * 0.18
-                : (radius + innerRadius) / 2
-          : radius * (position === 'outEnd' ? 1.12 : position === 'inEnd' ? 0.82 : position === 'inBase' ? 0.24 : position === 'bestFit' ? 0.62 : 0.68)
-        const x = position === 'l' ? centerX - radius * 0.75 : position === 'r' ? centerX + radius * 0.75 : centerX + Math.cos(labelAngle) * labelRadius
-        const y = position === 't' ? centerY - radius * 0.78 : position === 'b' ? centerY + radius * 0.78 : centerY + Math.sin(labelAngle) * labelRadius + 6
-        const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
-        pushDataLabel(label, x, y, anchor)
+    const doughnut = chart.type === 'doughnut'
+    const baseInnerRadius = doughnut ? radius * (chart.holeSize ?? 50) / 100 : 0
+    const ringSeries = doughnut ? chart.series : chart.series.slice(0, 1)
+    const ringWidth = doughnut ? (radius - baseInnerRadius) / Math.max(ringSeries.length, 1) : radius
+    ringSeries.forEach((series, seriesIndex) => {
+      const innerRadius = doughnut ? baseInnerRadius + ringWidth * seriesIndex : 0
+      const outerRadius = doughnut ? innerRadius + ringWidth : radius
+      const points = chart.categories.flatMap((text, index) => {
+        const value = series.values[index]
+        return value != null && value > 0 ? [{ text, index, value, color: series.pointColors[index] || chart.palette[index % chart.palette.length] || series.color }] : []
+      })
+      const total = points.reduce((sum, point) => sum + point.value, 0)
+      let angle = -Math.PI / 2 + (chart.firstSliceAngle ?? 0) * Math.PI / 180
+      for (const point of points) {
+        const sweep = point.value / total * Math.PI * 2
+        const startX = centerX + Math.cos(angle) * outerRadius
+        const startY = centerY + Math.sin(angle) * outerRadius
+        const endAngle = angle + sweep
+        const endX = centerX + Math.cos(endAngle) * outerRadius
+        const endY = centerY + Math.sin(endAngle) * outerRadius
+        const endInnerX = centerX + Math.cos(endAngle) * innerRadius
+        const endInnerY = centerY + Math.sin(endAngle) * innerRadius
+        const startInnerX = centerX + Math.cos(angle) * innerRadius
+        const startInnerY = centerY + Math.sin(angle) * innerRadius
+        const fullCircle = sweep >= Math.PI * 2 - 0.0001
+        const d = innerRadius > 0
+          ? fullCircle
+            ? `M ${startX} ${startY} A ${outerRadius} ${outerRadius} 0 1 1 ${centerX - Math.cos(angle) * outerRadius} ${centerY - Math.sin(angle) * outerRadius} A ${outerRadius} ${outerRadius} 0 1 1 ${startX} ${startY} L ${startInnerX} ${startInnerY} A ${innerRadius} ${innerRadius} 0 1 0 ${centerX - Math.cos(angle) * innerRadius} ${centerY - Math.sin(angle) * innerRadius} A ${innerRadius} ${innerRadius} 0 1 0 ${startInnerX} ${startInnerY} Z`
+            : `M ${startX} ${startY} A ${outerRadius} ${outerRadius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} L ${endInnerX} ${endInnerY} A ${innerRadius} ${innerRadius} 0 ${sweep > Math.PI ? 1 : 0} 0 ${startInnerX} ${startInnerY} Z`
+          : fullCircle
+            ? `M ${centerX} ${centerY} L ${startX} ${startY} A ${outerRadius} ${outerRadius} 0 1 1 ${centerX - Math.cos(angle) * outerRadius} ${centerY - Math.sin(angle) * outerRadius} A ${outerRadius} ${outerRadius} 0 1 1 ${startX} ${startY} Z`
+            : `M ${centerX} ${centerY} L ${startX} ${startY} A ${outerRadius} ${outerRadius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`
+        slices.push({ d, color: point.color })
+        const label = formatDataLabel(series, point.index, point.value, point.text, total)
+        if (label !== undefined) {
+          const labelAngle = angle + sweep / 2
+          const position = labelPosition(series, point.index, 'ctr')
+          const labelRadius = doughnut
+            ? position === 'outEnd' ? outerRadius * 1.12
+              : position === 'inEnd' ? innerRadius + ringWidth * 0.82
+                : position === 'inBase' ? innerRadius + ringWidth * 0.18
+                  : (outerRadius + innerRadius) / 2
+            : radius * (position === 'outEnd' ? 1.12 : position === 'inEnd' ? 0.82 : position === 'inBase' ? 0.24 : position === 'bestFit' ? 0.62 : 0.68)
+          const x = position === 'l' ? centerX - radius * 0.75 : position === 'r' ? centerX + radius * 0.75 : centerX + Math.cos(labelAngle) * labelRadius
+          const y = position === 't' ? centerY - radius * 0.78 : position === 'b' ? centerY + radius * 0.78 : centerY + Math.sin(labelAngle) * labelRadius + 6
+          const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
+          pushDataLabel(label, x, y, anchor)
+        }
+        angle = endAngle
       }
-      angle = endAngle
+      if (seriesIndex === 0) points.slice(0, 12).forEach(point => {
+        if (chart.legend?.hiddenEntries?.includes(point.index)) return
+        legend.push({ text: point.text, x: 590, y: 105 + legend.length * 28, color: point.color })
+      })
+    })
+  } else if (radar) {
+    const radialValues = ticks.map(tick => axisFraction(tick.value)).filter(fraction => fraction > 0.0001 && fraction <= 1.0001)
+    if (!chart.valueAxis?.deleted && chart.valueAxis?.majorGridlines) {
+      for (const fraction of [...new Set([...radialValues, 1])].sort((a, b) => a - b)) {
+        const points = chart.categories.map((_category, index) => radarPoint(index, fraction))
+        radarGrid.push({ d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z` })
+      }
     }
-    points.slice(0, 12).forEach(point => {
-      if (chart.legend?.hiddenEntries?.includes(point.index)) return
-      legend.push({ text: point.text, x: 590, y: 105 + legend.length * 28, color: point.color })
+    if (!chart.categoryAxisDeleted && chart.categoryAxisMajorGridlines) {
+      chart.categories.forEach((_category, index) => {
+        const point = radarPoint(index)
+        radarSpokes.push({ x1: radarCenterX, y1: radarCenterY, x2: point.x, y2: point.y })
+      })
+    }
+    if (!chart.categoryAxisDeleted && categoryTickLabelPosition !== 'none') {
+      chart.categories.forEach((text, index) => {
+        const point = radarPoint(index, 1, 22)
+        const horizontal = Math.cos(point.angle)
+        categories.push({
+          text,
+          x: point.x,
+          y: point.y + (Math.sin(point.angle) > 0.55 ? 16 : Math.sin(point.angle) < -0.55 ? -8 : 5),
+          anchor: horizontal > 0.25 ? 'start' : horizontal < -0.25 ? 'end' : 'middle',
+        })
+      })
+    }
+    chart.series.forEach(series => {
+      const points = chart.categories.map((_category, index) => {
+        const value = series.values[index]
+        return value == null ? null : radarPoint(index, axisFraction(value))
+      })
+      const complete = points.length >= 3 && points.every((point): point is NonNullable<typeof point> => point !== null)
+      if (chart.radarStyle === 'filled' && complete) {
+        areas.push({
+          d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`,
+          color: series.color,
+          opacity: 0.22,
+        })
+      }
+      if (series.radarShowLine !== false) {
+        const path = complete
+          ? `${points.map((point, index) => `${index ? 'L' : 'M'} ${point!.x} ${point!.y}`).join(' ')} Z`
+          : points.flatMap((point, index) => {
+              const next = points[(index + 1) % points.length]
+              return point && next ? [`M ${point.x} ${point.y} L ${next.x} ${next.y}`] : []
+            }).join(' ')
+        if (path) lines.push({ d: path, color: series.color })
+      }
+      points.forEach((point, index) => {
+        if (!point) return
+        if (series.radarShowMarker) markers.push({ x: point.x, y: point.y, color: series.color, radius: series.radarMarkerSize ?? 5 })
+        const value = series.values[index]
+        if (value == null) return
+        const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
+        if (label === undefined) return
+        const position = labelPosition(series, index, 'outEnd')
+        const offset = position === 'inBase' || position === 'inEnd' || position === 'ctr' ? -10 : 14
+        const x = position === 'l' ? point.x - 12 : position === 'r' ? point.x + 12 : point.x + Math.cos(point.angle) * offset
+        const y = position === 't' ? point.y - 14 : position === 'b' ? point.y + 22 : point.y + Math.sin(point.angle) * offset + 6
+        const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : Math.cos(point.angle) > 0.25 ? 'start' : Math.cos(point.angle) < -0.25 ? 'end' : 'middle'
+        pushDataLabel(label, x, y, anchor)
+      })
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + legend.length * 220, y: 530, color: series.color })
     })
   } else {
-    const seriesCount = Math.max(chart.series.length, 1)
+    const barSeriesByGroup = new Map<number, number[]>()
+    chart.series.forEach((series, seriesIndex) => {
+      if (seriesType(series) !== 'bar') return
+      const groupIndex = series.chartGroupIndex ?? 0
+      barSeriesByGroup.set(groupIndex, [...(barSeriesByGroup.get(groupIndex) || []), seriesIndex])
+    })
     for (let index = 0; index < categoryCount; index++) {
       const centerX = plot.left + plot.width * (index + 0.5) / categoryCount
       const centerY = plot.top + plot.height * (index + 0.5) / categoryCount
@@ -243,13 +710,31 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         const value = series.values[index]
         if (value === null || value === undefined) return
         const color = series.color
-        if (chart.type === 'line') {
-          const x = centerX
-          const y = valuePosition(value)
+        const kind = seriesType(series)
+        const stackedSegment = stackedSegmentFor(seriesIndex)?.[index]
+        const grouping = series.grouping || chart.grouping || 'clustered'
+        const isStacked = grouping !== 'clustered'
+        if (kind === 'line') {
+          const x = horizontalValueAxis ? seriesValuePosition(series, stackedSegment?.end ?? value) : centerX
+          const y = horizontalValueAxis ? centerY : seriesValuePosition(series, stackedSegment?.end ?? value)
           const previousValue = index > 0 ? series.values[index - 1] : null
-          const previous = previousValue == null ? undefined : ({ x: plot.left + plot.width * (index - 0.5) / categoryCount, y: valuePosition(previousValue) })
-          lines.push({ d: previous ? `M ${previous.x} ${previous.y} L ${x} ${y}` : `M ${x} ${y}`, color })
-          markers.push({ x, y, color })
+          const previousStackedSegment = stackedSegmentFor(seriesIndex)?.[index - 1]
+          const previous = previousValue == null ? undefined : horizontalValueAxis
+            ? {x: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue), y: plot.top + plot.height * (index - 0.5) / categoryCount}
+            : {x: plot.left + plot.width * (index - 0.5) / categoryCount, y: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue)}
+          if (series.lineShowLine !== false) lines.push({ d: previous ? `M ${previous.x} ${previous.y} L ${x} ${y}` : `M ${x} ${y}`, color })
+          if (series.lineShowMarker !== false) markers.push({ x, y, color })
+          const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
+          if (label !== undefined) {
+            const position = labelPosition(series, index, 't')
+            const labelX = position === 'l' ? x - 10 : position === 'r' ? x + 10 : x
+            const labelY = position === 'b' ? y + 24 : position === 'ctr' || position === 'inBase' || position === 'inEnd' ? y + 7 : y - 12
+            const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
+            pushDataLabel(label, labelX, labelY, anchor)
+          }
+        } else if (kind === 'area') {
+          const x = horizontalValueAxis ? seriesValuePosition(series, stackedSegment?.end ?? value) : centerX
+          const y = horizontalValueAxis ? centerY : seriesValuePosition(series, stackedSegment?.end ?? value)
           const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
           if (label !== undefined) {
             const position = labelPosition(series, index, 't')
@@ -259,23 +744,28 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
             pushDataLabel(label, labelX, labelY, anchor)
           }
         } else if (chart.direction === 'horizontal') {
+          const groupIndexes = barSeriesByGroup.get(series.chartGroupIndex ?? 0) || [seriesIndex]
+          const barOrdinal = groupIndexes.indexOf(seriesIndex)
+          const seriesCount = Math.max(groupIndexes.length, 1)
+          const {minimum: axisMinimum, upper: axisUpper} = axisBoundsForSeries(series)
           const groupHeight = plot.height / categoryCount * 0.72
-          const barHeight = groupHeight / seriesCount
-          const barY = centerY - groupHeight / 2 + seriesIndex * barHeight
-          const zeroX = plot.left + plot.width * axisFraction(Math.max(minimum, Math.min(upper, 0)))
-          const valueX = plot.left + plot.width * axisFraction(value)
-          bars.push({ x: Math.min(zeroX, valueX), y: barY, width: Math.max(1, Math.abs(valueX - zeroX)), height: barHeight * 0.86, color })
+          const barHeight = groupHeight / (isStacked ? 1 : seriesCount)
+          const barY = centerY - groupHeight / 2 + (isStacked ? 0 : barOrdinal * barHeight)
+          const zeroX = seriesValuePosition(series, Math.max(axisMinimum, Math.min(axisUpper, 0)))
+          const baseX = isStacked ? seriesValuePosition(series, stackedSegment?.start ?? 0) : zeroX
+          const valueX = seriesValuePosition(series, isStacked ? stackedSegment?.end ?? value : value)
+          bars.push({ x: Math.min(baseX, valueX), y: barY, width: Math.max(1, Math.abs(valueX - baseX)), height: barHeight * 0.86, color })
           const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
           if (label !== undefined) {
-            const position = labelPosition(series, index, 'outEnd')
+            const position = labelPosition(series, index, isStacked ? 'ctr' : 'outEnd')
             const direction = value >= 0 ? 1 : -1
-            const left = Math.min(zeroX, valueX)
-            const right = Math.max(zeroX, valueX)
+            const left = Math.min(baseX, valueX)
+            const right = Math.max(baseX, valueX)
             let labelX = valueX + direction * 8
             let labelY = barY + barHeight * 0.68
             let anchor = direction > 0 ? 'start' : 'end'
-            if (position === 'ctr') { labelX = (zeroX + valueX) / 2; anchor = 'middle' }
-            else if (position === 'inBase') { labelX = zeroX + direction * 20; anchor = direction > 0 ? 'start' : 'end' }
+            if (position === 'ctr') { labelX = (baseX + valueX) / 2; anchor = 'middle' }
+            else if (position === 'inBase') { labelX = baseX + direction * 20; anchor = direction > 0 ? 'start' : 'end' }
             else if (position === 'inEnd') { labelX = valueX - direction * 20; anchor = direction > 0 ? 'end' : 'start' }
             else if (position === 'l') { labelX = left - 8; anchor = 'end' }
             else if (position === 'r') { labelX = right + 8; anchor = 'start' }
@@ -284,26 +774,31 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
             pushDataLabel(label, labelX, labelY, anchor)
           }
         } else {
+          const groupIndexes = barSeriesByGroup.get(series.chartGroupIndex ?? 0) || [seriesIndex]
+          const barOrdinal = groupIndexes.indexOf(seriesIndex)
+          const seriesCount = Math.max(groupIndexes.length, 1)
+          const {minimum: axisMinimum, upper: axisUpper} = axisBoundsForSeries(series)
           const groupWidth = plot.width / categoryCount * 0.72
-          const barWidth = groupWidth / seriesCount
-          const zeroY = valuePosition(Math.max(minimum, Math.min(upper, 0)))
-          const valueY = valuePosition(value)
-          const barX = centerX - groupWidth / 2 + seriesIndex * barWidth
-          bars.push({ x: barX, y: Math.min(zeroY, valueY), width: barWidth * 0.86, height: Math.max(1, Math.abs(valueY - zeroY)), color })
+          const barWidth = groupWidth / (isStacked ? 1 : seriesCount)
+          const zeroY = seriesValuePosition(series, Math.max(axisMinimum, Math.min(axisUpper, 0)))
+          const baseY = isStacked ? seriesValuePosition(series, stackedSegment?.start ?? 0) : zeroY
+          const valueY = seriesValuePosition(series, isStacked ? stackedSegment?.end ?? value : value)
+          const barX = centerX - groupWidth / 2 + (isStacked ? 0 : barOrdinal * barWidth)
+          bars.push({ x: barX, y: Math.min(baseY, valueY), width: barWidth * 0.86, height: Math.max(1, Math.abs(valueY - baseY)), color })
           const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
           if (label !== undefined) {
-            const position = labelPosition(series, index, 'outEnd')
-            const top = Math.min(zeroY, valueY)
-            const bottom = Math.max(zeroY, valueY)
+            const position = labelPosition(series, index, isStacked ? 'ctr' : 'outEnd')
+            const top = Math.min(baseY, valueY)
+            const bottom = Math.max(baseY, valueY)
             let labelX = barX + barWidth * 0.43
             let labelY = value >= 0 ? top - 8 : bottom + 20
             let anchor = 'middle'
-            if (position === 'ctr') labelY = (zeroY + valueY) / 2 + 6
-            else if (position === 'inBase') labelY = value >= 0 ? zeroY - 8 : zeroY + 18
+            if (position === 'ctr') labelY = (baseY + valueY) / 2 + 6
+            else if (position === 'inBase') labelY = value >= 0 ? baseY - 8 : baseY + 18
             else if (position === 'inEnd') labelY = value >= 0 ? valueY + 18 : valueY - 4
             else if (position === 'b') labelY = bottom + 20
-            else if (position === 'l') { labelX = barX - 8; labelY = (zeroY + valueY) / 2 + 6; anchor = 'end' }
-            else if (position === 'r') { labelX = barX + barWidth * 0.86 + 8; labelY = (zeroY + valueY) / 2 + 6; anchor = 'start' }
+            else if (position === 'l') { labelX = barX - 8; labelY = (baseY + valueY) / 2 + 6; anchor = 'end' }
+            else if (position === 'r') { labelX = barX + barWidth * 0.86 + 8; labelY = (baseY + valueY) / 2 + 6; anchor = 'start' }
             pushDataLabel(label, labelX, labelY, anchor)
           }
         }
@@ -349,10 +844,12 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       height: Math.max(0, height),
     }
   }
-  const baseline = horizontalValueAxis
-    ? { x1: categoryAxisCrossingCoordinate, y1: plot.top, x2: categoryAxisCrossingCoordinate, y2: plot.top + plot.height }
-    : { x1: plot.left, y1: categoryAxisCrossingCoordinate, x2: plot.left + plot.width, y2: categoryAxisCrossingCoordinate }
-  return { plot, ticks, axisTicks, categories, bars, lines, markers, slices, legend, ...(legendClip ? { legendClip } : {}), dataLabels, baseline, valueAxisLine }
+  const baseline = xyChart
+    ? { x1: plot.left, y1: xyXAxisCrossingY, x2: plot.left + plot.width, y2: xyXAxisCrossingY }
+    : horizontalValueAxis
+      ? { x1: categoryAxisCrossingCoordinate, y1: plot.top, x2: categoryAxisCrossingCoordinate, y2: plot.top + plot.height }
+      : { x1: plot.left, y1: categoryAxisCrossingCoordinate, x2: plot.left + plot.width, y2: categoryAxisCrossingCoordinate }
+  return { plot, ticks, xTicks, axisTicks, secondaryValueAxes, radarGrid, radarSpokes, categories, bars, areas, lines, markers, slices, legend, ...(legendClip ? { legendClip } : {}), dataLabels, baseline, valueAxisLine: radar ? undefined : valueAxisLine }
 }
 
 const props = withDefaults(defineProps<{
@@ -2592,7 +3089,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         <span v-if="invalidMediaFadeIds.includes(element.id)" class="media-warning" role="status">Media fade duration exceeds the playable range; fades are ignored.</span>
         <span v-if="blockedMediaPlaybackIds.includes(element.id)" class="media-warning" role="status">The browser blocked automatic playback; use the media controls.</span>
       </div>
-      <svg v-else-if="element.kind === 'chart' && element.chart" class="slide-chart" viewBox="0 0 1000 600" preserveAspectRatio="none" role="img" :aria-label="element.chart.title || element.name">
+      <svg v-else-if="element.kind === 'chart' && element.chart" class="slide-chart" :data-chart-type="element.chart.type" :data-radar-style="element.chart.radarStyle" viewBox="0 0 1000 600" preserveAspectRatio="none" role="img" :aria-label="element.chart.title || element.name">
         <title>{{ element.chart.title || element.name }}</title>
         <defs>
           <clipPath :id="`chart-plot-${element.id}`"><polygon :points="`${chartPlot(element.id).left},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top + chartPlot(element.id).height} ${chartPlot(element.id).left},${chartPlot(element.id).top + chartPlot(element.id).height}`" /></clipPath>
@@ -2603,15 +3100,24 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
           <path v-for="(slice, index) in chartVisuals.get(element.id)?.slices" :key="index" :d="slice.d" :fill="slice.color" :fill-rule="element.chart.type === 'doughnut' ? 'evenodd' : 'nonzero'" stroke="white" stroke-width="2" />
         </g>
         <g v-else>
-          <template v-if="!element.chart.valueAxis?.deleted && element.chart.valueAxis?.majorGridlines"><line v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`grid-${index}`" class="chart-major-gridline" :x1="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left" :x2="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left + chartPlot(element.id).width" :y1="element.chart.direction === 'horizontal' ? chartPlot(element.id).top : tick.y" :y2="element.chart.direction === 'horizontal' ? chartPlot(element.id).top + chartPlot(element.id).height : tick.y" stroke="#d1d5db" stroke-width="1" /></template>
+          <template v-if="element.chart.type === 'radar'"><path v-for="(grid, index) in chartVisuals.get(element.id)?.radarGrid" :key="`radar-grid-${index}`" class="chart-major-gridline chart-radar-gridline" :d="grid.d" fill="none" stroke="#d1d5db" stroke-width="1" /><line v-for="(spoke, index) in chartVisuals.get(element.id)?.radarSpokes" :key="`radar-spoke-${index}`" class="chart-major-gridline chart-radar-spoke" v-bind="spoke" stroke="#d1d5db" stroke-width="1" /></template>
+          <template v-else>
+            <template v-if="!element.chart.valueAxis?.deleted && element.chart.valueAxis?.majorGridlines"><line v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`grid-${index}`" class="chart-major-gridline" :x1="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left" :x2="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left + chartPlot(element.id).width" :y1="element.chart.direction === 'horizontal' ? chartPlot(element.id).top : tick.y" :y2="element.chart.direction === 'horizontal' ? chartPlot(element.id).top + chartPlot(element.id).height : tick.y" stroke="#d1d5db" stroke-width="1" /></template>
+            <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-grid-${axis.id}`"><line v-if="!axis.deleted && axis.majorGridlines" v-for="(tick, index) in axis.ticks" :key="index" class="chart-major-gridline chart-secondary-gridline" :x1="axis.horizontal ? tick.x : chartPlot(element.id).left" :x2="axis.horizontal ? tick.x : chartPlot(element.id).left + chartPlot(element.id).width" :y1="axis.horizontal ? chartPlot(element.id).top : tick.y" :y2="axis.horizontal ? chartPlot(element.id).top + chartPlot(element.id).height : tick.y" stroke="#d1d5db" stroke-width="1" /></template>
+            <template v-if="['scatter', 'bubble'].includes(element.chart.type) && !element.chart.xAxis?.deleted && element.chart.xAxis?.majorGridlines"><line v-for="(tick, index) in chartVisuals.get(element.id)?.xTicks" :key="`x-grid-${index}`" class="chart-major-gridline chart-x-gridline" :x1="tick.x" :x2="tick.x" :y1="chartPlot(element.id).top" :y2="chartPlot(element.id).top + chartPlot(element.id).height" stroke="#d1d5db" stroke-width="1" /></template>
+          </template>
           <template v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-value-axis-label">{{ tick.label }}</text></template>
+          <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-tick-${axis.id}`"><template v-for="(tick, index) in axis.ticks" :key="index"><text v-if="tick.showLabel" :data-axis-id="axis.id" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-value-axis-label chart-secondary-value-axis-label">{{ tick.label }}</text></template></template>
+          <template v-for="(tick, index) in chartVisuals.get(element.id)?.xTicks" :key="`x-tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-x-value-axis-label">{{ tick.label }}</text></template>
           <line v-for="(tick, index) in chartVisuals.get(element.id)?.axisTicks" :key="`axis-tick-${index}`" class="chart-axis-tick" :data-axis="tick.axis" :x1="tick.x1" :y1="tick.y1" :x2="tick.x2" :y2="tick.y2" stroke="#64748b" stroke-width="1.5" />
           <g :clip-path="`url(#chart-plot-${element.id})`">
-            <line v-if="!element.chart.categoryAxisDeleted && chartVisuals.get(element.id)?.baseline" class="chart-category-axis-line" :x1="chartVisuals.get(element.id)?.baseline.x1" :y1="chartVisuals.get(element.id)?.baseline.y1" :x2="chartVisuals.get(element.id)?.baseline.x2" :y2="chartVisuals.get(element.id)?.baseline.y2" stroke="#64748b" stroke-width="2" />
+            <line v-if="element.chart.type !== 'radar' && (['scatter', 'bubble'].includes(element.chart.type) ? !element.chart.xAxis?.deleted : !element.chart.categoryAxisDeleted) && chartVisuals.get(element.id)?.baseline" class="chart-category-axis-line" :class="{ 'chart-x-axis-line': ['scatter', 'bubble'].includes(element.chart.type) }" :data-axis="['scatter', 'bubble'].includes(element.chart.type) ? 'xValue' : 'category'" :x1="chartVisuals.get(element.id)?.baseline.x1" :y1="chartVisuals.get(element.id)?.baseline.y1" :x2="chartVisuals.get(element.id)?.baseline.x2" :y2="chartVisuals.get(element.id)?.baseline.y2" stroke="#64748b" stroke-width="2" />
             <line v-if="!element.chart.valueAxis?.deleted && chartVisuals.get(element.id)?.valueAxisLine" class="chart-value-axis-line" :x1="chartVisuals.get(element.id)?.valueAxisLine?.x1" :y1="chartVisuals.get(element.id)?.valueAxisLine?.y1" :x2="chartVisuals.get(element.id)?.valueAxisLine?.x2" :y2="chartVisuals.get(element.id)?.valueAxisLine?.y2" stroke="#64748b" stroke-width="2" />
-            <rect v-for="(bar, index) in chartVisuals.get(element.id)?.bars" :key="`bar-${index}`" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" :fill="bar.color" />
-            <path v-for="(line, index) in chartVisuals.get(element.id)?.lines" :key="`line-${index}`" :d="line.d" fill="none" :stroke="line.color" stroke-width="4" stroke-linecap="round" />
-            <circle v-for="(marker, index) in chartVisuals.get(element.id)?.markers" :key="`marker-${index}`" :cx="marker.x" :cy="marker.y" r="5" :fill="marker.color" />
+            <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-axis-${axis.id}`"><line v-if="!axis.deleted" class="chart-value-axis-line chart-secondary-value-axis-line" :data-axis-id="axis.id" :x1="axis.line.x1" :y1="axis.line.y1" :x2="axis.line.x2" :y2="axis.line.y2" stroke="#64748b" stroke-width="2" /></template>
+            <path v-for="(area, index) in chartVisuals.get(element.id)?.areas" :key="`area-${index}`" class="chart-area" :d="area.d" :fill="area.color" :fill-opacity="area.opacity ?? 1" :stroke="area.color" stroke-width="1" />
+            <rect v-for="(bar, index) in chartVisuals.get(element.id)?.bars" :key="`bar-${index}`" class="chart-bar" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" :fill="bar.color" :stroke="bar.stroke" stroke-width="1" />
+            <path v-for="(line, index) in chartVisuals.get(element.id)?.lines" :key="`line-${index}`" class="chart-series-line" :d="line.d" fill="none" :stroke="line.color" :stroke-width="line.width ?? 4" stroke-linecap="round" />
+            <circle v-for="(marker, index) in chartVisuals.get(element.id)?.markers" :key="`marker-${index}`" class="chart-line-marker" :class="{ 'chart-bubble-marker': element.chart.type === 'bubble' }" :cx="marker.x" :cy="marker.y" :r="marker.radius ?? 5" :fill="marker.color" />
           </g>
           <text v-for="(label, index) in chartVisuals.get(element.id)?.categories" :key="`category-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" class="chart-label chart-category-label">{{ label.text }}</text>
         </g>

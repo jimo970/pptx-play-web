@@ -85,12 +85,27 @@ export interface PptxChartSeries {
     legendIndex: number
     name: string
     values: Array<number | null>
+    chartType?: 'bar' | 'line' | 'area' | 'stock'
+    chartGroupIndex?: number
+    grouping?: PptxChartGrouping
+    valueAxisId?: string
+    lineShowLine?: boolean
+    lineShowMarker?: boolean
+    xValues?: Array<number | null>
+    bubbleSizes?: Array<number | null>
+    scatterShowLine?: boolean
+    scatterShowMarker?: boolean
+    radarShowLine?: boolean
+    radarShowMarker?: boolean
+    radarMarkerSize?: number
     color: string
     pointColors: Record<number, string>
     showValueLabels: boolean
     valueLabelOverrides: Record<number, boolean>
     showPercentLabels: boolean
     percentLabelOverrides: Record<number, boolean>
+    showBubbleSizeLabels: boolean
+    bubbleSizeLabelOverrides: Record<number, boolean>
     showCategoryNameLabels: boolean
     categoryNameLabelOverrides: Record<number, boolean>
     showSeriesNameLabels: boolean
@@ -103,35 +118,98 @@ export interface PptxChartSeries {
     dataLabelPositionOverrides: Record<number, PptxChartDataLabelPosition>
 }
 
+export type PptxChartGrouping = 'clustered' | 'stacked' | 'percentStacked'
+
+export interface PptxChartAxis {
+    min: number
+    max: number
+    majorUnit?: number
+    numberFormat?: string
+    reverse?: boolean
+    deleted?: boolean
+    majorGridlines?: boolean
+    position?: PptxChartAxisPosition
+    crosses?: PptxChartAxisCrosses
+    crossesAt?: number
+    majorTickMark?: PptxChartTickMark
+    tickLabelPosition?: PptxChartTickLabelPosition
+}
+
+export interface PptxChartStackSegment {
+    start: number
+    end: number
+}
+
+export function getPptxChartStacking(series: PptxChartSeries[], grouping: Exclude<PptxChartGrouping, 'clustered'>) {
+    const categoryCount = Math.max(0, ...series.map(item => item.values.length))
+    const segments = series.map(item => Array<PptxChartStackSegment | undefined>(item.values.length))
+    let min = 0
+    let max = 0
+    for (let categoryIndex = 0; categoryIndex < categoryCount; categoryIndex++) {
+        const values = series.map(item => item.values[categoryIndex])
+        const positiveTotal = values.reduce<number>((total, value) => total + (value !== null && value !== undefined && value > 0 ? value : 0), 0)
+        const negativeTotal = values.reduce<number>((total, value) => total + (value !== null && value !== undefined && value < 0 ? -value : 0), 0)
+        let positive = 0
+        let negative = 0
+        values.forEach((value, seriesIndex) => {
+            if (value === null || value === undefined) return
+            const segmentValue = grouping === 'percentStacked' ? value / (value < 0 ? negativeTotal || 1 : positiveTotal || 1) : value
+            if (value < 0) {
+                const start = negative
+                negative += segmentValue
+                segments[seriesIndex]![categoryIndex] = {start, end: negative}
+            } else {
+                const start = positive
+                positive += segmentValue
+                segments[seriesIndex]![categoryIndex] = {start, end: positive}
+            }
+        })
+        min = Math.min(min, negative)
+        max = Math.max(max, positive)
+    }
+    return {segments, min, max}
+}
+
 export interface PptxChart {
-    type: 'bar' | 'line' | 'pie' | 'doughnut'
+    type: 'bar' | 'line' | 'area' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'stock'
     direction?: 'horizontal' | 'vertical'
+    grouping?: PptxChartGrouping
+    radarStyle?: 'standard' | 'marker' | 'filled'
+    stock?: {
+        highIndex: number
+        lowIndex: number
+        closeIndex: number
+        openIndex?: number
+        volumeIndex?: number
+        volumeGapWidth?: number
+        highLowColor: string
+        showHighLowLines: boolean
+        showDropLines: boolean
+        showUpDownBars: boolean
+        upColor: string
+        downColor: string
+        gapWidth: number
+    }
     holeSize?: number
     firstSliceAngle?: number
+    bubbleScale?: number
+    bubbleSizeRepresents?: 'area' | 'w'
+    showNegativeBubbles?: boolean
+    bubbleVaryColors?: boolean
     title?: string
     categories: string[]
     palette: string[]
     series: PptxChartSeries[]
+    valueAxes?: Array<{id: string; axis: PptxChartAxis; primary?: boolean}>
     labelSeparator?: string
     numberFormat?: string
-    valueAxis?: {
-        min: number
-        max: number
-        majorUnit?: number
-        numberFormat?: string
-        reverse?: boolean
-        deleted?: boolean
-        majorGridlines?: boolean
-        position?: PptxChartAxisPosition
-        crosses?: PptxChartAxisCrosses
-        crossesAt?: number
-        majorTickMark?: PptxChartTickMark
-        tickLabelPosition?: PptxChartTickLabelPosition
-    }
+    valueAxis?: PptxChartAxis
+    xAxis?: PptxChartAxis
     categoryAxisPosition?: PptxChartAxisPosition
     categoryAxisCrosses?: PptxChartAxisCrosses
     categoryAxisCrossesAt?: number
     categoryAxisDeleted?: boolean
+    categoryAxisMajorGridlines?: boolean
     categoryAxisMajorTickMark?: PptxChartTickMark
     categoryAxisTickLabelPosition?: PptxChartTickLabelPosition
     legend?: {
@@ -2017,7 +2095,7 @@ function chartCache(source: Element | undefined, warnings: Set<string>): Array<s
     })
     const declaredCount = numberAttr(child(cache, 'ptCount'), 'val', points.length)
     const count = Math.min(128, Math.max(declaredCount, ...points.map(point => point.index + 1), 0))
-    if (declaredCount > 128 || points.some(point => point.index >= 128)) warnings.add('Chart categories beyond 128 are omitted.')
+    if (declaredCount > 128 || points.some(point => point.index >= 128)) warnings.add('Chart data points beyond 128 are omitted.')
     const values: Array<string | null> = Array(count).fill(null)
     for (const point of points) {
         if (point.index < count) values[point.index] = point.value
@@ -2164,9 +2242,9 @@ function chartAxisCrossing(axis: Element | undefined, axisName: string, warnings
     return {...(crosses ? {crosses} : {}), crossesAt: parsedCrossesAt}
 }
 
-function chartValueAxis(axis: Element | undefined, warnings: Set<string>): (Omit<NonNullable<PptxChart['valueAxis']>, 'min' | 'max'> & {min?: number; max?: number}) | undefined {
+function chartValueAxis(axis: Element | undefined, warnings: Set<string>, axisName = 'value'): (Omit<PptxChartAxis, 'min' | 'max'> & {min?: number; max?: number}) | undefined {
     if (!axis) return undefined
-    const deleted = chartAxisDeleted(axis, 'value', warnings)
+    const deleted = chartAxisDeleted(axis, axisName, warnings)
     const scaling = child(axis, 'scaling')
     if (child(scaling, 'logBase')) {
         warnings.add('Logarithmic chart axes are rendered with linear SVG scales.')
@@ -2178,7 +2256,7 @@ function chartValueAxis(axis: Element | undefined, warnings: Set<string>): (Omit
         const raw = node.getAttribute('val')
         const value = raw?.trim() ? Number(raw) : NaN
         if (!Number.isFinite(value)) {
-            warnings.add('Invalid chart value-axis bounds are ignored.')
+            warnings.add(`Invalid chart ${axisName}-axis bounds are ignored.`)
             return undefined
         }
         return value
@@ -2186,20 +2264,20 @@ function chartValueAxis(axis: Element | undefined, warnings: Set<string>): (Omit
     let min = readBound('min')
     let max = readBound('max')
     if (min !== undefined && max !== undefined && min >= max) {
-        warnings.add('Invalid chart value-axis bounds are ignored.')
+        warnings.add(`Invalid chart ${axisName}-axis bounds are ignored.`)
         min = undefined
         max = undefined
     }
     const majorUnitNode = child(axis, 'majorUnit')
     const majorUnit = majorUnitNode ? Number(majorUnitNode.getAttribute('val')) : undefined
-    if (majorUnitNode && (!Number.isFinite(majorUnit) || majorUnit! <= 0)) warnings.add('Invalid chart value-axis major units are ignored.')
+    if (majorUnitNode && (!Number.isFinite(majorUnit) || majorUnit! <= 0)) warnings.add(`Invalid chart ${axisName}-axis major units are ignored.`)
     const numberFormatNode = child(axis, 'numFmt')
     const sourceLinked = (numberFormatNode?.getAttribute('sourceLinked') || '1').toLowerCase()
     const formatCode = numberFormatNode?.getAttribute('formatCode')?.trim()
-    const position = chartAxisPosition(axis, 'value', warnings)
-    const crossing = chartAxisCrossing(axis, 'value', warnings)
-    const majorTickMark = chartMajorTickMark(axis, 'value', warnings)
-    const tickLabelPosition = chartTickLabelPosition(axis, 'value', warnings)
+    const position = chartAxisPosition(axis, axisName, warnings)
+    const crossing = chartAxisCrossing(axis, axisName, warnings)
+    const majorTickMark = chartMajorTickMark(axis, axisName, warnings)
+    const tickLabelPosition = chartTickLabelPosition(axis, axisName, warnings)
     let numberFormat: string | undefined
     if (formatCode && ['0', 'false'].includes(sourceLinked)) {
         if (isSupportedChartNumberFormat(formatCode)) numberFormat = formatCode
@@ -2237,16 +2315,47 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     const xml = parseXml(await part.async('string'), relation.target)
     const chart = firstDescendant(xml.documentElement, 'chart')
     const plotArea = firstDescendant(chart, 'plotArea')
-    const supported = ['barChart', 'lineChart', 'pieChart', 'doughnutChart']
+    const supported = ['barChart', 'lineChart', 'areaChart', 'pieChart', 'doughnutChart', 'scatterChart', 'bubbleChart', 'radarChart', 'stockChart']
     const chartNodes = children(plotArea).filter(item => item.localName.endsWith('Chart'))
-    const typeNode = chartNodes.find(item => supported.includes(item.localName))
+    const chartAxisIds = (node: Element) => children(node, 'axId').map(item => item.getAttribute('val') || '').filter(Boolean)
+    const stockChartNode = chartNodes.find(item => item.localName === 'stockChart')
+    const volumeChartNode = chartNodes.find(item => item.localName === 'barChart')
+    const stockAxisIds = stockChartNode ? chartAxisIds(stockChartNode) : []
+    const volumeAxisIds = volumeChartNode ? chartAxisIds(volumeChartNode) : []
+    const stockVolumeMode = chartNodes.length === 2
+        && !!stockChartNode
+        && !!volumeChartNode
+        && children(volumeChartNode, 'ser').length === 1
+        && child(volumeChartNode, 'barDir')?.getAttribute('val') !== 'bar'
+        && stockAxisIds.length >= 2
+        && volumeAxisIds.length >= 2
+        && stockAxisIds[0] === volumeAxisIds[0]
+        && stockAxisIds[1] !== volumeAxisIds[1]
+    const typeNode = stockVolumeMode ? stockChartNode! : chartNodes.find(item => supported.includes(item.localName))
     if (!typeNode) {
         warnings.add(`The ${chartNodes[0]?.localName || 'unknown'} chart type is not rendered.`)
         return undefined
     }
-    if (chartNodes.length > 1) warnings.add('A mixed chart is simplified to its first supported chart type.')
-    const type = typeNode.localName === 'barChart' ? 'bar' : typeNode.localName === 'lineChart' ? 'line' : typeNode.localName === 'doughnutChart' ? 'doughnut' : 'pie'
+    const comboMode = stockVolumeMode || (chartNodes.length > 1 && chartNodes.every(item => ['barChart', 'lineChart', 'areaChart'].includes(item.localName)) && new Set(chartNodes.map(item => item.localName)).size > 1)
+    if (chartNodes.length > 1 && !comboMode) warnings.add('A mixed chart is simplified to its first supported chart type.')
+    const primaryGroupAxisIds = chartAxisIds(typeNode)
+    const primaryValueAxisId = primaryGroupAxisIds[1]
+    const type = typeNode.localName === 'barChart' ? 'bar' : typeNode.localName === 'lineChart' ? 'line' : typeNode.localName === 'areaChart' ? 'area' : typeNode.localName === 'doughnutChart' ? 'doughnut' : typeNode.localName === 'scatterChart' ? 'scatter' : typeNode.localName === 'bubbleChart' ? 'bubble' : typeNode.localName === 'radarChart' ? 'radar' : typeNode.localName === 'stockChart' ? 'stock' : 'pie'
     const isPieLike = type === 'pie' || type === 'doughnut'
+    const isScatter = type === 'scatter'
+    const isBubble = type === 'bubble'
+    const isRadar = type === 'radar'
+    const isStock = type === 'stock'
+    const isXYChart = isScatter || isBubble
+    const radarStyleValue = isRadar ? child(typeNode, 'radarStyle')?.getAttribute('val') || 'standard' : undefined
+    const radarStyle = radarStyleValue === 'marker' || radarStyleValue === 'filled' ? radarStyleValue : 'standard'
+    if (isRadar && radarStyle !== radarStyleValue) warnings.add('Unsupported radar style is rendered as standard lines.')
+    const scatterStyleValue = child(typeNode, 'scatterStyle')?.getAttribute('val') || 'lineMarker'
+    const scatterStyle = ['line', 'lineMarker', 'marker', 'smooth', 'smoothMarker'].includes(scatterStyleValue) ? scatterStyleValue : 'marker'
+    if (isScatter && scatterStyle !== scatterStyleValue) warnings.add('Unsupported scatter style is rendered as markers.')
+    if (isScatter && scatterStyle.startsWith('smooth')) warnings.add('Smoothed scatter lines are approximated with straight segments.')
+    const scatterShowLine = isScatter && ['line', 'lineMarker', 'smooth', 'smoothMarker'].includes(scatterStyle)
+    const scatterShowMarker = isScatter && ['marker', 'lineMarker', 'smoothMarker'].includes(scatterStyle)
     const firstSliceAngleNode = child(typeNode, 'firstSliceAng')
     const firstSliceAngleValue = firstSliceAngleNode ? Number(firstSliceAngleNode.getAttribute('val')) : 0
     const firstSliceAngle = Number.isInteger(firstSliceAngleValue) && firstSliceAngleValue >= 0 && firstSliceAngleValue <= 360 ? firstSliceAngleValue : 0
@@ -2255,9 +2364,24 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     const holeSizeValue = holeSizeNode ? Number(holeSizeNode.getAttribute('val')) : 50
     const holeSize = Number.isInteger(holeSizeValue) && holeSizeValue >= 10 && holeSizeValue <= 90 ? holeSizeValue : 50
     if (holeSizeNode && holeSize !== holeSizeValue) warnings.add('Invalid doughnut hole size uses the 50 percent default.')
-    const direction = type === 'bar' && child(typeNode, 'barDir')?.getAttribute('val') === 'bar' ? 'horizontal' : 'vertical'
-    const grouping = child(typeNode, 'grouping')?.getAttribute('val')
-    if (grouping && !['clustered', 'standard'].includes(grouping)) warnings.add('Stacked and percentage-stacked charts are rendered as grouped series.')
+    const bubbleScaleNode = isBubble ? child(typeNode, 'bubbleScale') : undefined
+    const bubbleScaleValue = bubbleScaleNode?.getAttribute('val') == null ? 100 : Number(bubbleScaleNode.getAttribute('val'))
+    const bubbleScale = Number.isInteger(bubbleScaleValue) && bubbleScaleValue >= 0 && bubbleScaleValue <= 300 ? bubbleScaleValue : 100
+    if (bubbleScaleNode && bubbleScale !== bubbleScaleValue) warnings.add('Invalid bubble scale uses the 100 percent default.')
+    const bubbleSizeRepresentsValue = isBubble ? child(typeNode, 'sizeRepresents')?.getAttribute('val') || 'area' : undefined
+    const bubbleSizeRepresents = bubbleSizeRepresentsValue === 'w' ? 'w' : 'area'
+    if (isBubble && bubbleSizeRepresentsValue !== 'area' && bubbleSizeRepresentsValue !== 'w') warnings.add('Unsupported bubble size representation uses area.')
+    const showNegativeBubbles = isBubble ? chartBoolean(child(typeNode, 'showNegBubbles')) ?? true : undefined
+    const bubbleVaryColors = isBubble ? chartBoolean(child(typeNode, 'varyColors')) ?? false : undefined
+    if (isBubble && chartBoolean(child(typeNode, 'bubble3D')) === true) warnings.add('Three-dimensional bubbles are approximated as flat circles.')
+    const directionNode = comboMode ? chartNodes.find(item => item.localName === 'barChart')! : typeNode
+    const direction = type === 'bar' || comboMode ? child(directionNode, 'barDir')?.getAttribute('val') === 'bar' ? 'horizontal' : 'vertical' : 'vertical'
+    const groupingValue = child(typeNode, 'grouping')?.getAttribute('val') || 'standard'
+    const stackedGrouping = groupingValue === 'stacked' || groupingValue === 'percentStacked'
+    const grouping: PptxChartGrouping = ['bar', 'line', 'area'].includes(type) && stackedGrouping ? groupingValue : 'clustered'
+    if (!['standard', 'clustered', 'stacked', 'percentStacked'].includes(groupingValue) || (!['bar', 'line', 'area'].includes(type) && stackedGrouping)) {
+        warnings.add('Unsupported chart grouping is rendered as grouped series.')
+    }
     if (!isPieLike && children(plotArea).some(item => ['catAx', 'dateAx', 'serAx'].includes(item.localName))) warnings.add('Chart date and series axes, category-axis number formatting, minor tick marks, and advanced styling are simplified.')
     const legendNode = child(chart, 'legend')
     const legendPositionValue = child(legendNode, 'legendPos')?.getAttribute('val') || 'r'
@@ -2310,16 +2434,31 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     const unsupportedLegendLayout = (legendLayout && !manualLayout) || (manualLayout && children(manualLayout).some(item => !['layoutTarget', 'x', 'xMode', 'y', 'yMode', 'w', 'wMode', 'h', 'hMode'].includes(item.localName)))
     if (legendNode && (unsupportedLegendLayout || children(legendNode).some(item => ['spPr', 'txPr'].includes(item.localName)) || legendEntries.some(entry => !!child(entry, 'txPr')))) warnings.add('Chart legend sizing, automatic layout, and styling are simplified.')
     const palette = ['accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6'].map(key => theme[key] || DEFAULT_THEME[key]!)
-    const seriesNodes = children(typeNode, 'ser')
+    const seriesDescriptors = (comboMode ? chartNodes : [typeNode]).flatMap((groupNode, chartGroupIndex) => children(groupNode, 'ser').map(node => ({
+        node,
+        groupNode,
+        chartGroupIndex,
+        chartType: groupNode.localName === 'lineChart' ? 'line' as const : groupNode.localName === 'areaChart' ? 'area' as const : groupNode.localName === 'stockChart' ? 'stock' as const : 'bar' as const,
+        grouping: child(groupNode, 'grouping')?.getAttribute('val') === 'stacked' ? 'stacked' as const : child(groupNode, 'grouping')?.getAttribute('val') === 'percentStacked' ? 'percentStacked' as const : 'clustered' as const,
+        valueAxisId: chartAxisIds(groupNode)[1] || primaryValueAxisId
+    })))
+    const seriesNodes = seriesDescriptors.map(item => item.node)
+    const parseNumericValues = (source: Element | undefined) => chartCache(source, warnings).map(value => {
+        if (value === null || value.trim() === '') return null
+        const number = Number(value)
+        if (!Number.isFinite(number)) warnings.add('Malformed chart data points are skipped.')
+        return Number.isFinite(number) ? number : null
+    })
     const chartDataLabels = child(typeNode, 'dLbls')
     const chartShowValueLabels = chartDataLabelFlag(chartDataLabels, 'showVal') ?? false
     const chartShowPercentLabels = chartDataLabelFlag(chartDataLabels, 'showPercent') ?? false
     const chartShowCategoryNameLabels = chartDataLabelFlag(chartDataLabels, 'showCatName') ?? false
     const chartShowSeriesNameLabels = chartDataLabelFlag(chartDataLabels, 'showSerName') ?? false
+    const chartShowBubbleSizeLabels = chartDataLabelFlag(chartDataLabels, 'showBubbleSize') ?? false
     const chartLabelSeparator = chartDataLabelSeparator(chartDataLabels)
     const chartValueFormat = chartNumberFormat(chartDataLabels)
     const chartLabelPosition = chartDataLabelPosition(chartDataLabels)
-    const dataLabelNodes = [chartDataLabels, ...seriesNodes.map(item => child(item, 'dLbls'))].filter((item): item is Element => !!item)
+    const dataLabelNodes = [...new Set([...(comboMode ? chartNodes.map(item => child(item, 'dLbls')) : [chartDataLabels]), ...seriesNodes.map(item => child(item, 'dLbls'))].filter((item): item is Element => !!item))]
     const pointDataLabels = dataLabelNodes.flatMap(item => children(item, 'dLbl'))
     const allDataLabelSettings = [...dataLabelNodes, ...pointDataLabels]
     const numberFormatNodes = allDataLabelSettings.map(item => child(item, 'numFmt')).filter((item): item is Element => !!item)
@@ -2329,9 +2468,7 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     if (numberFormatNodes.some(item => ['0', 'false'].includes((item.getAttribute('sourceLinked') || '1').toLowerCase()) && item.getAttribute('formatCode') && !isSupportedChartNumberFormat(item.getAttribute('formatCode')!.trim()))) {
         warnings.add('Unsupported chart number formats are rendered as raw values.')
     }
-    if (allDataLabelSettings.some(item => ['showLegendKey', 'showBubbleSize'].some(name => chartBoolean(child(item, name)) === true))) {
-        warnings.add('Chart legend-key and bubble-size data labels are not rendered.')
-    }
+    if (allDataLabelSettings.some(item => chartBoolean(child(item, 'showLegendKey')) === true)) warnings.add('Chart legend-key data labels are not rendered.')
     if (!isPieLike && allDataLabelSettings.some(item => chartBoolean(child(item, 'showPercent')) === true)) {
         warnings.add('Percentage data labels are rendered only for pie and doughnut charts.')
     }
@@ -2345,18 +2482,38 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
         warnings.add('Unsupported chart data label positions use the default placement.')
     if (allDataLabelSettings.some(item => ['txPr', 'spPr'].some(name => !!child(item, name)))) warnings.add('Chart data label styling is simplified.')
     if (seriesNodes.length > 12) warnings.add('Chart series beyond 12 are omitted.')
+    if (isBubble && seriesNodes.some(item => chartBoolean(child(item, 'bubble3D')) === true)) warnings.add('Three-dimensional bubbles are approximated as flat circles.')
+    if (isBubble) warnings.add('Bubble radii preserve relative area or width and c:bubbleScale, with the Office default pixel size approximated.')
     const series = seriesNodes
         .slice(0, 12)
         .map((item, index): PptxChartSeries => {
+            const descriptor = seriesDescriptors[index]!
             const sourceIndex = Number(child(item, 'idx')?.getAttribute('val'))
             const legendIndex = Number.isSafeInteger(sourceIndex) && sourceIndex >= 0 ? sourceIndex : index
             if (child(item, 'idx') && legendIndex !== sourceIndex) warnings.add('A chart series with an invalid index uses its source order.')
-            const values = chartCache(child(item, 'val'), warnings).map(value => {
-                if (value === null || value.trim() === '') return null
-                const number = Number(value)
-                if (!Number.isFinite(number)) warnings.add('Malformed chart data points are skipped.')
-                return Number.isFinite(number) ? number : null
-            })
+            const values = parseNumericValues(child(item, isXYChart ? 'yVal' : 'val'))
+            const xValues = isXYChart ? parseNumericValues(child(item, 'xVal')) : undefined
+            const bubbleSizes = isBubble ? parseNumericValues(child(item, 'bubbleSize')) : undefined
+            if (isBubble) {
+                const pointCount = Math.max(values.length, xValues?.length || 0, bubbleSizes?.length || 0)
+                if (Array.from({length: pointCount}, (_, pointIndex) => values[pointIndex] != null || xValues?.[pointIndex] != null || bubbleSizes?.[pointIndex] != null).some((hasData, pointIndex) => hasData && (values[pointIndex] == null || xValues?.[pointIndex] == null || bubbleSizes?.[pointIndex] == null))) {
+                    warnings.add('Bubble chart points without matching x, y, and size values are skipped.')
+                }
+            }
+            const marker = child(item, 'marker')
+            const markerSymbol = child(marker, 'symbol')?.getAttribute('val')
+            const groupDataLabels = child(descriptor.groupNode, 'dLbls')
+            const groupShowMarkers = chartBoolean(child(descriptor.groupNode, 'marker')) ?? true
+            if (isScatter && markerSymbol && !['auto', 'circle', 'none'].includes(markerSymbol)) warnings.add('Scatter marker symbols other than circles are approximated as circles.')
+            if (isRadar && markerSymbol && !['auto', 'circle', 'none'].includes(markerSymbol)) warnings.add('Radar marker symbols other than circles are approximated as circles.')
+            const radarMarkerSizeValue = child(marker, 'size')?.getAttribute('val')
+            const radarMarkerSize = radarMarkerSizeValue == null ? undefined : Number(radarMarkerSizeValue)
+            if (isRadar && radarMarkerSizeValue != null && (!Number.isInteger(radarMarkerSize) || radarMarkerSize! < 2 || radarMarkerSize! > 72)) warnings.add('An invalid radar marker size uses the default size.')
+            const lineSettings = child(child(item, 'spPr'), 'ln')
+            const seriesFillColor = chartFillColor(child(item, 'spPr'), theme, warnings, palette[index % palette.length]!)
+            const seriesColor = (isRadar || descriptor.chartType === 'line') && lineSettings ? chartFillColor(lineSettings, theme, warnings, seriesFillColor) : seriesFillColor
+            const smoothSetting = child(item, 'smooth')
+            if (isScatter && chartBoolean(smoothSetting) === true && !scatterStyle.startsWith('smooth')) warnings.add('Smoothed scatter series are approximated with straight segments.')
             const pointColors: Record<number, string> = {}
             for (const point of children(item, 'dPt')) {
                 const pointIndex = numberAttr(child(point, 'idx'), 'val', -1)
@@ -2370,46 +2527,160 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
                 firstDescendant(tx, 'v')?.textContent ||
                 `Series ${index + 1}`
             const dataLabels = child(item, 'dLbls')
-            const numberFormat = chartNumberFormat(dataLabels) ?? chartValueFormat
+            const groupShowValueLabels = chartDataLabelFlag(groupDataLabels, 'showVal') ?? (comboMode ? false : chartShowValueLabels)
+            const groupShowPercentLabels = chartDataLabelFlag(groupDataLabels, 'showPercent') ?? (comboMode ? false : chartShowPercentLabels)
+            const groupShowBubbleSizeLabels = chartDataLabelFlag(groupDataLabels, 'showBubbleSize') ?? (comboMode ? false : chartShowBubbleSizeLabels)
+            const groupShowCategoryNameLabels = chartDataLabelFlag(groupDataLabels, 'showCatName') ?? (comboMode ? false : chartShowCategoryNameLabels)
+            const groupShowSeriesNameLabels = chartDataLabelFlag(groupDataLabels, 'showSerName') ?? (comboMode ? false : chartShowSeriesNameLabels)
+            const groupLabelSeparator = chartDataLabelSeparator(groupDataLabels) ?? (comboMode ? undefined : chartLabelSeparator)
+            const groupValueFormat = chartNumberFormat(groupDataLabels) ?? (comboMode ? undefined : chartValueFormat)
+            const groupLabelPosition = chartDataLabelPosition(groupDataLabels) ?? (comboMode ? undefined : chartLabelPosition)
+            const numberFormat = chartNumberFormat(dataLabels) ?? groupValueFormat
             return {
                 legendIndex,
                 name,
                 values,
-                color: chartFillColor(child(item, 'spPr'), theme, warnings, palette[index % palette.length]!),
+                ...(comboMode ? {
+                    chartType: descriptor.chartType,
+                    chartGroupIndex: descriptor.chartGroupIndex,
+                    grouping: descriptor.grouping,
+                    ...(descriptor.valueAxisId ? {valueAxisId: descriptor.valueAxisId} : {}),
+                    ...(descriptor.chartType === 'line' ? {
+                        lineShowLine: lineSettings ? !child(lineSettings, 'noFill') : true,
+                        lineShowMarker: markerSymbol ? markerSymbol !== 'none' : groupShowMarkers
+                    } : {})
+                } : {}),
+                ...(xValues ? {xValues} : {}),
+                ...(bubbleSizes ? {bubbleSizes} : {}),
+                ...(isScatter ? {
+                    scatterShowLine: lineSettings ? !child(lineSettings, 'noFill') : scatterShowLine,
+                    scatterShowMarker: markerSymbol ? markerSymbol !== 'none' : scatterShowMarker
+                } : {}),
+                ...(isRadar ? {
+                    radarShowLine: lineSettings ? !child(lineSettings, 'noFill') : true,
+                    radarShowMarker: markerSymbol ? markerSymbol !== 'none' : radarStyle === 'marker',
+                    ...(radarMarkerSize !== undefined && Number.isInteger(radarMarkerSize) && radarMarkerSize >= 2 && radarMarkerSize <= 72 ? {radarMarkerSize} : {})
+                } : {}),
+                color: seriesColor,
                 pointColors,
-                showValueLabels: chartDataLabelFlag(dataLabels, 'showVal') ?? chartShowValueLabels,
-                valueLabelOverrides: {...chartDataLabelFlagOverrides(chartDataLabels, 'showVal'), ...chartDataLabelFlagOverrides(dataLabels, 'showVal')},
-                dataLabelPosition: chartDataLabelPosition(dataLabels) ?? chartLabelPosition,
-                dataLabelPositionOverrides: {...chartDataLabelPositionOverrides(chartDataLabels), ...chartDataLabelPositionOverrides(dataLabels)},
-                showPercentLabels: chartDataLabelFlag(dataLabels, 'showPercent') ?? chartShowPercentLabels,
-                percentLabelOverrides: {...chartDataLabelFlagOverrides(chartDataLabels, 'showPercent'), ...chartDataLabelFlagOverrides(dataLabels, 'showPercent')},
-                showCategoryNameLabels: chartDataLabelFlag(dataLabels, 'showCatName') ?? chartShowCategoryNameLabels,
-                categoryNameLabelOverrides: {...chartDataLabelFlagOverrides(chartDataLabels, 'showCatName'), ...chartDataLabelFlagOverrides(dataLabels, 'showCatName')},
-                showSeriesNameLabels: chartDataLabelFlag(dataLabels, 'showSerName') ?? chartShowSeriesNameLabels,
-                seriesNameLabelOverrides: {...chartDataLabelFlagOverrides(chartDataLabels, 'showSerName'), ...chartDataLabelFlagOverrides(dataLabels, 'showSerName')},
-                labelSeparator: chartDataLabelSeparator(dataLabels) ?? chartLabelSeparator,
-                labelSeparatorOverrides: {...chartDataLabelSeparatorOverrides(chartDataLabels), ...chartDataLabelSeparatorOverrides(dataLabels)},
+                showValueLabels: chartDataLabelFlag(dataLabels, 'showVal') ?? groupShowValueLabels,
+                valueLabelOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showVal'), ...chartDataLabelFlagOverrides(dataLabels, 'showVal')},
+                dataLabelPosition: chartDataLabelPosition(dataLabels) ?? groupLabelPosition,
+                dataLabelPositionOverrides: {...chartDataLabelPositionOverrides(groupDataLabels), ...chartDataLabelPositionOverrides(dataLabels)},
+                showPercentLabels: chartDataLabelFlag(dataLabels, 'showPercent') ?? groupShowPercentLabels,
+                percentLabelOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showPercent'), ...chartDataLabelFlagOverrides(dataLabels, 'showPercent')},
+                showBubbleSizeLabels: chartDataLabelFlag(dataLabels, 'showBubbleSize') ?? groupShowBubbleSizeLabels,
+                bubbleSizeLabelOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showBubbleSize'), ...chartDataLabelFlagOverrides(dataLabels, 'showBubbleSize')},
+                showCategoryNameLabels: chartDataLabelFlag(dataLabels, 'showCatName') ?? groupShowCategoryNameLabels,
+                categoryNameLabelOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showCatName'), ...chartDataLabelFlagOverrides(dataLabels, 'showCatName')},
+                showSeriesNameLabels: chartDataLabelFlag(dataLabels, 'showSerName') ?? groupShowSeriesNameLabels,
+                seriesNameLabelOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showSerName'), ...chartDataLabelFlagOverrides(dataLabels, 'showSerName')},
+                labelSeparator: chartDataLabelSeparator(dataLabels) ?? groupLabelSeparator,
+                labelSeparatorOverrides: {...chartDataLabelSeparatorOverrides(groupDataLabels), ...chartDataLabelSeparatorOverrides(dataLabels)},
                 ...(numberFormat ? {numberFormat} : {}),
-                valueNumberFormatOverrides: {...chartValueNumberFormatOverrides(chartDataLabels), ...chartValueNumberFormatOverrides(dataLabels)}
+                valueNumberFormatOverrides: {...chartValueNumberFormatOverrides(groupDataLabels), ...chartValueNumberFormatOverrides(dataLabels)}
             }
         })
-        .filter(item => item.values.some(value => value !== null))
+        .filter(item => isXYChart
+            ? item.values.some((value, index) => value !== null && item.xValues?.[index] != null && (!isBubble || item.bubbleSizes?.[index] != null))
+            : item.values.some(value => value !== null))
     if (!series.length) {
         warnings.add('A chart without cached series values cannot be rendered.')
         return undefined
     }
-    if (isPieLike && series.length > 1) warnings.add('Pie and doughnut chart series beyond the first are omitted.')
-    const parsedValueAxis = isPieLike ? undefined : chartValueAxis(children(plotArea, 'valAx')[0], warnings)
-    const categoryAxis = children(plotArea, 'catAx')[0]
-    let categoryAxisPosition = isPieLike ? undefined : chartAxisPosition(categoryAxis, 'category', warnings)
-    const categoryAxisMajorTickMark = isPieLike ? undefined : chartMajorTickMark(categoryAxis, 'category', warnings)
-    const categoryAxisTickLabelPosition = isPieLike ? undefined : chartTickLabelPosition(categoryAxis, 'category', warnings)
-    const categoryAxisDeleted = !isPieLike && chartAxisDeleted(categoryAxis, 'category', warnings)
-    if (direction === 'horizontal' && parsedValueAxis?.position && !['b', 't'].includes(parsedValueAxis.position)) {
+    let stock: PptxChart['stock']
+    if (isStock) {
+        const legacyVolumeIndex = !stockVolumeMode && /volume|vol\b/i.test(series[0]?.name || '') ? 0 : undefined
+        const volumeIndex = stockVolumeMode ? series.findIndex(item => item.chartType === 'bar') : legacyVolumeIndex
+        const priceIndexes = stockVolumeMode
+            ? series.flatMap((item, index) => item.chartType === 'stock' ? [index] : [])
+            : Array.from({length: series.length - (legacyVolumeIndex === undefined ? 0 : 1)}, (_, index) => index + (legacyVolumeIndex === undefined ? 0 : 1))
+        const priceSeriesCount = priceIndexes.length
+        if (priceSeriesCount !== 3 && priceSeriesCount !== 4) {
+            warnings.add('Stock charts require cached high-low-close or open-high-low-close series; this chart is not rendered.')
+            return undefined
+        }
+        if (stockVolumeMode && (volumeIndex === undefined || volumeIndex < 0 || series.filter(item => item.chartType === 'bar').length !== 1)) {
+            warnings.add('Stock volume combinations require one cached column series and three or four cached stock price series; this chart is not rendered.')
+            return undefined
+        }
+        if (legacyVolumeIndex !== undefined) warnings.add('Stock volume data is not rendered; cached price series remain available.')
+        const hasOpen = priceSeriesCount === 4
+        const highIndex = priceIndexes[hasOpen ? 1 : 0]!
+        const lowIndex = priceIndexes[hasOpen ? 2 : 1]!
+        const closeIndex = priceIndexes[hasOpen ? 3 : 2]!
+        const highLowLines = child(typeNode, 'hiLowLines')
+        const highLowLine = child(child(highLowLines, 'spPr'), 'ln')
+        const highLowSolidFill = child(highLowLine, 'solidFill')
+        const upDownBars = child(typeNode, 'upDownBars')
+        const gapWidthNode = child(upDownBars, 'gapWidth')
+        const rawGapWidth = gapWidthNode ? numberAttr(gapWidthNode, 'val', 150) : 150
+        const gapWidth = Number.isInteger(rawGapWidth) && rawGapWidth >= 0 && rawGapWidth <= 500 ? rawGapWidth : 150
+        if (gapWidth !== rawGapWidth) warnings.add('Invalid stock up/down bar gap width uses the 150 percent default.')
+        const volumeGapWidthNode = stockVolumeMode ? child(volumeChartNode, 'gapWidth') : undefined
+        const rawVolumeGapWidth = volumeGapWidthNode ? numberAttr(volumeGapWidthNode, 'val', 150) : 150
+        const volumeGapWidth = Number.isInteger(rawVolumeGapWidth) && rawVolumeGapWidth >= 0 && rawVolumeGapWidth <= 500 ? rawVolumeGapWidth : 150
+        if (volumeGapWidth !== rawVolumeGapWidth) warnings.add('Invalid stock volume gap width uses the 150 percent default.')
+        const closeColor = series[closeIndex]?.color || series[highIndex]?.color || palette[0]!
+        stock = {
+            highIndex,
+            lowIndex,
+            closeIndex,
+            ...(hasOpen ? {openIndex: priceIndexes[0]} : {}),
+            ...(volumeIndex !== undefined && volumeIndex >= 0 ? {volumeIndex} : {}),
+            ...(stockVolumeMode ? {volumeGapWidth} : {}),
+            highLowColor: (highLowSolidFill && readColor(children(highLowSolidFill)[0], theme)) || series[highIndex]?.color || closeColor,
+            showHighLowLines: !child(highLowLine, 'noFill'),
+            showDropLines: !!child(typeNode, 'dropLines'),
+            showUpDownBars: !!upDownBars && hasOpen,
+            upColor: chartFillColor(child(child(upDownBars, 'upBars'), 'spPr'), theme, warnings, '#dcfce7'),
+            downColor: chartFillColor(child(child(upDownBars, 'downBars'), 'spPr'), theme, warnings, '#fecaca'),
+            gapWidth,
+        }
+        if (upDownBars && !hasOpen) warnings.add('Stock up/down bars require open and close price series; they were omitted.')
+    }
+    if (isRadar && radarStyle !== 'filled' && series.length === 1 && chartBoolean(child(typeNode, 'varyColors')) === true) warnings.add('Radar point colors that vary within a single series are approximated with one series color.')
+    const stacking = grouping === 'clustered' ? undefined : getPptxChartStacking(series, grouping)
+    if (type === 'pie' && series.length > 1) warnings.add('Pie chart series beyond the first are omitted.')
+    const valueAxisNodes = children(plotArea, 'valAx')
+    let scatterXAxisNode: Element | undefined
+    let scatterYAxisNode: Element | undefined
+    if (isXYChart) {
+        const referencedAxes = children(typeNode, 'axId')
+            .map(node => valueAxisNodes.find(axis => child(axis, 'axId')?.getAttribute('val') === node.getAttribute('val')))
+            .filter((axis): axis is Element => !!axis)
+        const axisPosition = (axis: Element) => child(axis, 'axPos')?.getAttribute('val')
+        scatterXAxisNode = valueAxisNodes.find(axis => ['b', 't'].includes(axisPosition(axis) || '')) || referencedAxes[0] || valueAxisNodes[0]
+        scatterYAxisNode = valueAxisNodes.find(axis => axis !== scatterXAxisNode && ['l', 'r'].includes(axisPosition(axis) || ''))
+            || referencedAxes.find(axis => axis !== scatterXAxisNode)
+            || valueAxisNodes.find(axis => axis !== scatterXAxisNode)
+        if (valueAxisNodes.length < 2 || !scatterXAxisNode || !scatterYAxisNode) warnings.add('An XY chart is missing one of its numeric axes; available axes are used.')
+        if (valueAxisNodes.length > 2) warnings.add('Secondary XY chart axes are omitted.')
+        const xId = child(scatterXAxisNode, 'axId')?.getAttribute('val')
+        const yId = child(scatterYAxisNode, 'axId')?.getAttribute('val')
+        const xCross = child(scatterXAxisNode, 'crossAx')?.getAttribute('val')
+        const yCross = child(scatterYAxisNode, 'crossAx')?.getAttribute('val')
+        if ((xCross && yId && xCross !== yId) || (yCross && xId && yCross !== xId)) warnings.add('XY chart axis cross-references are invalid; axis positions are used.')
+    }
+    const parsedXAxis = isXYChart ? chartValueAxis(scatterXAxisNode, warnings, 'x') : undefined
+    const primaryValueAxisNode = valueAxisNodes.find(axis => child(axis, 'axId')?.getAttribute('val') === primaryValueAxisId) || valueAxisNodes[0]
+    const parsedValueAxis = isPieLike ? undefined : chartValueAxis(isXYChart ? scatterYAxisNode : primaryValueAxisNode, warnings)
+    const categoryAxisNodes = isPieLike || isXYChart ? [] : children(plotArea, 'catAx')
+    const categoryAxis = categoryAxisNodes.find(axis => child(axis, 'axId')?.getAttribute('val') === primaryGroupAxisIds[0]) || categoryAxisNodes[0]
+    let categoryAxisPosition = isPieLike || isXYChart ? undefined : chartAxisPosition(categoryAxis, 'category', warnings)
+    const categoryAxisMajorTickMark = isPieLike || isXYChart ? undefined : chartMajorTickMark(categoryAxis, 'category', warnings)
+    const categoryAxisTickLabelPosition = isPieLike || isXYChart ? undefined : chartTickLabelPosition(categoryAxis, 'category', warnings)
+    const categoryAxisDeleted = !isPieLike && !isXYChart && chartAxisDeleted(categoryAxis, 'category', warnings)
+    let xAxisPosition = isXYChart ? chartAxisPosition(scatterXAxisNode, 'x', warnings) : undefined
+    if (isXYChart && xAxisPosition && !['b', 't'].includes(xAxisPosition)) {
+        warnings.add('An XY chart x-axis must be positioned on the top or bottom; its default side is used.')
+        xAxisPosition = undefined
+    }
+    if (direction === 'horizontal' && !isScatter && parsedValueAxis?.position && !['b', 't'].includes(parsedValueAxis.position)) {
         warnings.add('A horizontal chart value axis must be positioned on the top or bottom; its default side is used.')
         delete parsedValueAxis.position
     }
-    if (direction === 'vertical' && parsedValueAxis?.position && !['l', 'r'].includes(parsedValueAxis.position)) {
+    if ((direction === 'vertical' || isXYChart) && parsedValueAxis?.position && !['l', 'r'].includes(parsedValueAxis.position)) {
         warnings.add('A vertical chart value axis must be positioned on the left or right; its default side is used.')
         delete parsedValueAxis.position
     }
@@ -2417,36 +2688,89 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
         warnings.add('The chart category axis position does not match its chart direction; its default side is used.')
         categoryAxisPosition = undefined
     }
-    if (!isPieLike && children(plotArea, 'valAx').length > 1) warnings.add('Secondary chart value axes are omitted.')
-    if (!isPieLike && children(plotArea, 'catAx').length > 1) warnings.add('Secondary chart category axes are omitted.')
-    let valueAxis: PptxChart['valueAxis']
-    if (parsedValueAxis) {
-        const values = series.flatMap(item => item.values.filter((value): value is number => value !== null))
-        const dataMin = Math.min(0, ...values)
-        const dataMax = Math.max(0, ...values)
-        let min = parsedValueAxis.min ?? dataMin
-        let max = parsedValueAxis.max ?? (dataMax === dataMin ? dataMin + 1 : dataMax)
+    if (!comboMode && !isPieLike && !isXYChart && valueAxisNodes.length > 1) warnings.add('Secondary chart value axes are omitted.')
+    if (!isPieLike && !isXYChart && categoryAxisNodes.length > 1) warnings.add('Secondary chart category axes are omitted.')
+    const xyPoints = isXYChart ? series.flatMap(item => item.values.flatMap((value, index) => {
+        const x = item.xValues?.[index]
+        return value !== null && x !== null && x !== undefined ? [{x, y: value}] : []
+    })) : []
+    const resolveAxis = (axis: ReturnType<typeof chartValueAxis>, values: number[], axisName: 'value' | 'x', includeZero: boolean): PptxChartAxis | undefined => {
+        if (!axis) return undefined
+        const dataMin = values.length ? Math.min(...values) : 0
+        const dataMax = values.length ? Math.max(...values) : 0
+        let min = axis.min ?? (includeZero ? Math.min(0, dataMin) : dataMin)
+        let max = axis.max ?? (includeZero ? Math.max(0, dataMax) : dataMax)
         if (min >= max) {
-            warnings.add('Chart value-axis bounds conflict with the data range; data-driven bounds are used.')
-            min = dataMin
-            max = dataMax === dataMin ? dataMin + 1 : dataMax
-            delete parsedValueAxis.min
-            delete parsedValueAxis.max
+            warnings.add(`Chart ${axisName}-axis bounds conflict with the data range; data-driven bounds are used.`)
+            min = includeZero ? Math.min(0, dataMin) : dataMin
+            max = includeZero ? Math.max(0, dataMax) : dataMax
+            delete axis.min
+            delete axis.max
         }
-        if (parsedValueAxis.crossesAt !== undefined && (parsedValueAxis.crossesAt < min || parsedValueAxis.crossesAt > max)) {
-            warnings.add('A chart value-axis crossing value is outside the displayed range and is clamped to the nearest bound.')
+        if (min === max) {
+            if (includeZero) max = min + 1
+            else {
+                const padding = Math.abs(min) * 0.05 || 0.5
+                min -= padding
+                max += padding
+            }
         }
-        if (parsedValueAxis.majorUnit && Math.floor((max - min) / parsedValueAxis.majorUnit + 1e-9) > 100) {
-            warnings.add('Chart value-axis major units produce too many ticks and are ignored.')
-            delete parsedValueAxis.majorUnit
+        if (axis.crossesAt !== undefined && (axis.crossesAt < min || axis.crossesAt > max)) warnings.add(`A chart ${axisName}-axis crossing value is outside the displayed range and is clamped to the nearest bound.`)
+        if (axis.majorUnit && Math.floor((max - min) / axis.majorUnit + 1e-9) > 100) {
+            warnings.add(`Chart ${axisName}-axis major units produce too many ticks and are ignored.`)
+            delete axis.majorUnit
         }
-        valueAxis = {...parsedValueAxis, min, max}
+        return {...axis, min, max}
     }
-    const categories = chartCache(child(seriesNodes[0], 'cat'), warnings)
-    const pointCount = Math.min(128, Math.max(categories.length, ...series.map(item => item.values.length), 0))
+    let valueAxis: PptxChart['valueAxis']
+    let valueAxes: PptxChart['valueAxes']
+    const axisValues = isXYChart ? xyPoints.map(point => point.y) : (stock ? [stock.highIndex, stock.lowIndex, stock.closeIndex, stock.openIndex].filter((index): index is number => index !== undefined).flatMap(index => series[index]?.values.filter((value): value is number => value !== null) || []) : series.flatMap(item => item.values.filter((value): value is number => value !== null)))
+    if (comboMode) {
+        if (valueAxisNodes.length > 2) warnings.add('Combo charts with more than two value axes use the first two referenced axes.')
+        const primaryId = primaryValueAxisId || child(primaryValueAxisNode, 'axId')?.getAttribute('val') || ''
+        const axisIds = new Set(valueAxisNodes.map(axis => child(axis, 'axId')?.getAttribute('val')).filter((id): id is string => !!id))
+        for (const item of series) {
+            if (!item.valueAxisId || !axisIds.has(item.valueAxisId)) {
+                if (item.valueAxisId) warnings.add('A combo chart series references a missing value axis; the primary value axis is used.')
+                item.valueAxisId = primaryId
+            }
+        }
+        const selectedValueAxisNodes = [
+            ...valueAxisNodes.filter(axis => child(axis, 'axId')?.getAttribute('val') === primaryId),
+            ...valueAxisNodes.filter(axis => child(axis, 'axId')?.getAttribute('val') !== primaryId)
+        ].slice(0, 2)
+        valueAxes = selectedValueAxisNodes.flatMap(axis => {
+            const id = child(axis, 'axId')?.getAttribute('val')
+            if (!id) return []
+            const axisSeries = series.filter(item => item.valueAxisId === id)
+            const seriesGroups = new Map<number, PptxChartSeries[]>()
+            for (const item of axisSeries) {
+                const group = item.chartGroupIndex ?? 0
+                seriesGroups.set(group, [...(seriesGroups.get(group) || []), item])
+            }
+            const axisValues = [...seriesGroups.values()].flatMap(group => {
+                const grouping = group[0]?.grouping
+                if (!grouping || grouping === 'clustered') return group.flatMap(item => item.values.filter((value): value is number => value !== null))
+                const {segments} = getPptxChartStacking(group, grouping)
+                return segments.flatMap(items => items.flatMap(segment => segment ? [segment.start, segment.end] : []))
+            })
+            const parsedAxis = id === primaryId ? parsedValueAxis : chartValueAxis(axis, warnings)
+            const resolved = resolveAxis(parsedAxis, axisValues, 'value', true)
+            return resolved ? [{id, axis: resolved, ...(id === primaryId ? {primary: true} : {})}] : []
+        })
+        valueAxis = valueAxes.find(item => item.primary)?.axis || resolveAxis(parsedValueAxis, axisValues, 'value', true)
+    } else {
+        valueAxis = resolveAxis(parsedValueAxis, axisValues, 'value', !isXYChart)
+    }
+    const xAxis = resolveAxis(parsedXAxis, xyPoints.map(point => point.x), 'x', false)
+    const categories = isXYChart ? [] : chartCache(child(seriesNodes[0], 'cat'), warnings)
+    const pointCount = isXYChart ? 0 : Math.min(128, Math.max(categories.length, ...series.map(item => item.values.length), 0))
     const labels = Array.from({length: pointCount}, (_, index) => categories[index] || String(index + 1))
+    if (isRadar && series.some(item => labels.some((_label, index) => item.values[index] == null))) warnings.add('Radar chart gaps are left open; filled radar areas require every category value.')
+    if (isRadar && labels.length < 3) warnings.add('Radar charts with fewer than three categories have limited geometry.')
+    if (stock && labels.some((_label, index) => [stock.highIndex, stock.lowIndex, stock.closeIndex, stock.openIndex].some(seriesIndex => seriesIndex !== undefined && series[seriesIndex]?.values[index] == null))) warnings.add('Stock chart categories with missing price values are omitted.')
     const categoryAxisCrossing: ReturnType<typeof chartAxisCrossing> = isPieLike ? {} : chartAxisCrossing(categoryAxis, 'category', warnings, Math.max(labels.length, 1))
-    if (labels.length !== categories.length) warnings.add('Missing chart category labels are shown as point numbers.')
+    if (!isXYChart && labels.length !== categories.length) warnings.add('Missing chart category labels are shown as point numbers.')
     if (isPieLike && labels.length > 12) warnings.add('Pie and doughnut chart legend entries beyond 12 are omitted.')
     if (isPieLike && series[0]!.values.some(value => value !== null && value < 0)) warnings.add('Negative pie and doughnut chart values are omitted.')
     const titleNode = firstDescendant(chart, 'title')
@@ -2472,8 +2796,12 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
         chart: {
             type,
             direction,
+            ...(['bar', 'line', 'area'].includes(type) ? {grouping} : {}),
+            ...(isRadar ? {radarStyle} : {}),
+            ...(stock ? {stock} : {}),
             ...(type === 'doughnut' ? {holeSize} : {}),
             ...(firstSliceAngleNode ? {firstSliceAngle} : {}),
+            ...(isBubble ? {bubbleScale, bubbleSizeRepresents, showNegativeBubbles, bubbleVaryColors} : {}),
             title,
             categories: labels,
             palette,
@@ -2481,8 +2809,11 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
             ...(chartLabelSeparator !== undefined ? {labelSeparator: chartLabelSeparator} : {}),
             ...(chartValueFormat ? {numberFormat: chartValueFormat} : {}),
             ...(valueAxis ? {valueAxis} : {}),
+            ...(xAxis ? {xAxis: {...xAxis, ...(xAxisPosition ? {position: xAxisPosition} : {})}} : {}),
+            ...(valueAxes ? {valueAxes} : {}),
             ...(categoryAxisPosition ? {categoryAxisPosition} : {}),
             ...(categoryAxisDeleted ? {categoryAxisDeleted: true} : {}),
+            ...(categoryAxis && child(categoryAxis, 'majorGridlines') ? {categoryAxisMajorGridlines: true} : {}),
             ...(categoryAxisMajorTickMark ? {categoryAxisMajorTickMark} : {}),
             ...(categoryAxisTickLabelPosition ? {categoryAxisTickLabelPosition} : {}),
             ...(categoryAxisCrossing.crosses ? {categoryAxisCrosses: categoryAxisCrossing.crosses} : {}),
