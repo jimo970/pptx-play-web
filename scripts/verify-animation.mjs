@@ -66,11 +66,12 @@ const customGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="67" name="Custom gradi
 const customRadialGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="68" name="Custom radial gradient geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="9500000" y="5200000"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/><a:pt x="1000" y="1000"/><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ff0000"><a:alpha val="50000"/></a:srgbClr></a:gs><a:gs pos="50000"><a:srgbClr val="00ff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000ff"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill><a:ln w="63500"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ffff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill></a:ln></p:spPr></p:sp>`
 const characterSpacedShapeId = 59
 const baselineShiftedShapeId = 45
+const characterSlide = `<p:par><p:cTn id="18001" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="slide(fromLeft)"><p:cBhvr><p:cTn id="18002" dur="400" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="160"><p:txEl><p:charRg st="4" end="8"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
 const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="2600000" cy="800000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="e2e8f0"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"${id === characterSpacedShapeId ? ' spc="250"' : ''}${id === baselineShiftedShapeId ? ' baseline="30000"' : ''}>${outline}</a:rPr><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
   const autoFitText = (id, name, x, y, width, height, size, text) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln w="12700"><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr wrap="square" lIns="0" rIns="0" tIns="0" bIns="0" anchor="t"><a:spAutoFit/></a:bodyPr><a:lstStyle/><a:p><a:r><a:rPr sz="${size}" b="1"/><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
   const tableCell = (text, attributes = '', color = 'ffffff') => `<a:tc ${attributes}><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1800" b="1"/><a:t>${text}</a:t></a:r></a:p></a:txBody><a:tcPr marL="91440" marR="91440" marT="45720" marB="45720"><a:lnL w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnL><a:lnR w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnR><a:lnT w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnT><a:lnB w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnB><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:tcPr></a:tc>`
   const autofitTableCell = tableCell('Table cell normal autofit shrinks overflowing text to stay inside this saved row. '.repeat(4), '', 'dbeafe').replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
-  const columnTableCell = tableCell('This table cell fills its first text column, then continues the remaining words in the second column with the requested spacing between them.', '', 'fef3c7').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200"/>')
+  const columnTableCell = tableCell('This cell fills its first text column, then overflows into the left column with a gap.', '', 'fef3c7').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
   const table = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="Basic table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="3000000" y="500000"/><a:ext cx="6000000" cy="4500000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="3000000"/></a:tblGrid><a:tr h="1500000">${tableCell('Merged header', 'gridSpan="2"', '1e40af')}${tableCell('', 'hMerge="1"')}</a:tr><a:tr h="1500000">${tableCell('Left cell')}${autofitTableCell}</a:tr><a:tr h="1500000">${columnTableCell}${tableCell('Next cell')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>` + customRadialGradientShape
   const chartFrame = (id, name, relationship, x, y, width, height) => `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${relationship}"/></a:graphicData></a:graphic></p:graphicFrame>`
   const chartPart = `<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Quarterly sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>North</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="0ea5e9"/></a:solidFill></c:spPr><c:cat><c:strRef><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>12</c:v></c:pt><c:pt idx="1"><c:v>18</c:v></c:pt><c:pt idx="2"><c:v>26</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>South</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr><c:cat><c:strRef><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>9</c:v></c:pt><c:pt idx="1"><c:v>15</c:v></c:pt><c:pt idx="2"><c:v>21</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart></c:plotArea></c:chart></c:chartSpace>`
@@ -783,6 +784,10 @@ try {
   assert(['ONE', 'TWO'].every(text => initial.textRuns.find(run => run.text === text)?.visibility === 'hidden'), 'By-word animation text must start hidden before its click step.')
   assert(paragraph(initial, 'Built paragraph').visibility === 'hidden' && paragraph(initial, 'Al\nways visible').visibility === 'visible', 'Only the targeted paragraph range must start hidden.')
 
+  assert(initial.textRuns.find(run => run.name === 'Character slide animation' && run.text === 'REST')?.visibility === 'visible'
+    && initial.textRuns.find(run => run.name === 'Character slide animation' && run.text === 'MOVE')?.visibility === 'hidden'
+    && !initial.warnings.some(warning => warning.includes('Text-range slide')),
+  'A valid character-range slide entrance must hide only its selected range without an unsupported-effect warning.')
   const autoActive = await evaluate(`new Promise(resolve => {
     const started = performance.now()
     const checkFrame = () => {
@@ -802,13 +807,16 @@ try {
   const autoComplete = await state()
   assert(shape(autoComplete, 'Automatic fade').visibility === 'visible' && shape(autoComplete, 'Automatic fade').opacity === '1', 'The repeated automatic sequence must hold its final state without a click.')
 
-  await evaluate(`document.querySelector('.stage-shell').click()`)
-  await delay(50)
-  const afterStart = await state()
+  const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell').click(); return started })()`)
+  const afterStart = await stateAtElapsed(clickStartedAt, 50)
   assert(shape(afterStart, 'Click fade').visibility === 'visible' && shape(afterStart, 'With previous').visibility === 'hidden', `The delayed with-effect must not start with the click effect: ${JSON.stringify({ click: shape(afterStart, 'Click fade'), delayed: shape(afterStart, 'With previous') })}`)
   assert(Number(shape(afterStart, 'Click fade').opacity) > 0 && Number(shape(afterStart, 'Click fade').opacity) < 0.29, `A fade with equal acceleration and deceleration should still be in the early part of its normalized time curve: ${shape(afterStart, 'Click fade').opacity}`)
   assert(Number(shape(afterStart, 'Parent eased fade').opacity) > 0 && Number(shape(afterStart, 'Parent eased fade').opacity) < 0.29, `A finite parent time-node curve must shape its child animation progress: ${shape(afterStart, 'Parent eased fade').opacity}`)
   assert(shape(afterStart, 'Parent timing after-effect').visibility === 'hidden', 'An after-effect must wait for the finite parent time-container duration.')
+  const characterSlideDuring = await evaluate(`(() => { const shape = document.querySelector('.stage-shell > .slide-host .slide-element[title="Character slide animation"]'); const read = text => { const run = [...shape.querySelectorAll('.text-run')].find(item => item.textContent === text); const style = getComputedStyle(run); const matrix = style.transform === 'none' ? new DOMMatrix() : new DOMMatrix(style.transform); return { translateX: matrix.e, visibility: style.visibility } }; return { rest: read('REST'), move: read('MOVE'), frameWidth: shape.closest('.slide-frame')?.getBoundingClientRect().width } })()`)
+  assert(characterSlideDuring.rest.visibility === 'visible' && Math.abs(characterSlideDuring.rest.translateX) < 0.01
+    && characterSlideDuring.move.visibility === 'visible' && characterSlideDuring.move.translateX < 0 && characterSlideDuring.move.translateX > -characterSlideDuring.frameWidth,
+    `A slide(fromLeft) character range must move only its selected text in from the stage edge: ${JSON.stringify(characterSlideDuring)}`)
   assert(Number.parseFloat(shape(afterStart, 'Blinds animation').blindsStripeSize) > 0 && Number.parseFloat(shape(afterStart, 'Blinds animation').blindsStripeSize) < 12.5, 'An object blinds entrance must open its horizontal mask strips over time.')
   assert(shape(afterStart, 'Checker animation').clipPath !== checkerStart, 'An object checkerboard must reveal tiles during its click animation.')
   const characterFades = afterStart.textRuns.filter(run => ['Al', '\n', 'ways'].includes(run.text))
@@ -834,19 +842,18 @@ try {
     assert(wipe.visibility === 'hidden' && wipe.opacity === '1' && wipe.wipeProgress === '0%', `The ${direction} wipe entrance must start hidden behind a fully closed mask without fading.`)
   }
 
-  await delay(100)
-  const afterWith = await state()
+  const afterWith = await stateAtElapsed(clickStartedAt, 150)
   assert(Number(shape(afterWith, 'Parent speed delayed').opacity) > 0.6, `A positive parent time-node speed must scale its child's delay: ${shape(afterWith, 'Parent speed delayed').opacity}`)
   assert(shape(afterWith, 'With previous').visibility === 'visible' && shape(afterWith, 'Exit after previous').visibility === 'visible', 'The with-effect delay must be applied inside the click step.')
 
-  await delay(200)
-  const midIteration = await state()
-  assert(midIteration.textRuns.find(run => run.text === 'D')?.visibility === 'hidden' && shape(midIteration, 'After letters').visibility === 'visible', `A delayed after-effect must wait through all by-letter iterations: ${JSON.stringify({ lastLetter: midIteration.textRuns.find(run => run.text === 'D'), afterEffect: shape(midIteration, 'After letters') })}`)
-  await delay(150)
-  const beforeParentEnd = await state()
+  const midIteration = await stateAtElapsed(clickStartedAt, 350)
+  assert(midIteration.textRuns.find(run => run.text === 'D')?.visibility === 'hidden' && shape(midIteration, 'After letters').opacity === '1', `The delayed exit must not start before the final by-letter iteration: ${JSON.stringify({ lastLetter: midIteration.textRuns.find(run => run.text === 'D'), afterEffect: shape(midIteration, 'After letters') })}`)
+  const beforeParentEnd = await stateAtElapsed(clickStartedAt, 500)
   assert(shape(beforeParentEnd, 'Parent timing after-effect').visibility === 'hidden', 'The parent time-container after-effect must remain pending before its duration ends.')
-  await delay(500)
-  const afterChain = await state()
+  const afterChain = await stateAtElapsed(clickStartedAt, 1000)
+  const characterSlideComplete = await evaluate(`(() => { const shape = document.querySelector('.stage-shell > .slide-host .slide-element[title="Character slide animation"]'); return [...shape.querySelectorAll('.text-run')].map(run => { const style = getComputedStyle(run); const matrix = style.transform === 'none' ? new DOMMatrix() : new DOMMatrix(style.transform); return { text: run.textContent, translateX: matrix.e, visibility: style.visibility } }) })()`)
+  assert(characterSlideComplete.length === 2 && characterSlideComplete.every(run => run.visibility === 'visible' && Math.abs(run.translateX) < 0.01),
+    `A completed character-range slide entrance must reveal both ranges at their base positions: ${JSON.stringify(characterSlideComplete)}`)
   assert(shape(afterChain, 'Blinds animation').blindsStripeSize === '12.5%', 'The object blinds animation must finish with all mask strips open.')
   assert(shape(afterChain, 'Checker animation').clipPath !== checkerStart, 'The object checkerboard must hold its final fully open tile mask.')
   assert(shape(afterChain, 'After letters').visibility === 'hidden', 'The chained after-effect must start after the full by-letter duration.')

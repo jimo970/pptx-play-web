@@ -1625,11 +1625,12 @@ function textTransformAnimationStyle(element: PptxElement, paragraphIndex: numbe
   let scaling: [number, number] = [1, 1]
   let rotation = 0
   const [motionX, motionY] = animationMotion(element, paragraphIndex, characterStart, characterEnd)
+  const [slideX, slideY] = animationSlide(element, paragraphIndex, characterStart, characterEnd)
   for (const action of actions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
     if (progress === -2) {
       if (action.effect === 'scale') scaling = [1, 1]
-      else rotation = 0
+      else if (action.effect === 'rotation') rotation = 0
       continue
     }
     if (progress === null || progress < 0) continue
@@ -1645,6 +1646,7 @@ function textTransformAnimationStyle(element: PptxElement, paragraphIndex: numbe
   }
   const transforms = [
     motionX || motionY ? `translate(${motionX * scale.value}px, ${motionY * scale.value}px)` : '',
+    slideX || slideY ? `translate(${slideX * scale.value}px, ${slideY * scale.value}px)` : '',
     scaling[0] !== 1 || scaling[1] !== 1 ? `scale(${scaling[0]}, ${scaling[1]})` : '',
     rotation ? `rotate(${rotation}deg)` : '',
   ].filter(Boolean)
@@ -1703,10 +1705,21 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
   return value
 }
 
-function animationSlide(element: PptxElement): [number, number] {
+function animationSlide(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): [number, number] {
   let value: [number, number] = [0, 0]
-  for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'slide') || []) {
-    const progress = animationProgress(action)
+  const textRange = paragraphIndex !== undefined || characterStart !== undefined
+  const actions = animationsByTarget.value.get(element.id)?.filter(item => {
+    if (item.effect !== 'slide') return false
+    if (!textRange) return !item.paragraphRange && !item.characterRange
+    return Boolean(item.paragraphRange || item.characterRange)
+      && (!item.paragraphRange || paragraphIndex !== undefined && paragraphIndex >= item.paragraphRange.start && paragraphIndex <= item.paragraphRange.end)
+      && (!item.characterRange || characterStart !== undefined && characterEnd !== undefined && characterStart < item.characterRange.end && characterEnd > item.characterRange.start)
+  }) || []
+  for (const action of actions) {
+    const iterationIndex = characterStart !== undefined && characterEnd !== undefined
+      ? iterationIndexFor(action, characterStart, characterEnd)
+      : undefined
+    const progress = animationProgress(action, iterationIndex)
     if (progress === -2) { value = [0, 0]; continue }
     if (progress === null) continue
     const phase = progress < 0 ? 0 : progress
