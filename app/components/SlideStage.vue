@@ -2455,6 +2455,12 @@ function numberedMarker(value: number, type: string): string {
   return `${label}.`
 }
 
+function paragraphBulletStyle(paragraph: PptxParagraph): CSSProperties {
+  const size = paragraph.bullet?.size
+  if (!size) return {}
+  return { fontSize: size.unit === 'ratio' ? `${size.value * 100}%` : `${size.value * EMU_PER_POINT * scale.value}px` }
+}
+
 function paragraphEntries(paragraphs: PptxParagraph[]): { paragraph: PptxParagraph; marker: string }[] {
   const counters = new Map<string, number>()
   return paragraphs.map((paragraph) => {
@@ -2466,6 +2472,10 @@ function paragraphEntries(paragraphs: PptxParagraph[]): { paragraph: PptxParagra
     if (bullet.kind === 'char') {
       counters.clear()
       return { paragraph, marker: bullet.char }
+    }
+    if (bullet.kind === 'image') {
+      counters.clear()
+      return { paragraph, marker: '' }
     }
     const key = `${bullet.type}:${paragraph.level || 0}`
     const number = counters.get(key) ?? bullet.startAt ?? 1
@@ -2708,6 +2718,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
 .slide-table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
 .slide-table td { box-sizing: border-box; overflow: hidden; }
 .paragraph-marker { display: inline-block; width: 1em; margin-left: -1em; margin-right: .45em; text-align: right; white-space: pre; }
+.paragraph-picture-bullet { display: inline-block; width: 1em; height: 1em; margin-left: -1em; margin-right: .45em; object-fit: contain; vertical-align: middle; }
 .is-thumbnail .text-frame { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .slide-element { transition: none !important; } }
 </style>

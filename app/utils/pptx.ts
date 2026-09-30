@@ -50,13 +50,14 @@ export interface PptxParagraph {
     spaceBefore?: {unit: 'emu' | 'ratio'; value: number}
     spaceAfter?: {unit: 'emu' | 'ratio'; value: number}
     lineSpacing?: {unit: 'emu' | 'ratio'; value: number}
-    bullet?: {kind: 'char'; char: string} | {kind: 'number'; type: string; startAt?: number}
+    bullet?: ({kind: 'char'; char: string} | {kind: 'number'; type: string; startAt?: number} | {kind: 'image'; target?: string; url?: string}) & {size?: {unit: 'ratio' | 'points'; value: number}}
 }
 
 export interface PptxTableCell {
     paragraphs: PptxParagraph[]
     textColumnCount?: number
     textColumnSpacing?: number
+    textColumnsRightToLeft?: boolean
     textFontScale?: number
     textLineSpacingReduction?: number
     textAutoFitDynamic?: boolean
@@ -1249,10 +1250,23 @@ function parseSpacing(properties: Element | undefined, name: string): PptxParagr
     return undefined
 }
 
-function parseBullet(properties: Element | undefined, warnings: Set<string>): PptxParagraph['bullet'] {
+function parseBullet(properties: Element | undefined, warnings: Set<string>, rels?: Map<string, PptxRelationship>): PptxParagraph['bullet'] {
     if (child(properties, 'buNone')) return undefined
+    const percentSize = child(properties, 'buSzPct')
+    const pointSize = child(properties, 'buSzPts')
+    let size: NonNullable<PptxParagraph['bullet']>['size']
+    if (percentSize && pointSize) warnings.add('A paragraph with both percentage and point bullet sizes was rendered with the default size.')
+    else if (percentSize) {
+        const value = numberAttr(percentSize, 'val', Number.NaN)
+        if (Number.isSafeInteger(value) && value >= 25_000 && value <= 400_000) size = {unit: 'ratio', value: value / 100_000}
+        else warnings.add('An invalid a:buSzPct value was ignored.')
+    } else if (pointSize) {
+        const value = numberAttr(pointSize, 'val', Number.NaN)
+        if (Number.isSafeInteger(value) && value >= 100 && value <= 400_000) size = {unit: 'points', value: value / 100}
+        else warnings.add('An invalid a:buSzPts value was ignored.')
+    }
     const character = child(properties, 'buChar')
-    if (character) return {kind: 'char', char: character.getAttribute('char') || '•'}
+    if (character) return {kind: 'char', char: character.getAttribute('char') || '•', size}
     const automatic = child(properties, 'buAutoNum')
     if (automatic) {
         const type = automatic.getAttribute('type') || 'arabicPeriod'
@@ -1275,14 +1289,28 @@ function parseBullet(properties: Element | undefined, warnings: Set<string>): Pp
             'alphaUcPeriod'
         ])
         if (!supported.has(type)) warnings.add(`The ${type} numbered bullet style is simplified to decimal numbering.`)
-        return {kind: 'number', type, startAt: automatic.hasAttribute('startAt') ? numberAttr(automatic, 'startAt', 1) : undefined}
+        return {kind: 'number', type, startAt: automatic.hasAttribute('startAt') ? numberAttr(automatic, 'startAt', 1) : undefined, size}
     }
-    if (child(properties, 'buBlip')) warnings.add('Picture bullets are not rendered.')
+    const picture = child(properties, 'buBlip')
+    if (picture) {
+        const blip = child(picture, 'blip')
+        const relationId = namespacedAttr(blip, 'embed') || ''
+        const relation = rels?.get(relationId)
+        if (relationId && relation && !relation.external && relation.type.endsWith('/image')) return {kind: 'image', target: relation.target, size}
+        warnings.add('A picture bullet with a missing, external, or non-image relationship was skipped.')
+    }
     return undefined
 }
 
-function parseParagraphDefaults(properties: Element | undefined, theme: Record<string, string>, warnings: Set<string>): ParagraphDefaults {
+function parseParagraphDefaults(properties: Element | undefined, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>): ParagraphDefaults {
     const values: ParagraphValues = {}
+    const rawDirection = properties?.getAttribute('rtl')
+    const direction = rawDirection?.trim()
+    // a:pPr/@rtl controls the paragraph base direction; it remains independent of a:bodyPr/@rtlCol.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.textparagraphpropertiestype.righttoleft?view=openxml-3.0.1
+    if (direction === 'true' || direction === '1') values.direction = 'rtl'
+    else if (direction === 'false' || direction === '0') values.direction = 'ltr'
+    else if (rawDirection !== undefined && rawDirection !== null) warnings.add('An invalid paragraph rtl value was ignored.')
     const alignment = properties?.getAttribute('algn')
     if (alignment) {
         const alignments: Record<string, PptxParagraph['align']> = {l: 'left', ctr: 'center', r: 'right', just: 'justify', dist: 'justify', thaiDist: 'justify'}
@@ -1299,7 +1327,7 @@ function parseParagraphDefaults(properties: Element | undefined, theme: Record<s
     if (spaceAfter) values.spaceAfter = spaceAfter
     if (lineSpacing) values.lineSpacing = lineSpacing
     if (children(properties).some(item => ['buNone', 'buChar', 'buAutoNum', 'buBlip'].includes(item.localName))) {
-        values.bullet = parseBullet(properties, warnings)
+        values.bullet = parseBullet(properties, warnings, rels)
     }
     return {values, text: textStyle(child(properties, 'defRPr') || child(properties, 'endParaRPr'), theme, warnings)}
 }
@@ -1324,22 +1352,22 @@ function mergeParagraphDefaultsByLevel(...maps: (ParagraphDefaultsByLevel | unde
     return result
 }
 
-function paragraphDefaultsByLevel(styleList: Element | undefined, theme: Record<string, string>, warnings: Set<string>): ParagraphDefaultsByLevel {
-    const fallback = parseParagraphDefaults(child(styleList, 'defPPr'), theme, warnings)
+function paragraphDefaultsByLevel(styleList: Element | undefined, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>): ParagraphDefaultsByLevel {
+    const fallback = parseParagraphDefaults(child(styleList, 'defPPr'), theme, warnings, rels)
     const result: ParagraphDefaultsByLevel = {}
     for (let level = 0; level < 9; level++) {
-        result[level] = mergeParagraphDefaults(fallback, parseParagraphDefaults(child(styleList, `lvl${level + 1}pPr`), theme, warnings))
+        result[level] = mergeParagraphDefaults(fallback, parseParagraphDefaults(child(styleList, `lvl${level + 1}pPr`), theme, warnings, rels))
     }
     return result
 }
 
-function placeholderParagraphDefaults(shape: Element, theme: Record<string, string>, warnings: Set<string>): ParagraphDefaultsByLevel {
+function placeholderParagraphDefaults(shape: Element, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>): ParagraphDefaultsByLevel {
     const textBody = child(shape, 'txBody')
-    const result = paragraphDefaultsByLevel(child(textBody, 'lstStyle'), theme, warnings)
+    const result = paragraphDefaultsByLevel(child(textBody, 'lstStyle'), theme, warnings, rels)
     for (const paragraph of children(textBody, 'p')) {
         const properties = child(paragraph, 'pPr')
         const level = properties?.hasAttribute('lvl') ? numberAttr(properties, 'lvl') : 0
-        const paragraphDefaults = parseParagraphDefaults(properties, theme, warnings)
+        const paragraphDefaults = parseParagraphDefaults(properties, theme, warnings, rels)
         paragraphDefaults.text = mergeTextStyles(paragraphDefaults.text, textStyle(child(paragraph, 'endParaRPr'), theme, warnings))
         result[level] = mergeParagraphDefaults(result[level], paragraphDefaults)
     }
@@ -1353,15 +1381,19 @@ function parseText(
     theme: Record<string, string>,
     warnings: Set<string>,
     inheritedStyle: PptxTextStyle = {},
-    inheritedParagraphStyles: ParagraphDefaultsByLevel = {}
+    inheritedParagraphStyles: ParagraphDefaultsByLevel = {},
+    rels?: Map<string, PptxRelationship>
 ): {
     paragraphs: PptxParagraph[]
     margins: PptxElement['margins']
     verticalAlign: PptxElement['verticalAlign']
     textWrap?: PptxElement['textWrap']
+    textHorizontalOverflow?: PptxElement['textHorizontalOverflow']
+    textVerticalOverflow?: PptxElement['textVerticalOverflow']
     textOrientation?: PptxTextOrientation
     textColumnCount?: number
     textColumnSpacing?: number
+    textColumnsRightToLeft?: boolean
     textFontScale?: number
     textLineSpacingReduction?: number
     textAutoFit?: PptxElement['textAutoFit']
@@ -1515,14 +1547,14 @@ function placeholderStyleCategory(type: string): 'titleStyle' | 'bodyStyle' | 'o
 
 // Slide-master txStyles carries separate title, body, and other text defaults.
 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.textstyles?view=openxml-3.0.1
-function parseMasterTextStyles(xml: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>): Record<string, MasterTextStyle> {
+function parseMasterTextStyles(xml: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>): Record<string, MasterTextStyle> {
     const styles = child(xml?.documentElement, 'txStyles')
     const result: Record<string, MasterTextStyle> = {}
     for (const name of ['titleStyle', 'bodyStyle', 'otherStyle']) {
         const style = child(styles, name)
         result[name] = {
             style: textStyle(child(style, 'defRPr'), theme, warnings),
-            paragraphs: paragraphDefaultsByLevel(style, theme, warnings)
+            paragraphs: paragraphDefaultsByLevel(style, theme, warnings, rels)
         }
     }
     return result
@@ -1607,7 +1639,7 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
     }
 }
 
-function parsePlaceholderCandidates(xml: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>, masterStyles: Record<string, MasterTextStyle>, fallbacks: ParsedPlaceholder[] = [], warnPlaceholders = false): ParsedPlaceholder[] {
+function parsePlaceholderCandidates(xml: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>, masterStyles: Record<string, MasterTextStyle>, fallbacks: ParsedPlaceholder[] = [], warnPlaceholders = false, rels?: Map<string, PptxRelationship>): ParsedPlaceholder[] {
     const tree = xml && firstDescendant(xml.documentElement, 'spTree')
     const candidates: ParsedPlaceholder[] = []
     for (const node of children(tree)) {
@@ -1616,15 +1648,15 @@ function parsePlaceholderCandidates(xml: XMLDocument | undefined, theme: Record<
         if (!identity) continue
         const fallback = matchPlaceholder(identity, fallbacks)
         const masterStyle = masterStyles[placeholderStyleCategory(identity.type)]
-        const paragraphStyles = mergeParagraphDefaultsByLevel(masterStyle?.paragraphs, fallback?.paragraphStyles, placeholderParagraphDefaults(node, theme, warnings))
-        let element = parseShape(node, theme, warnings, masterStyle?.style || {}, paragraphStyles, warnPlaceholders)
-        element = inheritPlaceholderProperties(element, node, fallback)
+        const paragraphStyles = mergeParagraphDefaultsByLevel(masterStyle?.paragraphs, fallback?.paragraphStyles, placeholderParagraphDefaults(node, theme, warnings, rels))
+        let element = parseShape(node, theme, warnings, masterStyle?.style || {}, paragraphStyles, warnPlaceholders, rels)
+        element = inheritPlaceholderProperties(element, node, fallback, warnings)
         candidates.push({node, type: identity.type, index: identity.index, element, paragraphStyles})
     }
     return candidates
 }
 
-function parseShape(shape: Element, theme: Record<string, string>, warnings: Set<string>, inheritedStyle: PptxTextStyle = {}, inheritedParagraphStyles: ParagraphDefaultsByLevel = {}, warnPlaceholder = true): PptxElement {
+function parseShape(shape: Element, theme: Record<string, string>, warnings: Set<string>, inheritedStyle: PptxTextStyle = {}, inheritedParagraphStyles: ParagraphDefaultsByLevel = {}, warnPlaceholder = true, rels?: Map<string, PptxRelationship>): PptxElement {
     const properties = child(shape, 'spPr')
     const customGeometry = child(properties, 'custGeom')
     const geometry = child(properties, 'prstGeom')?.getAttribute('prst') || (customGeometry ? 'custom' : 'rect')
@@ -1636,7 +1668,7 @@ function parseShape(shape: Element, theme: Record<string, string>, warnings: Set
     const placeholder = parsePlaceholderIdentity(shape)
     if (placeholder && warnPlaceholder) warnings.add('Placeholder properties are only partially inherited from the layout or master.')
     const transform = shapeTransform(properties)
-    const tx = parseText(shape, theme, warnings, inheritedStyle, inheritedParagraphStyles)
+    const tx = parseText(shape, theme, warnings, inheritedStyle, inheritedParagraphStyles, rels)
     const nonVisual = firstDescendant(shape, 'cNvPr')
     const line = child(properties, 'ln')
     let fill = fillColor(properties, theme, warnings)
@@ -1685,7 +1717,7 @@ function parseShape(shape: Element, theme: Record<string, string>, warnings: Set
     }
 }
 
-function parseTable(frame: Element, theme: Record<string, string>, warnings: Set<string>): PptxElement | undefined {
+function parseTable(frame: Element, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>): PptxElement | undefined {
     const table = firstDescendant(frame, 'tbl')
     if (!table) return undefined
     const columns = children(child(table, 'tblGrid'), 'gridCol').map(column => numberAttr(column, 'w'))
@@ -1693,7 +1725,7 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
         height: numberAttr(row, 'h'),
         cells: children(row, 'tc').map((cell): PptxTableCell => {
             const properties = child(cell, 'tcPr')
-            const text = parseText(cell, theme, warnings)
+            const text = parseText(cell, theme, warnings, {}, {}, rels)
             if (text.textAutoFit === 'shape') warnings.add('a:spAutoFit on table cells is not rendered; original cell and row sizes are retained.')
             const border = (name: string) => {
                 const line = child(properties, name)
@@ -2377,6 +2409,19 @@ async function imageUrlFor(target: string | undefined, zip: JSZip, urls: string[
     cache.set(target, url)
     urls.push(url)
     return url
+}
+
+async function resolvePictureBullets(elements: PptxElement[], zip: JSZip, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>): Promise<void> {
+    for (const element of elements) {
+        const paragraphs = [...element.paragraphs, ...(element.table?.rows.flatMap(row => row.cells.flatMap(cell => cell.paragraphs)) || [])]
+        for (const paragraph of paragraphs) {
+            const bullet = paragraph.bullet
+            if (bullet?.kind !== 'image' || !bullet.target) continue
+            bullet.url = await imageUrlFor(bullet.target, zip, urls, imageUrlCache)
+            delete bullet.target
+            if (!bullet.url) warnings.add('A picture bullet image could not be resolved; its marker was omitted.')
+        }
+    }
 }
 
 function mediaMime(path: string): string | undefined {
@@ -5407,26 +5452,28 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
                     const layoutPlaceholder = matchPlaceholder(identity, layoutPlaceholders)
                     const masterPlaceholder = matchPlaceholder(identity, masterPlaceholders)
                     if (!identity) {
-                        elements.push(parseShape(node, theme, warnings))
+                        elements.push(parseShape(node, theme, warnings, {}, {}, true, rels))
                         continue
                     }
                     const masterStyle = masterTextStyles[placeholderStyleCategory(identity.type)]
                     const inheritedParagraphStyles = layoutPlaceholder?.paragraphStyles || masterPlaceholder?.paragraphStyles || {}
-                    let element = parseShape(node, theme, warnings, masterStyle?.style || {}, inheritedParagraphStyles)
-                    element = inheritPlaceholderProperties(element, node, layoutPlaceholder || masterPlaceholder)
+                    let element = parseShape(node, theme, warnings, masterStyle?.style || {}, inheritedParagraphStyles, true, rels)
+                    element = inheritPlaceholderProperties(element, node, layoutPlaceholder || masterPlaceholder, warnings)
                     elements.push(element)
                 } else if (['pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(node.localName)) {
-                    elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache)))
+                    elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache, undefined, animationTargetIds)))
                 }
             }
+            await resolvePictureBullets(elements, zip, warnings, urls, imageUrlCache)
             const animations = parseAnimations(xml.documentElement, theme, warnings, elements, width, height)
             const slideInfo = firstDescendant(xml.documentElement, 'cSld')
-            const slideBackground = await backgroundFill(xml, rels, theme, warnings, zip, urls, imageUrlCache)
-            const layoutBackground = await backgroundFill(layoutXml, layoutRels, theme, warnings, zip, urls, imageUrlCache)
-            const masterBackground = await backgroundFill(masterXml, masterRels, theme, warnings, zip, urls, imageUrlCache)
+            const slideBackground = await backgroundFill(xml, rels, themeData, warnings, zip, urls, imageUrlCache)
+            const layoutBackground = await backgroundFill(layoutXml, layoutRels, themeData, warnings, zip, urls, imageUrlCache)
+            const masterBackground = await backgroundFill(masterXml, masterRels, themeData, warnings, zip, urls, imageUrlCache)
             const selectedBackground = slideBackground.image || slideBackground.color ? slideBackground : layoutBackground.image || layoutBackground.color ? layoutBackground : masterBackground
             slides.push({
                 id: relId || `slide-${index + 1}`,
+                packagePath: slidePath,
                 name: child(slideInfo, 'name')?.getAttribute('val') || `Slide ${index + 1}`,
                 elements,
                 speakerNotes: parseSpeakerNotes(notesXml, theme, warnings),
