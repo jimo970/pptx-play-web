@@ -231,6 +231,7 @@ export interface PptxChart {
 export interface PptxCustomPath {
     d: string
     fill: boolean
+    fillMode?: 'lighten' | 'lightenLess' | 'darken' | 'darkenLess'
     stroke: boolean
 }
 

@@ -22,13 +22,22 @@ interface CustomSvgLinearGradient {
   y2: number
   stops: CustomSvgGradientStop[]
 }
+type CustomSvgGradientFocus =
+  | { kind: 'ellipse'; cx: number; cy: number; rx: number; ry: number; color: string }
+  | { kind: 'rect'; x: number; y: number; width: number; height: number; color: string }
 interface CustomSvgRadialGradient {
   id: string
   kind: 'radial'
   cx: number
   cy: number
   r: number
+  fx?: number
+  fy?: number
+  fr?: number
+  colorInterpolation?: 'sRGB' | 'linearRGB'
+  gradientTransform?: string
   stops: CustomSvgGradientStop[]
+  focus?: CustomSvgGradientFocus
 }
 type CustomSvgGradient = CustomSvgLinearGradient | CustomSvgRadialGradient
 
@@ -57,13 +66,14 @@ interface ChartVisual {
   lines: Array<{ d: string; color: string; width?: number }>
   markers: Array<{ x: number; y: number; color: string; radius?: number; symbol?: PptxChartMarkerSymbol }>
   slices: Array<{ d: string; color: string }>
-  legend: Array<{ text: string; x: number; y: number; color: string }>
+  legend: Array<ChartLegendKey & { text: string; x: number; y: number }>
   legendClip?: { id: string; x: number; y: number; width: number; height: number }
-  dataLabels: Array<{ text: string; lines: string[]; x: number; y: number; anchor: string; legendKey?: {color: string}; style?: PptxChartDataLabelStyle }>
+  dataLabels: Array<{ text: string; lines: string[]; x: number; y: number; anchor: string; legendKey?: ChartLegendKey; style?: PptxChartDataLabelStyle }>
   baseline: { x1: number; y1: number; x2: number; y2: number }
   valueAxisLine?: { x1: number; y1: number; x2: number; y2: number }
 }
 
+type ChartLegendKey = {color: string; symbol?: PptxChartMarkerSymbol; line?: boolean; markerChart?: boolean}
 type ChartLegendPosition = NonNullable<PptxChart['legend']>['position']
 
 function defaultLegendOrigin(position: ChartLegendPosition | undefined, axis: 'x' | 'y') {
@@ -538,11 +548,27 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   })
   const formatValue = (value: number, series: PptxChart['series'][number], index: number) => formatChartNumber(value, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat, chart.date1904)
   const labelPosition = (series: PptxChart['series'][number], index: number, fallback: PptxChartDataLabelPosition) => series.dataLabelPositionOverrides[index] ?? series.dataLabelPosition ?? chart.dataLabelPosition ?? fallback
+  const chartLegendKey = (series: PptxChart['series'][number], index?: number): ChartLegendKey => {
+    const color = index === undefined ? series.color : series.pointColors[index] || series.color
+    const type = seriesType(series)
+    if (!['line', 'scatter', 'radar'].includes(type)) return {color}
+    const symbol = index === undefined ? series.markerSymbol : series.markerSymbolOverrides?.[index] ?? series.markerSymbol
+    const showMarker = symbol === undefined
+      ? type === 'line' ? series.lineShowMarker !== false : type === 'scatter' ? series.scatterShowMarker === true : series.radarShowMarker === true
+      : symbol !== 'none'
+    const showLine = type === 'scatter' ? series.scatterShowLine === true : type === 'line' ? series.lineShowLine !== false : series.radarShowLine !== false
+    return {
+      color,
+      markerChart: true,
+      ...(showMarker ? {symbol: symbol ?? 'circle'} : {}),
+      ...(showLine ? {line: true} : {}),
+    }
+  }
   const pushDataLabel = (text: string, x: number, y: number, anchor: string, series: PptxChart['series'][number], index: number) => {
     const style = {...series.dataLabelStyle, ...series.dataLabelStyleOverrides[index]}
     const lines = text.split(/\r?\n/)
     const showLegendKey = series.legendKeyOverrides[index] ?? series.showLegendKey
-    dataLabels.push({ text, lines, x, y, anchor, ...(showLegendKey ? {legendKey: {color: series.pointColors[index] || series.color}} : {}), ...(Object.keys(style).length ? {style} : {}) })
+    dataLabels.push({ text, lines, x, y, anchor, ...(showLegendKey ? {legendKey: chartLegendKey(series, index)} : {}), ...(Object.keys(style).length ? {style} : {}) })
   }
   const formatDataLabel = (series: PptxChart['series'][number], index: number, value: number, category: string, total?: number, bubbleSize?: number) => {
     const showValue = series.valueLabelOverrides[index] ?? series.showValueLabels
@@ -647,7 +673,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     }
     for (const index of [...(volumeSeries && stock.volumeIndex !== undefined ? [stock.volumeIndex] : []), ...priceIndices]) {
       const series = chart.series[index]
-      if (series && !chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({text: series.name, x: 88 + legend.length * 220, y: 530, color: series.color})
+      if (series && !chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({text: series.name, x: 88 + legend.length * 220, y: 530, ...chartLegendKey(series)})
     }
   } else if (chart.type === 'area' && !combo) {
     chart.series.forEach((series, seriesIndex) => {
@@ -687,7 +713,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         }
       }
       flushArea()
-      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({text: series.name, x: 88 + (legend.length % 4) * 220, y: 530 + Math.floor(legend.length / 4) * 22, color: series.color})
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({text: series.name, x: 88 + (legend.length % 4) * 220, y: 530 + Math.floor(legend.length / 4) * 22, ...chartLegendKey(series)})
     })
   }
   else if (bubble) {
@@ -717,7 +743,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle', series, index)
         }
       }
-      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, color: series.color })
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, ...chartLegendKey(series) })
     })
   } else if (scatter) {
     chart.series.forEach((series, seriesIndex) => {
@@ -755,7 +781,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         }
       }
       if (path) lines.push({ d: path, color: series.color })
-      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, color: series.color })
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, ...chartLegendKey(series) })
     })
   } else if (chart.type === 'pie' || chart.type === 'doughnut') {
     const centerX = plot.left + plot.width / 2
@@ -888,7 +914,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : Math.cos(point.angle) > 0.25 ? 'start' : Math.cos(point.angle) < -0.25 ? 'end' : 'middle'
         pushDataLabel(label, x, y, anchor, series, index)
       })
-      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + legend.length * 220, y: 530, color: series.color })
+      if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + legend.length * 220, y: 530, ...chartLegendKey(series) })
     })
   } else {
     const barSeriesByGroup = new Map<number, number[]>()
@@ -1026,7 +1052,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     }
     chart.series.slice(0, 12).forEach(series => {
       if (chart.legend?.hiddenEntries?.includes(series.legendIndex)) return
-      legend.push({ text: series.name, x: 88 + (legend.length % 4) * 220, y: 530 + Math.floor(legend.length / 4) * 22, color: series.color })
+      legend.push({ text: series.name, x: 88 + (legend.length % 4) * 220, y: 530 + Math.floor(legend.length / 4) * 22, ...chartLegendKey(series) })
     })
   }
 
@@ -1269,7 +1295,7 @@ const refreshChartDataLabelKeyPositions = async () => {
   await nextTick()
   if (typeof document === 'undefined') return
   const positions = new Map<string, number>()
-  for (const key of document.querySelectorAll<SVGRectElement>('.chart-data-label-key')) {
+  for (const key of document.querySelectorAll<SVGGElement>('.chart-data-label-key')) {
     const id = key.dataset.keyId
     if (!id?.startsWith(`${customGradientScope}:`)) continue
     const text = key.parentElement?.querySelector<SVGTextElement>('.chart-data-label')
@@ -1762,10 +1788,10 @@ function onMotionPreferenceChange(event: MediaQueryListEvent) {
 // Microsoft lists fill.opacity as an animatable property; multiplying each gradient stop alpha is this renderer's mapping and still needs Office/WPS screenshot calibration.
 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.attributename?view=openxml-3.0.1
 // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa
-function applyColorOpacity(color: string, opacity: number): string {
-  if (opacity >= 1 || color === 'transparent') return color
+function applyColorOpacity(color: string, opacity: number, brightness = 0): string {
+  if ((opacity >= 1 && !brightness) || color === 'transparent') return color
   if (/(?:repeating-)?(?:linear|radial|conic)-gradient\(/i.test(color)) {
-    return color.replace(/#[\da-f]{6}\b|rgba?\([^)]*\)|\btransparent\b/gi, stopColor => applyColorOpacity(stopColor, opacity))
+    return color.replace(/#[\da-f]{6}\b|rgba?\([^)]*\)|\btransparent\b/gi, stopColor => applyColorOpacity(stopColor, opacity, brightness))
   }
   const hex = /^#([\da-f]{6})$/i.exec(color)
   const rgb = /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*([\d.]+)\s*)?\)$/i.exec(color)
@@ -1773,7 +1799,8 @@ function applyColorOpacity(color: string, opacity: number): string {
     ? [parseInt(hex[1]!.slice(0, 2), 16), parseInt(hex[1]!.slice(2, 4), 16), parseInt(hex[1]!.slice(4, 6), 16), 1]
     : rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), rgb[4] === undefined ? 1 : Number(rgb[4])] : undefined
   if (!channels) return color
-  return `rgba(${channels.slice(0, 3).join(', ')}, ${Math.max(0, Math.min(channels[3]! * opacity, 1))})`
+  const rgbChannels = channels.slice(0, 3).map(channel => brightness ? Math.round(channel * (1 - Math.abs(brightness)) + Math.max(0, brightness) * 255) : channel)
+  return `rgba(${rgbChannels.join(', ')}, ${Math.max(0, Math.min(channels[3]! * opacity, 1))})`
 }
 
 function animatedRunColor(color: string | undefined, opacity: number): string | undefined {
@@ -1815,6 +1842,10 @@ function elementStyle(element: PptxElement): CSSProperties {
   const strokeDash = animationStrokeDash(element)
   const glows = element.glows?.length ? element.glows : element.glow ? [element.glow] : []
   const customGeometry = Boolean(element.customPaths?.length)
+  const radialFill = fillOn && !animatedFill && !customGeometry && !usesSvgPolygon(element) ? customSvgGradient(element, 'fill') : undefined
+  const radialBackground = radialFill?.kind === 'radial' && radialFill.fx !== undefined && radialFill.fy !== undefined && radialFill.fr !== undefined
+    ? radialGradientBackground(radialFill)
+    : undefined
   const showStroke = strokeOn && element.kind === 'shape' && !customGeometry && !usesSvgOutline(element) && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient')
   const transform = matrix
     ? [translations, `matrix(${matrix.slice(0, 4).join(',')},${matrix[4] * scale.value},${matrix[5] * scale.value})${hasScaleAnimation || hasRotationAnimation ? ` translate(${element.width * scale.value / 2}px,${element.height * scale.value / 2}px)${hasRotationAnimation ? ` rotate(${rotationDelta}deg)` : ''}${hasScaleAnimation ? ` scale(${scaleX},${scaleY})` : ''} translate(${-element.width * scale.value / 2}px,${-element.height * scale.value / 2}px)` : ''}`].filter(Boolean).join(' ')
@@ -1827,7 +1858,7 @@ function elementStyle(element: PptxElement): CSSProperties {
     overflow: customGeometry || usesSvgOutline(element) ? 'visible' : undefined,
     transform: transform || undefined,
     transformOrigin: matrix ? '0 0' : undefined,
-    background: element.kind === 'shape' && !customGeometry && !usesSvgPolygon(element) ? fillOn ? applyColorOpacity(fill, fillOpacity) : 'none' : undefined,
+    background: element.kind === 'shape' && !customGeometry && !usesSvgPolygon(element) ? fillOn ? radialBackground || applyColorOpacity(fill, fillOpacity) : 'none' : undefined,
     borderColor: showStroke ? stroke : undefined,
     borderWidth: showStroke ? `${strokeWidth * scale.value}px` : undefined,
     borderStyle: showStroke ? cssLineStyle(strokeDash) : undefined,
@@ -2657,9 +2688,16 @@ function customGeometryFill(element: PptxElement, path: NonNullable<PptxElement[
   const animatedFill = animationColor(element, 'fillcolor')
   const patternColors = isPatternFillCss(element.fill) ? [...element.fill.matchAll(/#[\da-f]{6}\b|rgba?\([^)]*\)/gi)].map(match => match[0]) : []
   const patternFallback = patternColors.filter(color => !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/i.test(color)).at(-1)
-  if (!animatedFill && patternFallback) return applyColorOpacity(patternFallback, animationOpacity(element, 'fill.opacity'))
-  if (!animatedFill && /^(?:linear|radial)-gradient\(/i.test(element.fill)) return `url(#${customGradientId(element, 'fill')})`
-  return applyColorOpacity(animatedFill || element.fill, animationOpacity(element, 'fill.opacity'))
+  const brightness = customPathBrightness(path.fillMode)
+  if (!animatedFill && patternFallback) return applyColorOpacity(patternFallback, animationOpacity(element, 'fill.opacity'), brightness)
+  if (!animatedFill && /^(?:linear|radial)-gradient\(/i.test(element.fill)) return `url(#${customGradientId(element, 'fill', path.fillMode)})`
+  return applyColorOpacity(animatedFill || element.fill, animationOpacity(element, 'fill.opacity'), brightness)
+}
+
+function customPathBrightness(mode: NonNullable<PptxElement['customPaths']>[number]['fillMode']): number {
+  // OOXML names the modes; use LibreOffice's 20%/40% blends pending Office screenshot calibration.
+  // https://github.com/LibreOffice/core/blob/master/svx/source/customshapes/EnhancedCustomShape2d.cxx
+  return mode ? { lighten: 0.4, lightenLess: 0.2, darken: -0.4, darkenLess: -0.2 }[mode] : 0
 }
 
 function isPatternFillCss(value: string): boolean {
@@ -2675,8 +2713,12 @@ function customGeometryStroke(element: PptxElement, path: NonNullable<PptxElemen
   return path.stroke && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient') ? stroke : 'none'
 }
 
-function customGradientId(element: PptxElement, kind: 'fill' | 'stroke'): string {
-  return `${customGradientScope}-${kind}-${element.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`
+function customGradientId(element: PptxElement, kind: 'fill' | 'stroke', mode?: NonNullable<PptxElement['customPaths']>[number]['fillMode']): string {
+  return `${customGradientScope}-${kind}-${element.id.replace(/[^a-zA-Z0-9_-]/g, '_')}${mode ? `-${mode}` : ''}`
+}
+
+function customGradientFocusClipId(element: PptxElement, pathIndex: number): string {
+  return `${customGradientScope}-fill-focus-${element.id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${pathIndex}`
 }
 
 function splitGradientStops(value: string): string[] {
@@ -2691,13 +2733,30 @@ function splitGradientStops(value: string): string[] {
   return stops
 }
 
-function customSvgGradient(element: PptxElement, kind: 'fill' | 'stroke'): CustomSvgGradient | undefined {
-  const css = kind === 'fill' ? element.fill : element.stroke
+const radialGradientBackgroundCache = new Map<string, string>()
+
+function radialGradientBackground(gradient: CustomSvgRadialGradient): string {
+  const key = JSON.stringify(gradient)
+  const cached = radialGradientBackgroundCache.get(key)
+  if (cached) return cached
+  const stops = gradient.stops.map(stop => `<stop offset="${stop.offset}" stop-color="${stop.color}" stop-opacity="${stop.opacity}"/>`).join('')
+  const transform = gradient.gradientTransform ? ` gradientTransform="${gradient.gradientTransform}"` : ''
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" preserveAspectRatio="none"><defs><radialGradient id="g" gradientUnits="userSpaceOnUse" cx="${gradient.cx}" cy="${gradient.cy}" r="${gradient.r}" fx="${gradient.fx}" fy="${gradient.fy}" fr="${gradient.fr}"${transform}${gradient.colorInterpolation ? ` color-interpolation="${gradient.colorInterpolation}"` : ''}>${stops}</radialGradient></defs><rect width="1000" height="1000" fill="url(#g)"/></svg>`
+  const background = `url("data:image/svg+xml,${encodeURIComponent(svg)}") center / 100% 100% no-repeat`
+  if (radialGradientBackgroundCache.size >= 128) radialGradientBackgroundCache.delete(radialGradientBackgroundCache.keys().next().value!)
+  radialGradientBackgroundCache.set(key, background)
+  return background
+}
+
+function customSvgGradient(element: PptxElement, kind: 'fill' | 'stroke', mode?: NonNullable<PptxElement['customPaths']>[number]['fillMode']): CustomSvgGradient | undefined {
+  const css = applyColorOpacity(kind === 'fill' ? element.fill : element.stroke, 1, customPathBrightness(mode))
   const opacity = kind === 'fill' ? animationOpacity(element, 'fill.opacity') : 1
-  const linear = /^linear-gradient\(\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))deg\s*,([\s\S]*)\)$/i.exec(css)
-  const radial = /^radial-gradient\(\s*(?:circle|ellipse)\s*,([\s\S]*)\)$/i.exec(css)
+  const layers = splitGradientStops(css)
+  const linear = /^linear-gradient\(\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))deg\s*,([\s\S]*)\)$/i.exec(layers.find(layer => layer.startsWith('linear-gradient(')) || '')
+  const radialLayer = layers.find(layer => /^radial-gradient\(\s*(?:circle|ellipse)(?:\s+at\s+[-+\d.]+%\s+[-+\d.]+%)?\s*,/i.test(layer)) || ''
+  const radial = /^radial-gradient\(\s*(circle|ellipse)(?:\s+at\s+([-+]?(?:\d+(?:\.\d*)?|\.\d+))%\s+([-+]?(?:\d+(?:\.\d*)?|\.\d+))%)?\s*,([\s\S]*)\)$/i.exec(radialLayer)
   if (!linear && !radial) return undefined
-  const stops = splitGradientStops((linear ? linear[2] : radial![1])!).map((stop): CustomSvgGradientStop | undefined => {
+  const stops = splitGradientStops((linear ? linear[2] : radial![4])!).map((stop): CustomSvgGradientStop | undefined => {
     const match = /^(.*)\s+([-+]?(?:\d+(?:\.\d*)?|\.\d+))%$/.exec(stop)
     if (!match) return undefined
     const color = match[1]!.trim()
@@ -2713,7 +2772,53 @@ function customSvgGradient(element: PptxElement, kind: 'fill' | 'stroke'): Custo
   })
   if (stops.length < 2 || stops.some(stop => !stop)) return undefined
 
-  if (radial) return { id: customGradientId(element, kind), kind: 'radial', cx: 500, cy: 500, r: 500, stops: stops as CustomSvgGradientStop[] }
+  if (radial) {
+    const focusEllipseLayer = layers.find(layer => /^radial-gradient\(\s*ellipse\s+closest-side\s*,[\s\S]*\)\s+left\s+[-+\d.]+%\s+top\s+[-+\d.]+%\s*\/\s*[-+\d.]+%\s+[-+\d.]+%\s+no-repeat$/i.test(layer))
+    const focusEllipse = focusEllipseLayer && /^radial-gradient\(\s*ellipse\s+closest-side\s*,([\s\S]*)\)\s+left\s+([-+\d.]+)%\s+top\s+([-+\d.]+)%\s*\/\s*([-+\d.]+)%\s+([-+\d.]+)%\s+no-repeat$/i.exec(focusEllipseLayer)
+    const focusRectLayer = layers.find(layer => /^linear-gradient\([\s\S]*\)\s+left\s+[-+\d.]+%\s+top\s+[-+\d.]+%\s*\/\s*[-+\d.]+%\s+[-+\d.]+%\s+no-repeat$/i.test(layer))
+    const focusRect = focusRectLayer && /^linear-gradient\(([\s\S]*)\)\s+left\s+([-+\d.]+)%\s+top\s+([-+\d.]+)%\s*\/\s*([-+\d.]+)%\s+([-+\d.]+)%\s+no-repeat$/i.exec(focusRectLayer)
+    const focus = focusEllipse || focusRect
+    const focusColor = focusEllipse
+      ? splitGradientStops(focusEllipse[1]!)[0]?.replace(/\s+[-+\d.]+%$/, '').trim()
+      : focusRect ? splitGradientStops(focusRect[1]!)[0]?.trim() : undefined
+    const cx = radial[2] === undefined ? 500 : Number(radial[2]) * 10
+    const cy = radial[3] === undefined ? 500 : Number(radial[3]) * 10
+    const left = focus ? Number(focus[2]) : 0
+    const top = focus ? Number(focus[3]) : 0
+    const width = focus ? Number(focus[4]) : 0
+    const height = focus ? Number(focus[5]) : 0
+    let gradientTransform: string | undefined
+    let fx: number | undefined, fy: number | undefined, fr: number | undefined
+    let focusOverlay: CustomSvgGradientFocus | undefined
+    if (element.width > 0 && element.height > 0) {
+      const circleRadius = radial[1]!.toLowerCase() === 'circle'
+        ? Math.max(...[0, 1000].flatMap(x => [0, 1000].map(y => Math.hypot((x - cx) * element.width / 1000, (y - cy) * element.height / 1000))))
+        : undefined
+      const radiusX = circleRadius === undefined ? Math.max(cx, 1000 - cx) : circleRadius * 1000 / element.width
+      const radiusY = circleRadius === undefined ? Math.max(cy, 1000 - cy) : circleRadius * 1000 / element.height
+      const scaleX = radiusX / 500, scaleY = radiusY / 500
+      gradientTransform = `translate(${cx} ${cy}) scale(${scaleX} ${scaleY}) translate(${-cx} ${-cy})`
+      if (focusEllipse && radial[1]!.toLowerCase() === 'circle' && circleRadius !== undefined) {
+        const focusCx = (left + width / 2) * 10
+        const focusCy = (top + height / 2) * 10
+        const focusRadiusX = width * element.width / 200
+        const focusRadiusY = height * element.height / 200
+        const focusRadius = (focusRadiusX + focusRadiusY) / 2
+        fx = cx + (focusCx - cx) / scaleX
+        fy = cy + (focusCy - cy) / scaleY
+        fr = focusRadius * 500 / circleRadius
+      } else if (focusEllipse) {
+        focusOverlay = { kind: 'ellipse', cx: (left + width / 2) * 10, cy: (top + height / 2) * 10, rx: width * 5, ry: height * 5, color: focusColor || '' }
+      } else if (focusRect) {
+        focusOverlay = { kind: 'rect', x: left * 10, y: top * 10, width: width * 10, height: height * 10, color: focusColor || '' }
+      }
+    }
+    return {
+      id: customGradientId(element, kind, mode), kind: 'radial',
+      cx, cy, r: 500, fx, fy, fr, colorInterpolation: fr !== undefined ? 'linearRGB' : undefined, gradientTransform, stops: stops as CustomSvgGradientStop[],
+      ...(focusOverlay ? { focus: focusOverlay } : {}),
+    }
+  }
 
   // DrawingML angles describe the direction of color change; CSS angles already retain that direction.
   // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.lineargradientfill.angle?view=openxml-3.0.1
@@ -2721,14 +2826,25 @@ function customSvgGradient(element: PptxElement, kind: 'fill' | 'stroke'): Custo
   const radians = Number(linear![1]) * Math.PI / 180
   const dx = Math.sin(radians), dy = -Math.cos(radians)
   const halfLength = (Math.abs(dx) + Math.abs(dy)) * 500
-  return { id: customGradientId(element, kind), kind: 'linear', x1: 500 - dx * halfLength, y1: 500 - dy * halfLength, x2: 500 + dx * halfLength, y2: 500 + dy * halfLength, stops: stops as CustomSvgGradientStop[] }
+  return { id: customGradientId(element, kind, mode), kind: 'linear', x1: 500 - dx * halfLength, y1: 500 - dy * halfLength, x2: 500 + dx * halfLength, y2: 500 + dy * halfLength, stops: stops as CustomSvgGradientStop[] }
 }
 
 function customGeometryGradients(element: PptxElement): CustomSvgGradient[] {
-  return (['fill', 'stroke'] as const).flatMap(kind => {
-    const gradient = customSvgGradient(element, kind)
-    return gradient ? [gradient] : []
-  })
+  const modifiers = [...new Set(element.customPaths?.map(path => path.fillMode).filter(mode => mode))]
+  return [
+    ...(['fill', 'stroke'] as const).flatMap(kind => {
+      const gradient = customSvgGradient(element, kind)
+      return gradient ? [gradient] : []
+    }),
+    ...modifiers.flatMap(mode => { const gradient = customSvgGradient(element, 'fill', mode); return gradient ? [gradient] : [] }),
+  ]
+}
+
+function customGeometryFillFocus(element: PptxElement, path: NonNullable<PptxElement['customPaths']>[number]) {
+  if (!path.fill || !animationOnOff(element, 'fill.on') || animationColor(element, 'fillcolor')) return undefined
+  const gradient = customSvgGradient(element, 'fill', path.fillMode)
+  const focus = gradient?.kind === 'radial' ? gradient.focus : undefined
+  return focus
 }
 
 function customGeometryStrokeWidth(element: PptxElement): string {
@@ -4359,6 +4475,9 @@ function textFrameStyle(element: PptxElement): CSSProperties {
   const wordArtVerticalRtlText = element.textOrientation === 'wordArtVertRtl'
   const mongolianVerticalText = element.textOrientation === 'mongolianVert'
   const columnCount = element.textColumnCount ?? 1
+  const verticalColumnWritingMode = columnCount > 1 && element.textOrientation && element.textOrientation !== 'horz' && !wordArtVerticalRtlText
+    ? element.textColumnsRightToLeft ? 'vertical-rl' : 'vertical-lr'
+    : undefined
   const rect = element.customTextRect
   const fittedSize = rect ? autoFitDimensions.get(`${props.slide.id}:${element.id}`) : undefined
   const ellipsisLineCount = supportsTextVerticalEllipsis(element) ? textEllipsisLineCounts.get(`${props.slide.id}:${element.id}`) : undefined
@@ -4402,7 +4521,7 @@ function textFrameStyle(element: PptxElement): CSSProperties {
     // https://www.w3.org/TR/css-writing-modes-3/#block-flow
     // wordArtVertRtl stacks text top-to-bottom and places earlier paragraphs to the right.
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.bodyproperties.vertical?view=openxml-3.0.0
-    writingMode: element.textOrientation === 'vert270' || mongolianVerticalText ? 'vertical-lr' : verticalText || eastAsianVerticalText || wordArtVerticalText || wordArtVerticalRtlText ? 'vertical-rl' : undefined,
+    writingMode: verticalColumnWritingMode ?? (element.textOrientation === 'vert270' || mongolianVerticalText ? 'vertical-lr' : verticalText || eastAsianVerticalText || wordArtVerticalText || wordArtVerticalRtlText ? 'vertical-rl' : undefined),
     textOrientation: verticalText ? 'sideways' : eastAsianVerticalText || wordArtVerticalText || wordArtVerticalRtlText || mongolianVerticalText ? 'upright' : undefined,
     direction: element.textOrientation === 'vert270' || usesRightToLeftColumns(element) ? 'rtl' : undefined,
   }
@@ -4666,7 +4785,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         <defs>
           <template v-for="gradient in customGeometryGradients(element).filter(item => usesSvgPolygon(element) || item.id === customGradientId(element, 'stroke'))" :key="gradient.id">
             <linearGradient v-if="gradient.kind === 'linear'" :id="gradient.id" gradientUnits="userSpaceOnUse" :x1="gradient.x1" :y1="gradient.y1" :x2="gradient.x2" :y2="gradient.y2"><stop v-for="(stop, index) in gradient.stops" :key="index" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></linearGradient>
-            <radialGradient v-else :id="gradient.id" gradientUnits="userSpaceOnUse" :cx="gradient.cx" :cy="gradient.cy" :r="gradient.r"><stop v-for="(stop, index) in gradient.stops" :key="index" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></radialGradient>
+            <radialGradient v-else :id="gradient.id" gradientUnits="userSpaceOnUse" :cx="gradient.cx" :cy="gradient.cy" :r="gradient.r" :fx="gradient.fx" :fy="gradient.fy" :fr="gradient.fr" :gradientTransform="gradient.gradientTransform" :color-interpolation="gradient.colorInterpolation"><stop v-for="(stop, index) in gradient.stops" :key="index" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></radialGradient>
           </template>
         </defs>
         <path :d="presetOutlinePath(element)" :fill="usesSvgPolygon(element) ? customGeometryFill(element, { d: '', fill: true, stroke: true }) : 'none'" :stroke="presetOutlineDetailPaths(element).length ? 'none' : customGeometryStroke(element, { d: '', fill: false, stroke: true })" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
@@ -4676,10 +4795,17 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         <defs>
           <template v-for="gradient in customGeometryGradients(element)" :key="gradient.id">
             <linearGradient v-if="gradient.kind === 'linear'" :id="gradient.id" gradientUnits="userSpaceOnUse" :x1="gradient.x1" :y1="gradient.y1" :x2="gradient.x2" :y2="gradient.y2"><stop v-for="(stop, stopIndex) in gradient.stops" :key="stopIndex" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></linearGradient>
-            <radialGradient v-else :id="gradient.id" gradientUnits="userSpaceOnUse" :cx="gradient.cx" :cy="gradient.cy" :r="gradient.r"><stop v-for="(stop, stopIndex) in gradient.stops" :key="stopIndex" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></radialGradient>
+            <radialGradient v-else :id="gradient.id" gradientUnits="userSpaceOnUse" :cx="gradient.cx" :cy="gradient.cy" :r="gradient.r" :fx="gradient.fx" :fy="gradient.fy" :fr="gradient.fr" :gradientTransform="gradient.gradientTransform" :color-interpolation="gradient.colorInterpolation"><stop v-for="(stop, stopIndex) in gradient.stops" :key="stopIndex" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></radialGradient>
           </template>
+          <template v-for="(path, pathIndex) in element.customPaths" :key="`focus-${pathIndex}`"><clipPath v-if="customGeometryFillFocus(element, path)" :id="customGradientFocusClipId(element, pathIndex)" clipPathUnits="userSpaceOnUse"><path :d="path.d" /></clipPath></template>
         </defs>
-        <path v-for="(path, pathIndex) in element.customPaths" :key="pathIndex" :d="path.d" :fill="customGeometryFill(element, path)" :stroke="customGeometryStroke(element, path)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
+        <template v-for="(path, pathIndex) in element.customPaths" :key="pathIndex">
+          <path :d="path.d" :fill="customGeometryFill(element, path)" :stroke="customGeometryStroke(element, path)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
+          <template v-for="focus in [customGeometryFillFocus(element, path)]" :key="`focus-${pathIndex}`">
+            <ellipse v-if="focus?.kind === 'ellipse'" :cx="focus.cx" :cy="focus.cy" :rx="focus.rx" :ry="focus.ry" :fill="focus.color" :clip-path="`url(#${customGradientFocusClipId(element, pathIndex)})`" />
+            <rect v-else-if="focus" :x="focus.x" :y="focus.y" :width="focus.width" :height="focus.height" :fill="focus.color" :clip-path="`url(#${customGradientFocusClipId(element, pathIndex)})`" />
+          </template>
+        </template>
       </svg>
       <div v-if="element.kind === 'video' && element.mediaUrl && !thumbnail" class="image-viewport">
         <video class="slide-video" :data-media-id="element.id" :data-media-slide-count="mediaSlideCounts.get(element.id) || undefined" :src="element.mediaUrl" :poster="element.imageUrl" controls playsinline preload="metadata" :aria-label="element.name" :style="imageStyle(element)" @loadedmetadata="updateMediaPlayback($event, element)" @seeking="updateMediaPlayback($event, element)" @timeupdate="updateMediaPlayback($event, element)" @play="updateMediaOnPlay($event, element)" @pause="updateMediaFadeForEvent($event, element)" @ended="finishTimedMedia(element)" @click.stop @pointerdown.stop />
@@ -4729,10 +4855,27 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
           </g>
           <text v-for="(label, index) in chartVisuals.get(element.id)?.categories" :key="`category-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" class="chart-label chart-category-label">{{ label.text }}</text>
         </g>
-        <g v-for="(label, index) in chartVisuals.get(element.id)?.dataLabels" :key="`data-label-${index}`"><rect v-if="label.legendKey" :data-key-id="chartDataLabelKeyId(element.id, index)" :x="chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18" :y="label.y - 12" width="12" height="12" :fill="label.legendKey.color" class="chart-data-label-key" /><text :x="label.x" :y="label.y" :text-anchor="label.anchor" :style="{ fill: label.style?.color, fontFamily: label.style?.fontFamily ? cssFontFamily(label.style.fontFamily) : undefined, fontSize: label.style?.fontSizePt === undefined ? undefined : `${label.style.fontSizePt * 4 / 3}px`, fontWeight: label.style?.bold === undefined ? undefined : label.style.bold ? 700 : 400, fontStyle: label.style?.italic === undefined ? undefined : label.style.italic ? 'italic' : 'normal', letterSpacing: label.style?.letterSpacingPt === undefined ? undefined : `${label.style.letterSpacingPt * 4 / 3}px`, textDecorationLine: label.style?.underline === undefined && label.style?.lineThrough === undefined ? undefined : [label.style?.underline ? 'underline' : undefined, label.style?.lineThrough ? 'line-through' : undefined].filter(Boolean).join(' ') || 'none', textDecorationStyle: label.style?.underline ? label.style.underlineStyle : label.style?.lineThrough ? label.style.lineThroughStyle : undefined, textDecorationColor: label.style?.underline ? label.style.underlineColor : undefined, textDecorationThickness: label.style?.underline && label.style.underlineThicknessEmu !== undefined ? `${label.style.underlineThicknessEmu * 4 / (3 * EMU_PER_POINT)}px` : undefined }" class="chart-data-label"><tspan v-for="(line, lineIndex) in label.lines" :key="lineIndex" :x="label.x" :y="label.y + (lineIndex - (label.lines.length - 1) / 2) * 22" :dy="label.style?.baselineOffsetEm === undefined ? undefined : `${-label.style.baselineOffsetEm}em`">{{ line }}</tspan></text></g>
+        <g v-for="(label, index) in chartVisuals.get(element.id)?.dataLabels" :key="`data-label-${index}`">
+          <g v-if="label.legendKey" :data-key-id="chartDataLabelKeyId(element.id, index)" :fill="label.legendKey.color" class="chart-data-label-key">
+            <rect v-if="!label.legendKey.markerChart" :x="chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18" :y="label.y - 12" width="12" height="12" class="chart-data-label-key-swatch" />
+            <path v-if="label.legendKey.line" :d="`M ${chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18} ${label.y - 6} H ${(chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 12}`" fill="none" :stroke="label.legendKey.color" stroke-width="2" stroke-linecap="round" class="chart-data-label-key-line" />
+            <template v-if="label.legendKey.symbol">
+              <circle v-if="!chartMarkerPath({x: (chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 6, y: label.y - 6, color: label.legendKey.color, radius: 4, symbol: label.legendKey.symbol})" :cx="(chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 6" :cy="label.y - 6" :r="label.legendKey.symbol === 'dot' ? 1.8 : 4" class="chart-data-label-key-marker" :data-marker-shape="label.legendKey.symbol" />
+              <path v-else :d="chartMarkerPath({x: (chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 6, y: label.y - 6, color: label.legendKey.color, radius: 4, symbol: label.legendKey.symbol})" class="chart-data-label-key-marker" :data-marker-shape="label.legendKey.symbol" />
+            </template>
+          </g>
+          <text :x="label.x" :y="label.y" :text-anchor="label.anchor" :style="{ fill: label.style?.color, fontFamily: label.style?.fontFamily ? cssFontFamily(label.style.fontFamily) : undefined, fontSize: label.style?.fontSizePt === undefined ? undefined : `${label.style.fontSizePt * 4 / 3}px`, fontWeight: label.style?.bold === undefined ? undefined : label.style.bold ? 700 : 400, fontStyle: label.style?.italic === undefined ? undefined : label.style.italic ? 'italic' : 'normal', letterSpacing: label.style?.letterSpacingPt === undefined ? undefined : `${label.style.letterSpacingPt * 4 / 3}px`, textDecorationLine: label.style?.underline === undefined && label.style?.lineThrough === undefined ? undefined : [label.style?.underline ? 'underline' : undefined, label.style?.lineThrough ? 'line-through' : undefined].filter(Boolean).join(' ') || 'none', textDecorationStyle: label.style?.underline ? label.style.underlineStyle : label.style?.lineThrough ? label.style.lineThroughStyle : undefined, textDecorationColor: label.style?.underline ? label.style.underlineColor : undefined, textDecorationThickness: label.style?.underline && label.style.underlineThicknessEmu !== undefined ? `${label.style.underlineThicknessEmu * 4 / (3 * EMU_PER_POINT)}px` : undefined }" class="chart-data-label"><tspan v-for="(line, lineIndex) in label.lines" :key="lineIndex" :x="label.x" :y="label.y + (lineIndex - (label.lines.length - 1) / 2) * 22" :dy="label.style?.baselineOffsetEm === undefined ? undefined : `${-label.style.baselineOffsetEm}em`">{{ line }}</tspan></text>
+        </g>
         <g class="chart-legend-group" :clip-path="chartVisuals.get(element.id)?.legendClip ? `url(#${chartVisuals.get(element.id)?.legendClip?.id})` : undefined">
           <g v-for="(entry, index) in chartVisuals.get(element.id)?.legend" :key="`legend-${index}`">
-            <rect :x="entry.x" :y="entry.y - 12" width="12" height="12" :fill="entry.color" />
+            <g :fill="entry.color" class="chart-legend-key" :data-symbol="entry.symbol">
+              <rect v-if="!entry.markerChart" :x="entry.x" :y="entry.y - 12" width="12" height="12" />
+              <path v-if="entry.line" :d="`M ${entry.x} ${entry.y - 6} H ${entry.x + 12}`" fill="none" :stroke="entry.color" stroke-width="2" stroke-linecap="round" class="chart-legend-key-line" />
+              <template v-if="entry.symbol">
+                <circle v-if="!chartMarkerPath({x: entry.x + 6, y: entry.y - 6, color: entry.color, radius: 4, symbol: entry.symbol})" :cx="entry.x + 6" :cy="entry.y - 6" :r="entry.symbol === 'dot' ? 1.8 : 4" class="chart-legend-key-marker" :data-marker-shape="entry.symbol" />
+                <path v-else :d="chartMarkerPath({x: entry.x + 6, y: entry.y - 6, color: entry.color, radius: 4, symbol: entry.symbol})" class="chart-legend-key-marker" :data-marker-shape="entry.symbol" />
+              </template>
+            </g>
             <text :x="entry.x + 18" :y="entry.y" class="chart-label chart-legend-label">{{ entry.text }}</text>
           </g>
         </g>

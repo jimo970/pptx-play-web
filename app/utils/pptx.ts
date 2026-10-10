@@ -814,9 +814,60 @@ function fillColor(parent: Element | undefined, theme: Record<string, string>, w
         const path = child(fill, 'path')
         if (path) {
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.pathgradientfill
-            if (child(path, 'fillToRect')) warnings.add('A path-gradient fillToRect focus rectangle is approximated by a centered radial gradient.')
-            if (path.getAttribute('path') !== 'circle') warnings.add('A non-circular path gradient was approximated with a radial gradient.')
-            return `radial-gradient(${path.getAttribute('path') === 'circle' ? 'circle' : 'ellipse'}, ${stops.join(', ')})`
+            const pathType = path.getAttribute('path')
+            if (pathType !== 'circle') warnings.add('A non-circular path gradient was approximated with a radial gradient.')
+            const focusRect = child(path, 'fillToRect')
+            let focusLayer = ''
+            let focusX = 0.5, focusY = 0.5, focusRadius = 0
+            if (focusRect) {
+                // MS-OI29500 specifies a 50% base default for b; omitted l/r/t edges default to 0.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c0c046ec-a61d-405d-88fe-74d8487a37d7
+                const edge = (name: string) => percentageValue(focusRect.getAttribute(name)) ?? (name === 'b' ? 0.5 : 0)
+                const left = edge('l'), right = edge('r'), top = edge('t'), bottom = edge('b')
+                const width = 1 - left - right, height = 1 - top - bottom
+                if (width < 0 || height < 0) {
+                    warnings.add('A path-gradient fillToRect has crossed focus edges and was ignored.')
+                    focusX = 0.5
+                    focusY = 0.5
+                } else {
+                    const ext = child(child(parent, 'xfrm'), 'ext')
+                    const shapeAspect = numberAttr(ext, 'cx') / numberAttr(ext, 'cy', 1)
+                    const aspect = Number.isFinite(shapeAspect) && shapeAspect > 0 ? shapeAspect : 1
+                    if (pathType === 'circle') {
+                        // Office interpolates between circles circumscribed around the shape and its focus rectangle.
+                        // https://learn.microsoft.com/en-us/answers/questions/2247174/how-is-attribute-filltorect-evaluated-for-a-gradie
+                        const focusCenterX = left + width / 2
+                        const focusCenterY = top + height / 2
+                        const focusRadiusY = Math.hypot(width * aspect, height) / 2
+                        const focusRadiusX = focusRadiusY / aspect
+                        const focusWidth = focusRadiusX * 2
+                        const focusHeight = focusRadiusY * 2
+                        const center = validStops.find(stop => stop.position === 0)?.color || validStops[0]!.color
+                        focusLayer = `radial-gradient(ellipse closest-side, ${center} 99.999%, transparent 100%) left ${(focusCenterX - focusRadiusX) * 100}% top ${(focusCenterY - focusRadiusY) * 100}% / ${focusWidth * 100}% ${focusHeight * 100}% no-repeat, `
+                    } else {
+                        const focusLeft = left
+                        const focusTop = top
+                        const focusWidth = width
+                        const focusHeight = height
+                        focusX = Math.abs(1 - width) > Number.EPSILON * 2
+                            ? (focusLeft - width * 0) / (1 - width) : focusLeft
+                        focusY = Math.abs(1 - height) > Number.EPSILON * 2
+                            ? (focusTop - height * 0) / (1 - height) : focusTop
+                        const distance = (x: number, y: number) => Math.hypot((x - focusX) * aspect, y - focusY)
+                        const outerRadius = Math.max(...[0, 1].flatMap(x => [0, 1].map(y => distance(x, y))))
+                        const focusRadiusPixels = Math.max(...[focusLeft, focusLeft + focusWidth].flatMap(x => [focusTop, focusTop + focusHeight].map(y => distance(x, y))))
+                        focusRadius = outerRadius ? Math.min(focusRadiusPixels / outerRadius, 1) : 0
+                        if (focusWidth > 0 && focusHeight > 0) {
+                            const center = validStops.find(stop => stop.position === 0)?.color || validStops[0]!.color
+                            focusLayer = `linear-gradient(${center}, ${center}) left ${focusLeft * 100}% top ${focusTop * 100}% / ${focusWidth * 100}% ${focusHeight * 100}% no-repeat, `
+                        }
+                    }
+                    if (focusLayer && pathType !== 'circle') warnings.add('A non-circular path-gradient focus rectangle is rendered over a radial-gradient approximation.')
+                }
+            }
+            const radialStart = pathType === 'circle' ? 0 : focusRadius
+            const radialStops = validStops.map(stop => `${stop.color} ${(radialStart + (1 - radialStart) * stop.position) * 100}%`)
+            return `${focusLayer}radial-gradient(${pathType === 'circle' ? 'circle' : 'ellipse'} at ${focusX * 100}% ${focusY * 100}%, ${radialStops.join(', ')})`
         }
         const angle = numberAttr(child(fill, 'lin'), 'ang') / 60_000
         return `linear-gradient(${(90 + angle) % 360}deg, ${stops.join(', ')})`
@@ -1060,7 +1111,7 @@ function parseCustomGeometryTextRect(geometry: Element | undefined, warnings: Se
 
 // DrawingML custom paths define their own coordinate system and can contain multiple paths.
 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.customgeometry?view=openxml-3.0.1
-// DrawingML arcTo uses the current point as the angle-locked start on its ellipse and sweeps clockwise.
+// DrawingML arcTo locks its start angle to the current point; ellipse angles are polar angles before path scaling.
 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.arcto?view=openxml-3.0.1
 function parseCustomGeometry(geometry: Element | undefined, warnings: Set<string>): PptxCustomPath[] | undefined {
     const nodes = children(child(geometry, 'pathLst'), 'path')
@@ -1149,14 +1200,20 @@ function parseCustomGeometry(geometry: Element | undefined, warnings: Set<string
                     unsupported = true
                     break
                 }
-                const startAngle = (((startAngleValue! / 60_000) % 360) * Math.PI) / 180
-                const sweepAngle = ((sweepAngleValue! / 60_000) * Math.PI) / 180
-                const centerX = currentPoint[0] - radiusX * Math.cos(startAngle)
-                const centerY = currentPoint[1] - radiusY * Math.sin(startAngle)
-                const segmentCount = Math.ceil(Math.abs(sweepAngle) / Math.PI)
+                const startAngle = startAngleValue! % 21_600_000
+                const sweepAngle = sweepAngleValue!
+                const ellipseOffset = (angle: number): [number, number] => {
+                    const [x, y] = presetEllipsePoint(radiusXValue!, radiusYValue!, angle)
+                    return [(x - 500) * radiusX / 500, (y - 500) * radiusY / 500]
+                }
+                const [startX, startY] = ellipseOffset(startAngle)
+                const centerX = currentPoint[0] - startX
+                const centerY = currentPoint[1] - startY
+                const segmentCount = Math.ceil(Math.abs(sweepAngle) / 10_800_000)
                 for (let segment = 1; segment <= segmentCount; segment++) {
                     const angle = startAngle + (sweepAngle * segment) / segmentCount
-                    currentPoint = [centerX + radiusX * Math.cos(angle), centerY + radiusY * Math.sin(angle)]
+                    const [offsetX, offsetY] = ellipseOffset(angle)
+                    currentPoint = [centerX + offsetX, centerY + offsetY]
                     d.push(`A ${radiusX} ${radiusY} 0 0 ${sweepAngle >= 0 ? 1 : 0} ${formatPoint(currentPoint)}`)
                 }
             } else if (command.localName === 'close') {
@@ -1176,8 +1233,9 @@ function parseCustomGeometry(geometry: Element | undefined, warnings: Set<string
             return []
         }
         const fillMode = path.getAttribute('fill') || 'norm'
-        if (!['norm', 'none'].includes(fillMode)) warnings.add(`The custom geometry ${fillMode} path fill mode was simplified to normal fill.`)
-        return [{d: d.join(' '), fill: fillMode !== 'none', stroke: !['0', 'false'].includes((path.getAttribute('stroke') || 'true').toLowerCase())}]
+        const modifier = fillMode === 'lighten' || fillMode === 'lightenLess' || fillMode === 'darken' || fillMode === 'darkenLess' ? fillMode : undefined
+        if (!modifier && !['norm', 'none'].includes(fillMode)) warnings.add(`The custom geometry ${fillMode} path fill mode was simplified to normal fill.`)
+        return [{d: d.join(' '), fill: fillMode !== 'none', fillMode: modifier, stroke: !['0', 'false'].includes((path.getAttribute('stroke') || 'true').toLowerCase())}]
     })
     if (unresolvedGuide) warnings.add('A custom geometry path references a missing, cyclic, or unsupported guide formula; dependent segments were omitted.')
     if (unsupported) warnings.add('Unsupported or malformed custom geometry path segments were omitted.')
@@ -1676,8 +1734,8 @@ function parseText(
     } else if (rawTextOrientation === 'wordArtVert' || rawTextOrientation === 'mongolianVert') {
         warnings.add(`The text vertical mode "${rawTextOrientation}" uses CSS writing modes; glyph shaping may differ from Office.`)
     }
-    if (textColumnsRightToLeft && textColumnCount && textColumnCount > 1 && rawTextOrientation && rawTextOrientation !== 'horz' && validTextOrientations.includes(rawTextOrientation as PptxTextOrientation)) {
-        warnings.add('Right-to-left column order with vertical text is not rendered; CSS writing-mode order is used.')
+    if (rawTextOrientation === 'wordArtVertRtl' && (textColumnCount ?? 1) > 1 && textColumnsRightToLeft !== true) {
+        warnings.add('wordArtVertRtl requires right-to-left column flow; rtlCol="0" or an omitted rtlCol cannot request left-to-right columns, so its vertical flow is preserved.')
     }
     if (wrap && !['square', 'none'].includes(wrap)) warnings.add(`The unsupported text wrapping mode "${wrap}" was ignored.`)
     return {
@@ -1794,8 +1852,8 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
     const textOrientation = bodyPr?.hasAttribute('vert') ? element.textOrientation : fallbackElement.textOrientation
     const textColumnCount = bodyPr?.hasAttribute('numCol') ? element.textColumnCount : fallbackElement.textColumnCount
     const textColumnsRightToLeft = bodyPr?.hasAttribute('rtlCol') ? element.textColumnsRightToLeft : fallbackElement.textColumnsRightToLeft
-    if (textColumnsRightToLeft && textColumnCount && textColumnCount > 1 && textOrientation && textOrientation !== 'horz') {
-        warnings.add('Right-to-left column order with vertical text is not rendered; CSS writing-mode order is used.')
+    if (textOrientation === 'wordArtVertRtl' && (textColumnCount ?? 1) > 1 && textColumnsRightToLeft !== true) {
+        warnings.add('wordArtVertRtl requires right-to-left column flow; rtlCol="0" or an omitted rtlCol cannot request left-to-right columns, so its vertical flow is preserved.')
     }
     return {
         ...element,
@@ -3484,7 +3542,6 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     if (numberFormatNodes.some(item => ['0', 'false'].includes((item.getAttribute('sourceLinked') || '1').toLowerCase()) && item.getAttribute('formatCode') && !isSupportedChartNumberFormat(item.getAttribute('formatCode')!.trim()))) {
         warnings.add('Unsupported chart number formats are rendered as raw values.')
     }
-    if (allDataLabelSettings.some(item => chartBoolean(child(item, 'showLegendKey')) === true)) warnings.add('Chart data-label legend keys use simplified square glyphs.')
     if (!isPieLike && allDataLabelSettings.some(item => chartBoolean(child(item, 'showPercent')) === true)) {
         warnings.add('Percentage data labels are rendered only for pie and doughnut charts.')
     }
@@ -4853,7 +4910,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const intervalMs = intervalNode?.localName === 'tmAbs' ? (intervalValue <= MAX_TL_TIME_MS ? intervalValue / Math.abs(action.playbackSpeed || 1) : NaN) : intervalNode?.localName === 'tmPct' ? (action.durationMs * intervalValue) / 100_000 : NaN
             const backwardsValue = iterate.getAttribute('backwards')
             const backwards = backwardsValue === '1' || backwardsValue === 'true'
-            if (intervalNodes.length !== 1 || !Number.isFinite(intervalValue) || intervalValue < 0 || (intervalNode?.localName === 'tmPct' && intervalValue > 100_000) || !Number.isFinite(intervalMs) || (elementIteration ? intervalMs < 0 : intervalMs <= 0)) {
+            if (intervalNodes.length !== 1 || !Number.isFinite(intervalValue) || intervalValue < 0 || (intervalNode?.localName === 'tmPct' && intervalValue > 100_000) || !Number.isFinite(intervalMs) || intervalMs < 0) {
                 warnings.add(elementIteration ? 'A shape iteration with an unsupported interval was rendered without staggering.' : 'A text iteration with unsupported type or interval was rendered as a single animation.')
                 return undefined
             }

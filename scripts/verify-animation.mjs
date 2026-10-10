@@ -21,6 +21,16 @@ const textOutlineRangeOnly = process.env.DECKLINE_VERIFY_TEXT_OUTLINE_RANGE === 
 const themeBackgroundOnly = process.env.DECKLINE_VERIFY_THEME_BACKGROUND === '1'
 const notesOnly = process.env.DECKLINE_VERIFY_NOTES === '1'
 const performanceOnly = process.env.DECKLINE_VERIFY_PERFORMANCE === '1'
+const customFillModes = ['lighten', 'lightenLess', 'darken', 'darkenLess']
+const customEllipseArcCases = [
+  [1000, 1000, 400, 200, 2700000, 5400000],
+  [1000, 1000, 400, 200, 2700000, -5400000],
+  [1000, 1000, 400, 200, 2700000, 16200000],
+  [1000, 1000, 400, 200, 2700000, 21600000],
+  [1000, 1000, 400, 200, 2700000, -21600000],
+  [2000, 1000, 800, 200, 2700000, 5400000],
+  [1000, 1000, 400, 200, 2700000, 0],
+]
 let presetGeometryNames = []
 let presetTextRectNames = []
 const pieCases = [[600000, 400000], [900000, 400000, 2700000, 16200000], [400000, 600000, 18000000, 1800000], [600000, 400000, 5400000, 5400000], [600000, 400000, -540000, 22000000]]
@@ -132,6 +142,7 @@ async function createFixture() {
   const picture = (id, name, x) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${name}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rIdBullet"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${x}" y="4900000"/><a:ext cx="800000" cy="700000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`
   const lineShape = (id, name, x, y, lineEnds = '') => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="2200000" cy="500000"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="63500"><a:solidFill><a:srgbClr val="0000ff"/></a:solidFill>${lineEnds}</a:ln></p:spPr></p:sp>`
   const gradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="4" name="Gradient shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="4000000"/><a:ext cx="2600000" cy="2000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"><a:alpha val="50000"/></a:srgbClr></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill>${shadow}</p:spPr></p:sp>`
+  const focusGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="69" name="Path gradient focus position"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="0000ff"/></a:gs><a:gs pos="100000"><a:srgbClr val="ff0000"/></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="20000" r="10000" t="25000"/></a:path></a:gradFill></p:spPr></p:sp>`
   const luminanceShape = `<p:sp><p:nvSpPr><p:cNvPr id="5" name="Luminance transform"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="3000000" y="4000000"/><a:ext cx="2600000" cy="2000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="00ff00"><a:lumMod val="50000"/><a:lumOff val="20000"/></a:srgbClr></a:solidFill></p:spPr></p:sp>`
   const nestedGroup = `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Nested group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm flipH="1"><a:off x="600000" y="300000"/><a:ext cx="600000" cy="400000"/><a:chOff x="100000" y="50000"/><a:chExt cx="300000" cy="200000"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="11" name="Nested group child"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="50000"/><a:ext cx="300000" cy="200000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="0ea5e9"/></a:solidFill></p:spPr></p:sp></p:grpSp>`
   const groupedShape = `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="8" name="Rotated group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm rot="5400000"><a:off x="5500000" y="3800000"/><a:ext cx="4000000" cy="2000000"/><a:chOff x="100000" y="200000"/><a:chExt cx="2000000" cy="1000000"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="9" name="Rotated group child"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="f43f5e"/></a:solidFill></p:spPr></p:sp>${nestedGroup}</p:grpSp>`
@@ -142,13 +153,14 @@ const guideDrivenGeometryPath = `<a:path w="1000" h="1000"><a:moveTo><a:pt x="xQ
 const guideFormulaPath = `<a:path w="1000" h="1000"><a:moveTo><a:pt x="addDiv" y="ifElse"/></a:moveTo><a:lnTo><a:pt x="absVal" y="maxVal"/><a:pt x="minVal" y="modVal"/><a:pt x="catVal" y="cosVal"/><a:pt x="ifElseFallback" y="satVal"/><a:pt x="sinVal" y="sqrtVal"/><a:pt x="tanVal" y="pinLow"/><a:pt x="pinHigh" y="adjX"/></a:lnTo></a:path>`
 const guideFormulaArcPath = `<a:path w="1000" h="1000"><a:moveTo><a:pt x="300" y="500"/></a:moveTo><a:arcTo wR="200" hR="200" stAng="angle45" swAng="cd4"/></a:path>`
 const customNegativeArcPath = `<a:path w="1000" h="1000" fill="none"><a:moveTo><a:pt x="100" y="500"/></a:moveTo><a:arcTo wR="400" hR="250" stAng="10800000" swAng="-10800000"/><a:lnTo><a:pt x="100" y="500"/></a:lnTo></a:path>`
+const customEllipseArcPaths = customEllipseArcCases.map(([width, height, radiusX, radiusY, start, sweep]) => `<a:path w="${width}" h="${height}" fill="none"><a:moveTo><a:pt x="${width * 0.7}" y="${height * 0.5}"/></a:moveTo><a:arcTo wR="${radiusX}" hR="${radiusY}" stAng="${start}" swAng="${sweep}"/></a:path>`).join('')
 const customGeometryShapeWithGuides = customGeometryShape
   .replace('<a:avLst/><a:gdLst/>', '<a:avLst><a:gd name="adjX" fmla="val 250"/></a:avLst><a:gdLst><a:gd name="xQuarter" fmla="*/ w adjX 1000"/><a:gd name="xThreeQuarter" fmla="+- w 0 xQuarter"/><a:gd name="bottom" fmla="pin 0 750 h"/><a:gd name="top" fmla="min h 250"/><a:gd name="addDiv" fmla="+/ 300 100 2"/><a:gd name="ifElse" fmla="?: 1 50 0"/><a:gd name="ifElseFallback" fmla="?: 0 50 25"/><a:gd name="absVal" fmla="abs -10"/><a:gd name="angle45" fmla="at2 1 1"/><a:gd name="catVal" fmla="cat2 100 1 0"/><a:gd name="cosVal" fmla="cos 100 0"/><a:gd name="maxVal" fmla="max 10 20"/><a:gd name="minVal" fmla="min 10 20"/><a:gd name="modVal" fmla="mod 3 4 12"/><a:gd name="satVal" fmla="sat2 100 1 0"/><a:gd name="sinVal" fmla="sin 100 0"/><a:gd name="sqrtVal" fmla="sqrt 256"/><a:gd name="tanVal" fmla="tan 100 0"/><a:gd name="pinLow" fmla="pin 0 -5 1000"/><a:gd name="pinHigh" fmla="pin 0 1200 1000"/></a:gdLst>')
-  .replace('</a:pathLst>', `${guideDrivenGeometryPath}${guideFormulaPath}${guideFormulaArcPath}${customNegativeArcPath}</a:pathLst>`)
+  .replace('</a:pathLst>', `${guideDrivenGeometryPath}${guideFormulaPath}${guideFormulaArcPath}${customNegativeArcPath}${customEllipseArcPaths}</a:pathLst>`)
 const customGeometryTextShape = `<p:sp><p:nvSpPr><p:cNvPr id="65" name="Custom text rectangle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5000000" y="4200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst><a:gd name="quarterWidth" fmla="*/ w 1 4"/></a:gdLst><a:ahLst/><a:cxnLst/><a:rect l="quarterWidth" t="200" r="900" b="800"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:lnTo><a:pt x="1000" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="38bdf8"/></a:solidFill></p:spPr><p:txBody><a:bodyPr lIns="0" rIns="0" tIns="0" bIns="0"/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"/><a:t>Inside custom text rectangle</a:t></a:r></a:p></p:txBody></p:sp>`
 const invalidCustomGeometryTextShape = `<p:sp><p:nvSpPr><p:cNvPr id="66" name="Invalid custom text rectangle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="7500000" y="4200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="800" t="200" r="200" b="800"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:lnTo><a:pt x="1000" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></p:spPr><p:txBody><a:bodyPr lIns="0" rIns="0" tIns="0" bIns="0"/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"/><a:t>Fallback text box</a:t></a:r></a:p></p:txBody></p:sp>`
 const customGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="67" name="Custom gradient geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="10000000" y="4200000"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/><a:pt x="1000" y="1000"/><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ff0000"/></a:gs><a:gs pos="50000"><a:srgbClr val="00ff00"><a:alpha val="50000"/></a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="0000ff"/></a:gs></a:gsLst><a:lin ang="0" scaled="1"/></a:gradFill><a:ln w="63500"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ffff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill></a:ln></p:spPr></p:sp>`
-const customRadialGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="68" name="Custom radial gradient geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="9500000" y="5200000"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/><a:pt x="1000" y="1000"/><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ff0000"><a:alpha val="50000"/></a:srgbClr></a:gs><a:gs pos="50000"><a:srgbClr val="00ff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000ff"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill><a:ln w="63500"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ffff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill></a:ln></p:spPr></p:sp>`
+const customRadialGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="68" name="Custom radial gradient geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="9500000" y="5200000"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/><a:pt x="1000" y="1000"/><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ff0000"><a:alpha val="50000"/></a:srgbClr></a:gs><a:gs pos="50000"><a:srgbClr val="00ff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000ff"/></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="20000" r="10000" t="25000"/></a:path></a:gradFill><a:ln w="63500"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ffff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill></a:ln></p:spPr></p:sp>`
 const characterSpacedShapeId = 59
   const groupFillPlaceholderShape = placeholderShape.replace('id="3"', 'id="96"').replace('Inherited paragraph', 'Group fill placeholder').replace('idx="1"', 'idx="2"').replace('<p:spPr/>', '<p:spPr><a:grpFill/><a:ln><a:grpFill/></a:ln></p:spPr>')
   const groupFillGroupShape = '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="100" name="Group fill parent"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="8000000" y="1000000"/><a:ext cx="2600000" cy="1500000"/><a:chOff x="0" y="0"/><a:chExt cx="2600000" cy="1500000"/></a:xfrm><a:solidFill><a:srgbClr val="12ab34"/></a:solidFill></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="101" name="Grouped fill child"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="1500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:grpFill/><a:ln w="25400"><a:grpFill/></a:ln></p:spPr></p:sp></p:grpSp>'
@@ -167,7 +179,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const tableCell = (text, attributes = '', color = 'ffffff') => `<a:tc ${attributes}><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1800" b="1"/><a:t>${text}</a:t></a:r></a:p></a:txBody><a:tcPr marL="91440" marR="91440" marT="45720" marB="45720"><a:lnL w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnL><a:lnR w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnR><a:lnT w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnT><a:lnB w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnB><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:tcPr></a:tc>`
   const autofitTableCell = tableCell('Table cell normal autofit shrinks overflowing text to stay inside this saved row. '.repeat(40), '', 'dbeafe').replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
   const columnTableCell = tableCell('This cell fills its first text column, then overflows into the left column with a gap.', '', 'fef3c7').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
-  const table = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="Basic table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="3000000" y="500000"/><a:ext cx="6000000" cy="4500000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="3000000"/></a:tblGrid><a:tr h="1500000">${tableCell('Merged header', 'gridSpan="2"', '1e40af')}${tableCell('', 'hMerge="1"')}</a:tr><a:tr h="1500000">${tableCell('Left cell')}${autofitTableCell}</a:tr><a:tr h="1500000">${columnTableCell}${tableCell('Next cell')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>` + customRadialGradientShape
+  const table = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="Basic table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="3000000" y="500000"/><a:ext cx="6000000" cy="4500000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="3000000"/></a:tblGrid><a:tr h="1500000">${tableCell('Merged header', 'gridSpan="2"', '1e40af')}${tableCell('', 'hMerge="1"')}</a:tr><a:tr h="1500000">${tableCell('Left cell')}${autofitTableCell}</a:tr><a:tr h="1500000">${columnTableCell}${tableCell('Next cell')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>` + customRadialGradientShape + focusGradientShape
   const chartFrame = (id, name, relationship, x, y, width, height) => `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${relationship}"/></a:graphicData></a:graphic></p:graphicFrame>`
   const chartPart = `<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Quarterly sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>North</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="0ea5e9"/></a:solidFill></c:spPr><c:cat><c:strRef><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>12</c:v></c:pt><c:pt idx="1"><c:v>18</c:v></c:pt><c:pt idx="2"><c:v>26</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>South</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr><c:cat><c:strRef><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>9</c:v></c:pt><c:pt idx="1"><c:v>15</c:v></c:pt><c:pt idx="2"><c:v>21</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart></c:plotArea></c:chart></c:chartSpace>`
   const tree = body => `<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="0" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${body}</p:spTree></p:cSld>`
@@ -185,6 +197,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const characterColor = `<p:par><p:cTn id="93" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr><p:cBhvr><p:cTn id="94" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"><p:txEl><p:charRg st="16" end="23"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.color</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="000000"/></p:from><p:to><a:srgbClr val="ff0000"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
   const characterFontSize = `<p:par><p:cTn id="95" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim to="1.5" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="96" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"><p:txEl><p:charRg st="19" end="23"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.fontSize</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const letterFade = `<p:par><p:cTn id="97" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="lt"><p:tmAbs val="150"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="98" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
+  const zeroIntervalLetterFade = `<p:par><p:cTn id="17300" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="lt"><p:tmAbs val="0"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="17301" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="162"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const wordFade = `<p:par><p:cTn id="101" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="wd" backwards="1"><p:tmPct val="50000"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="102" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const objectBlinds = `<p:par><p:cTn id="105" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="blinds(horizontal)"><p:cBhvr><p:cTn id="106" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="46"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const objectChecker = effectGroup(107, 'withEffect', 47, 'in', 'checkerboard(across)', 108, 400)
@@ -195,7 +208,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const parentRepeatDuration = effectGroup(303, 'clickEffect', 108, 'in', 'fade', 304, 300, '0', undefined, '', 'hold', ' dur="600" repeatCount="indefinite" repeatDur="900"')
   const parentRepeatAfterEffect = effectGroup(305, 'afterEffect', 109, 'in', 'fade', 306, 100)
   const parentRepeatDurationNextStep = effectGroup(309, 'clickEffect', 106, 'out', 'fade', 310, 80)
-  const parentSequentialStep = `<p:seq concurrent="0"><p:cTn id="311" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="109"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(312, 'clickEffect', 106, 'in', 'fade', 313, 600)}${effectGroup(314, 'clickEffect', 108, 'in', 'fade', 315, 200)}</p:childTnLst></p:cTn></p:seq>`
+  const parentSequentialStep = `<p:seq concurrent="0"><p:cTn id="311" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="109"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(312, 'clickEffect', 113, 'in', 'fade', 313, 600)}${effectGroup(314, 'clickEffect', 115, 'in', 'fade', 315, 200)}</p:childTnLst></p:cTn></p:seq>`
   const parentReverseSpeedGroup = effectGroup(800, 'clickEffect', 113, 'in', 'fade', 801, 600, '0', undefined, '', 'hold', ' dur="600" spd="-200000"')
   const parentAutoReverseGroup = effectGroup(802, 'clickEffect', 115, 'in', 'fade', 803, 600, '0', undefined, '', 'hold', ' dur="600" autoRev="1"')
   const parentIndefiniteRepeat = effectGroup(807, 'clickEffect', 117, 'in', 'fade', 808, 180, '0', undefined, '', 'hold', ' dur="360" repeatDur="indefinite"')
@@ -344,6 +357,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const elementIterationEffect = `<p:seq><p:cTn id="140" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="63"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="141" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:iterate type="el"><p:tmAbs val="200"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="142" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="62"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>`
   const wipeAnimations = ['right', 'left', 'up', 'down'].map((direction, index) => effectGroup(25 + index * 2, 'withEffect', 20 + index, 'in', `wipe(${direction})`, 26 + index * 2, 200, '0')).join('')
   const timing = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${fontSizeSet}${unsupportedSet}${emptyMotionGroup}${effectGroup(3, 'afterEffect', 6, 'in', 'fade', 4, 150, '0', undefined, ' repeatCount="2000"', 'remove')}${effectGroup(5, 'clickEffect', 2, 'in', 'fade', 6, 300, '0', undefined, ' accel="50000" decel="50000"')}${parentSpeedGroup}${motionEffect}${curveMotionEffect}${effectGroup(17, 'withEffect', 24, 'out', 'wipe(left)', 18, 200)}${effectGroup(7, 'withEffect', 3, 'in', 'fade', 8, 200, '100')}${effectGroup(9, 'afterEffect', 4, 'out', 'fade', 10, 200, '50', undefined, '', 'freeze')}${characterFade}${characterColor}${characterFontSize}${letterFade}${wordFade}${objectBlinds}${objectChecker}${effectGroup(103, 'afterEffect', 44, 'out', 'fade', 104, 100)}${parentEasedGroup}${parentTimingAfterEffect}${effectGroup(11, 'clickEffect', 5, 'in', 'cut', 12, 1)}${colorEffect(87, 4, 'fillcolor', 'f59e0b', 'ff0000')}${effectGroup(13, 'withEffect', 7, 'in', 'cut', 14, 1, '0', 0)}${scaleEffect}${rotationEffect}${wipeAnimations}${triggeredEffect}${triggeredMouseOver}${triggeredMouseOut}${triggeredDoubleClick}${elementIterationEffect}${triggeredSlideNext}${triggeredSlidePrevious}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>${speedTriggerSequence}${reverseSpeedSequence}${parentRepeatSequences}${triggeredTimingNodeBegin}${triggeredTimingNodeEnd}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+  const timingWithZeroInterval = timing.replace(letterFade, `${letterFade}${zeroIntervalLetterFade}`)
   const longSlowAnimation = effectGroup(30002, 'clickEffect', 123, 'in', 'fade', 30003, 40000, '0', undefined, ' spd="50000"')
   const longParentTiming = effectGroup(30004, 'clickEffect', 123, 'in', 'fade', 30005, 100, '0', undefined, '', 'hold', ' dur="60000" accel="25000"')
   const longTimingProbe = triggeredSequence(30001, 123, `${longSlowAnimation}${longParentTiming}`)
@@ -368,7 +382,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const letterRotation = `<p:animRot by="5400000"><p:cBhvr><p:cTn id="29105" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>`
   const letterVisibility = `<p:anim from="visible" to="hidden" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="29107" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr></p:anim>`
   const letterWipeAndSlide = letterWipe.replace('</p:animEffect></p:childTnLst>', `</p:animEffect>${letterSlide}${letterScale}${letterRotation}${letterVisibility}</p:childTnLst>`)
-  const timingWithLetterWipe = timing.replace(letterFade, letterWipeAndSlide)
+  const timingWithLetterWipe = timingWithZeroInterval.replace(letterFade, letterWipeAndSlide)
   assert(timingWithLetterWipe !== timing && letterWipeAndSlide.includes('filter="slide(fromLeft)"') && letterWipeAndSlide.includes('<p:attrName>style.visibility</p:attrName>'), 'The by-letter wipe, slide, and visibility fixtures must be included in slide timing.')
   const wordStrips = `<p:animEffect transition="in" filter="strips(downLeft)"><p:cBhvr><p:cTn id="29103" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr></p:animEffect>`
   const wordMotion = `<p:animMotion origin="parent"><p:cBhvr><p:cTn id="29106" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr><p:by x="0" y="10000"/></p:animMotion>`
@@ -407,6 +421,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   assert(timingWithRelativeMotion !== timing, 'The from/to/by motion fixture must be inserted into the main sequence.')
   const wipeShapes = ['right', 'left', 'up', 'down'].map((direction, index) => shape(20 + index, `Wipe ${direction}`, index * 3000000, 4000000, '38bdf8')).join('')
   const characterSlideShape = plainTextShape(160, 'Character slide animation', 9000000, 5900000, 'RESTMOVE')
+  const zeroIntervalTextShape = plainTextShape(162, 'Zero-interval letters', 9000000, 5700000, 'SYNC')
   const animatedShapes = `${shape(2, 'Click fade', 0, 0, 'ef4444')}${shadowedWithPrevious}${shape(4, 'Exit after previous', 6000000, 0, 'f59e0b')}${shape(5, 'Second click', 9000000, 0, '7c3aed')}${shape(6, 'Automatic fade', 0, 3000000, '0891b2')}${textShape(7, 'Paragraph build', 3000000, 3000000)}${plainTextShape(43, 'By letter', 0, 5700000, 'WORD')}${plainTextShape(45, 'By word', 3000000, 5700000, 'ONE TWO', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${shape(44, 'After letters', 6000000, 5700000, '14b8a6')}${shape(46, 'Blinds animation', 9000000, 4000000, '64748b')}${shape(47, 'Checker animation', 3000000, 4000000, '0ea5e9')}${shape(8, 'Scale emphasis', 8000000, 3000000, 'd946ef')}${shape(30, 'Motion path', 1000000, 3000000, '0f766e')}${shape(29, 'Curved motion path', 1000000, 3000000, 'fb923c')}${wipeShapes}${shape(24, 'Wipe exit', 8000000, 0, 'fb7185')}${shape(60, 'Slide entrance and exit', 9300000, 2500000, '22c55e')}${groupedShape}${customGeometryShapeWithGuides}${customGeometryTextShape}${invalidCustomGeometryTextShape}${customGradientShape}${elementIterationGroup}${shape(90, 'Next event target', 9000000, 5500000, '0891b2')}${shape(91, 'Previous event target', 10500000, 5500000, '9333ea')}${shape(97, 'Rotated fixed motion path', 4500000, 3000000, '0ea5e9', 500000, 500000)}${shape(98, 'Fast speed trigger', 8000000, 5200000, '0ea5e9')}${shape(99, 'Fast speed fade', 8500000, 5200000, 'f97316')}${shape(100, 'Reverse speed trigger', 6000000, 5200000, '14b8a6')}${shape(101, 'Reverse speed scale', 6500000, 5200000, 'a855f7')}${shape(102, 'Parent eased fade', 7000000, 5200000, 'facc15')}${shape(103, 'Parent timing after-effect', 7500000, 5200000, '22c55e')}${shape(104, 'Parent speed delayed', 8000000, 5200000, 'fb923c')}${shape(122, 'Formula fixed motion path', 5500000, 3500000, '0d9488')}${shape(123, 'Dynamic formula motion path', 6000000, 3500000, '0d9488')}${parentMotionGroup}${opacityFormulaShape}`
   const parentRepeatShapes = `${shape(105, 'Parent repeat count trigger', 1000000, 5000000, '0ea5e9')}${shape(106, 'Parent repeat count target', 2000000, 5000000, 'f97316')}${shape(107, 'Parent repeat duration trigger', 3000000, 5000000, '14b8a6')}${shape(108, 'Parent repeat duration target', 4000000, 5000000, 'a855f7')}${shape(109, 'Parent repeat after-effect', 5000000, 5000000, '22c55e')}`
   const parentTimingShapes = `${shape(112, 'Parent reverse speed trigger', 6000000, 5000000, '0ea5e9')}${shape(113, 'Parent reverse speed fade', 7000000, 5000000, 'f97316')}${shape(114, 'Parent auto-reverse trigger', 8000000, 5000000, '14b8a6')}${shape(115, 'Parent auto-reverse fade', 9000000, 5000000, 'a855f7')}${shape(116, 'Parent indefinite repeat trigger', 10000000, 5000000, '14b8a6')}${shape(117, 'Parent indefinite repeat fade', 10500000, 5000000, 'a855f7')}${shape(118, 'Child repeat duration trigger', 2000000, 6200000, '14b8a6')}${shape(119, 'Child repeat duration fade', 4500000, 6200000, 'a855f7')}`
@@ -441,6 +456,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const effectDagShapes = `${effectDagShape(7100, 'Sibling effect DAG', 300000, `<a:effectDag type="sib">${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${effectDagShape(7101, 'Tree effect DAG', 3700000, `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${effectDagShape(7102, 'Nested effect DAG', 7100000, `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}`
   const effectDagTextShapes = `${plainTextShape(7110, 'Sibling text effect DAG', 300000, 5200000, 'Sibling text', `<a:effectDag>${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${plainTextShape(7111, 'Tree text effect DAG', 3700000, 5200000, 'Tree text', `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${plainTextShape(7112, 'Nested text effect DAG', 7100000, 5200000, 'Nested text', `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}${plainTextShape(7113, 'Single text tree effect DAG', 9500000, 5200000, 'Single tree effect', `<a:effectDag type="tree">${dagShadow}</a:effectDag>`)}`
   const animatedSlide = `${animatedShapes}${connectorShapes}${parentRepeatShapes}${parentTimingShapes}${normalAutofitShape}${autofitReferenceShape}${lineShape(42, 'Stroke color', 500000, 6000000, '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="diamond" w="sm" len="sm"/>')}${plainTextShape(59, 'Paragraph wipe target', 9000000, 5500000, 'Paragraph wipe target', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${textRangeOpacityShape}`
+  const animatedSlideWithZeroInterval = `${animatedSlide}${zeroIntervalTextShape}`
   const insetEffectFixtures = [
     shape(7114, 'Shape inner effect list', 300000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
     shape(7115, 'Shape inner effect DAG', 2700000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectDag type="sib">${dagShadow}${innerShadowFixture}</a:effectDag></p:spPr>`),
@@ -448,7 +464,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     plainTextShape(7117, 'Direct text inner shadow', 7500000, 6100000, 'Text inner shadow', `<a:effectLst>${innerShadowFixture}</a:effectLst>`),
     plainTextShape(7118, 'DAG text inner shadow', 9900000, 6100000, 'Text inner shadow', `<a:effectDag>${innerShadowFixture}</a:effectDag>`)
   ].join('')
-  const animatedSlideWithTextShadow = `${animatedSlide}${characterSlideShape}${textShadowShapes}${appearanceToggleShape}${textOutlineRangeShape}`
+  const animatedSlideWithTextShadow = `${animatedSlideWithZeroInterval}${characterSlideShape}${textShadowShapes}${appearanceToggleShape}${textOutlineRangeShape}`
   const animatedSlideWithRelativeMotion = `${animatedSlideWithTextShadow}${shape(92, 'Relative position motion', 4500000, 3000000, 'ea580c')}${shape(93, 'From/to motion', 5500000, 3000000, 'c026d3')}${shape(94, 'From/by motion', 6500000, 3000000, 'ca8a04')}${shape(95, 'To-only motion', 7500000, 3000000, '2563eb')}${shape(96, 'Fixed motion path', 4500000, 4000000, '0d9488')}`.replace('<a:ln w="25400">', '<a:ln w="25400"><a:prstDash val="dash"/>')
     zip.file('ppt/slides/slide1.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(`${animatedSlideWithRelativeMotion}${pictureBulletFixture}`)}<p:transition spd="med"><p:zoom dir="in"/></p:transition>${timingWithRelativeMotion}</p:sld>`)
   const lineChartPart = chartPart.replace('<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>', '<c:lineChart><c:grouping val="standard"/>').replaceAll('barChart', 'lineChart')
@@ -615,6 +631,11 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     .replace('<c:lblOffset val="100"/></c:catAx>', '<c:lblOffset val="100"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="2"/></c:catAx>'))
   const chart4WithLegendKeys = await zip.file('ppt/charts/chart4.xml').async('string')
   zip.file('ppt/charts/chart4.xml', chart4WithLegendKeys.replace('<c:axId val="1"/>', '<c:dLbls><c:showLegendKey val="1"/><c:dLbl><c:idx val="1"/><c:showLegendKey val="0"/></c:dLbl></c:dLbls><c:axId val="1"/>'))
+  const chart2WithLegendKeyStyles = await zip.file('ppt/charts/chart2.xml').async('string')
+  zip.file('ppt/charts/chart2.xml', chart2WithLegendKeyStyles
+    .replace('<c:spPr><a:solidFill><a:srgbClr val="0ea5e9"/></a:solidFill></c:spPr>', '<c:spPr><a:solidFill><a:srgbClr val="0ea5e9"/></a:solidFill></c:spPr><c:marker><c:symbol val="diamond"/></c:marker>')
+    .replace('<c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr>', '<c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr><c:marker><c:symbol val="circle"/></c:marker><c:dPt><c:idx val="1"/><c:marker><c:symbol val="triangle"/></c:marker></c:dPt>')
+    .replace('<c:showSerName val="1"/>', '<c:showSerName val="1"/><c:showLegendKey val="1"/>'))
   zip.file('ppt/charts/chart8.xml', withValueLabels(stackedBarChartPart, 'barChart'))
   zip.file('ppt/charts/chart9.xml', withValueLabels(percentStackedBarChartPart, 'barChart'))
   zip.file('ppt/charts/chart10.xml', withValueLabels(stackedLineChartPart, 'lineChart'))
@@ -921,6 +942,9 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     + plainTextShape(80, 'Two-column text', 0, 3000000, 'First column text keeps flowing until its height is full, then the remaining words continue in the second column with the configured gap.').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="0"/>')
     + plainTextShape(81, 'Two-column RTL text', 3000000, 3000000, 'The rightmost text column comes first, then overflow continues in the left column while paragraph text remains left-to-right.').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
     + plainTextShape(82, 'RTL paragraph direction', 6000000, 3000000, 'Paragraph rtl controls this paragraph direction independently from the text column order.').replace('<a:p>', '<a:p><a:pPr rtl="1"/>').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
+    + plainTextShape(83, 'Vertical columns LTR', 0, 0, '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏').replace('cy="800000"', 'cy="2500000"').replace('<a:bodyPr/>', '<a:bodyPr vert="eaVert" numCol="2" spcCol="457200" rtlCol="0"/>')
+    + plainTextShape(84, 'Vertical columns RTL', 3000000, 0, '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏').replace('cy="800000"', 'cy="2500000"').replace('<a:bodyPr/>', '<a:bodyPr vert="eaVert" numCol="2" spcCol="457200" rtlCol="1"/>')
+    + plainTextShape(85, 'WordArt RTL columns missing rtlCol', 6000000, 0, '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏').replace('cy="800000"', 'cy="2500000"').replace('<a:bodyPr/>', '<a:bodyPr vert="wordArtVertRtl" numCol="2"/>')
   zip.file('ppt/slides/slide17.xml', slide17Xml.replace('</p:spTree>', verticalOrientationFixtures + '</p:spTree>'))
   const layoutPath = 'ppt/slideLayouts/slideLayout1.xml'
   const layoutXml = await zip.file(layoutPath).async('string')
@@ -1662,6 +1686,14 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     assert(slideRelsWithLayout !== slideRels, `The master visibility fixture could not link slide ${slideNumber} to its layout.`)
     zip.file(relsPath, slideRelsWithLayout)
   }
+  const fillModePaths = customFillModes.map((mode, index) => `<a:path w="1000" h="1000" fill="${mode}"><a:moveTo><a:pt x="${index * 250}" y="0"/></a:moveTo><a:lnTo><a:pt x="${(index + 1) * 250}" y="0"/><a:pt x="${(index + 1) * 250}" y="1000"/><a:pt x="${index * 250}" y="1000"/></a:lnTo><a:close/></a:path>`).join('')
+  for (const entry of zip.file(/^ppt\/slides\/slide\d+\.xml$/)) {
+    const xml = await entry.async('string')
+    zip.file(entry.name, xml.replace(/<p:sp>.*?<\/p:sp>/g, shapeXml => {
+      if (!/name="Custom (?:text rectangle|gradient geometry|radial gradient geometry|gradient opacity)"/.test(shapeXml)) return shapeXml
+      return shapeXml.replace('</a:pathLst>', `${fillModePaths}</a:pathLst>`)
+    }))
+  }
   await writeFile(fixturePath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
 }
 
@@ -1749,6 +1781,8 @@ try {
         visibility: getComputedStyle(element).visibility,
         opacity: getComputedStyle(element).opacity,
         backgroundImage: getComputedStyle(element).backgroundImage,
+        backgroundPosition: getComputedStyle(element).backgroundPosition,
+        backgroundSize: getComputedStyle(element).backgroundSize,
         maskImage: getComputedStyle(element).maskImage,
         clipPath: getComputedStyle(element).clipPath,
         transform: getComputedStyle(element).transform,
@@ -1878,6 +1912,7 @@ try {
         send()
       }
     }
+    globalThis.__decklineTrackedWorker = globalThis.Worker
     const nativeOpen = globalThis.open.bind(globalThis)
     globalThis.__decklineOpenedWindows = []
     globalThis.open = (...args) => {
@@ -1923,6 +1958,35 @@ try {
       await delay(50)
     }
     throw new Error(`The upload error did not contain "${expected}". Last message: ${lastError || '(none)'}; state: ${JSON.stringify(lastState)}`)
+  }
+  if (!inputPptx && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
+    const fallbackArchive = await JSZip.loadAsync(await readFile(fixturePath))
+    const fallbackPresentation = await fallbackArchive.file('ppt/presentation.xml').async('string')
+    const slideList = /<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/.exec(fallbackPresentation)?.[1]
+    const firstSlideId = slideList && /<p:sldId\b[^>]*\/>/.exec(slideList)?.[0]
+    assert(firstSlideId, 'The worker-fallback fixture could not retain its first slide relationship.')
+    const reducedPresentation = fallbackPresentation.replace(/<p:sldIdLst>[\s\S]*?<\/p:sldIdLst>/, `<p:sldIdLst>${firstSlideId}</p:sldIdLst>`)
+    assert(reducedPresentation !== fallbackPresentation, 'The worker-fallback fixture could not reduce its slide list.')
+    fallbackArchive.file('ppt/presentation.xml', reducedPresentation)
+    const fallbackFixturePath = join(runtimeDir, 'worker-startup-fallback.pptx')
+    await writeFile(fallbackFixturePath, Buffer.from(await fallbackArchive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })))
+    const forcedWorkerFailure = await evaluate(`(() => {
+      if (!globalThis.__decklineTrackedWorker) return false
+      globalThis.Worker = class { constructor() { throw new Error('Simulated parser worker startup failure.') } }
+      return true
+    })()`)
+    assert(forcedWorkerFailure, 'The parser-worker fallback test could not replace the browser Worker constructor.')
+    const fallbackName = await uploadPath(fallbackFixturePath)
+    await evaluate('globalThis.Worker = globalThis.__decklineTrackedWorker')
+    let fallbackLoaded = false
+    for (let attempt = 0; attempt < 100; attempt++) {
+      fallbackLoaded = await evaluate(`document.querySelector('.deck-title')?.textContent === ${JSON.stringify(fallbackName)} && !document.querySelector('.loading-overlay')`)
+      if (fallbackLoaded) break
+      await delay(50)
+    }
+    const fallbackState = await state()
+    assert(fallbackLoaded && !fallbackState.error && fallbackState.shapes.length > 0 && fallbackState.warnings.some(warning => warning.includes('parsing worker could not start')),
+      `A valid deck must still parse locally when worker construction fails, with a visible main-thread fallback warning: ${JSON.stringify({ fallbackName, title: fallbackState.title, shapes: fallbackState.shapes.length, warnings: fallbackState.warnings, error: fallbackState.error })}`)
   }
   if (!grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
     const corruptArchivePath = join(runtimeDir, 'damaged.pptx')
@@ -2031,7 +2095,7 @@ try {
         return true
       })()`)
     }
-    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : initial.shapes.length === 105) break
+    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : initial.shapes.length === 106) break
   }
   if (!captureOnly && !themeBackgroundOnly && !strokeWidthOnly && !textOutlineRangeOnly) {
     assert(!initial.warnings.some(warning => warning.includes('beyond 30 seconds')), `Valid timing over 30 seconds must not be capped or skipped: ${JSON.stringify(initial.warnings)}`)
@@ -2079,7 +2143,7 @@ try {
       assert(shape(visibleMaster, 'Master visibility marker'), `A slide without showMasterSp must show master shapes by default: ${JSON.stringify({slide: visibleMaster.slide, shapeCount: visibleMaster.shapes.length})}`)
       await evaluate(`document.querySelector('[aria-label="Go to slide 1"]')?.click()`)
       const hiddenMaster = await stateOnSlide(1)
-      assert(!shape(hiddenMaster, 'Master visibility marker') && hiddenMaster.shapes.length === 105, `Returning to the slide with showMasterSp="false" must keep master shapes hidden: ${JSON.stringify({slide: hiddenMaster.slide, shapeCount: hiddenMaster.shapes.length})}`)
+      assert(!shape(hiddenMaster, 'Master visibility marker') && hiddenMaster.shapes.length === initial.shapes.length, `Returning to the slide with showMasterSp="false" must keep master shapes hidden: ${JSON.stringify({slide: hiddenMaster.slide, shapeCount: hiddenMaster.shapes.length, initialShapeCount: initial.shapes.length})}`)
       const resetFixturePath = join(runtimeDir, 'master-visibility-reset.pptx')
       await copyFile(fixturePath, resetFixturePath)
       await uploadPath(resetFixturePath)
@@ -2095,6 +2159,14 @@ try {
   }
   if (captureOnly && inputPptx) {
     assert(initial.slide && !initial.error, `The PPTX did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+    if (process.env.DECKLINE_CAPTURE_SLIDE_NUMBER) {
+      const captureSlideNumber = Number(process.env.DECKLINE_CAPTURE_SLIDE_NUMBER)
+      assert(Number.isInteger(captureSlideNumber) && captureSlideNumber > 0 && captureSlideNumber <= Number(initial.slide?.split('/')[1].trim()), `DECKLINE_CAPTURE_SLIDE_NUMBER must select an existing slide: ${captureSlideNumber}`)
+      await evaluate(`document.querySelector(${JSON.stringify(`[aria-label="Go to slide ${captureSlideNumber}"]`)})?.click()`)
+      for (let attempt = 0; attempt < 40 && Number((await state()).slide?.split('/')[0].trim()) !== captureSlideNumber; attempt++) await delay(50)
+      initial = await state()
+      assert(Number(initial.slide?.split('/')[0].trim()) === captureSlideNumber, `The requested capture slide did not open: ${captureSlideNumber}`)
+    }
     if (process.env.DECKLINE_VERIFY_NAVIGATION === '1') {
       assert(initial.slide.startsWith('01 / 03'), `The navigation fixture must open on slide 1 of 3: ${initial.slide}`)
       const press = async key => {
@@ -2122,7 +2194,8 @@ try {
       const text = document.querySelector('.stage-shell > .slide-host [title="Run glow"] .text-run')
       return { shapeFilter: shape ? getComputedStyle(shape).filter : null, textShadow: text ? getComputedStyle(text).textShadow : null }
     })()`)
-    console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, shapeCount: initial.shapes.length, glowStyles }))
+    const radialStyles = initial.shapes.filter(shape => shape.backgroundImage.includes('radial-gradient')).map(({name, backgroundImage, backgroundPosition, backgroundSize}) => ({name, backgroundImage, backgroundPosition, backgroundSize}))
+    console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, shapeCount: initial.shapes.length, radialStyles, glowStyles }))
     break captureFlow
   }
   if (embeddedFontTestPath && !inputPptx) {
@@ -2954,7 +3027,7 @@ try {
     assert(runtimeErrors.length === 0, `Notes browser exceptions: ${runtimeErrors.join('; ')}`)
     console.log('Speaker-note rich text, master colors/defaults, character/number/picture bullets verified.')
   } else if (textOutlineRangeOnly) {
-    assert(initial.slide && !initial.error && initial.shapes.length === 105, `The text-outline-range fixture did not render: ${JSON.stringify({ upload, slide: initial.slide, shapeCount: initial.shapes.length, runtimeErrors })}`)
+    assert(initial.slide && !initial.error && initial.shapes.length === 106, `The text-outline-range fixture did not render: ${JSON.stringify({ upload, slide: initial.slide, shapeCount: initial.shapes.length, runtimeErrors })}`)
     const readOutlineWidths = snapshot => Object.fromEntries(snapshot.textRuns.filter(run => run.name === 'Text outline range').map(run => [run.text, Number.parseFloat(run.textStrokeWidth)]))
     const readOutlineShadows = snapshot => Object.fromEntries(snapshot.textRuns.filter(run => run.name === 'Text outline range').map(run => [run.text, run.textShadow]))
     const initialWidths = readOutlineWidths(initial)
@@ -3109,7 +3182,7 @@ try {
     assert(restoredPan === '0px' || restoredPan === '0px 0px', 'Returning to 100% zoom must recenter the slide: ' + JSON.stringify(restoredPan))
     console.log('Image grayscale, picture crop, image tone, and touch swipe/pinch/pan verification passed.')
   } else if (performanceOnly) {
-    assert(initial.shapes.length === 105 && !initial.error, `The performance fixture must render before sampling: ${JSON.stringify({ shapeCount: initial.shapes?.length, error: initial.error, warnings: initial.warnings, runtimeErrors })}`)
+    assert(initial.shapes.length === 106 && !initial.error, `The performance fixture must render before sampling: ${JSON.stringify({ shapeCount: initial.shapes?.length, error: initial.error, warnings: initial.warnings, runtimeErrors })}`)
     assert(process.env.DECKLINE_PERFORMANCE_PATH, 'Set DECKLINE_PERFORMANCE_PATH to retain the measurement JSON.')
     await call('Performance.enable')
     const traceCompleted = new Promise(resolve => { resolveTrace = resolve })
@@ -3165,7 +3238,7 @@ try {
     const summary = { frames: sorted.length, medianIntervalMs: sorted[Math.floor(sorted.length / 2)], p95IntervalMs: sorted[Math.ceil(sorted.length * 0.95) - 1], maxIntervalMs: sorted.at(-1), longTasks: sample.longTasksMs.length, metricsMs }
     const taskTimes = [...frameTaskMs].sort((a, b) => a - b)
     summary.frameTasks = { p95Ms: taskTimes[Math.ceil(taskTimes.length * 0.95) - 1], maxMs: taskTimes.at(-1), intervalsOver16Ms: taskTimes.filter(value => value > 16).length }
-    const report = { capturedAt: new Date().toISOString(), baseUrl, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'unspecified', browserFlags: ['--headless=new', '--disable-gpu'], fixture: 'First slide, 105 rendered shapes, first animation step, two seconds', tracePath, summary, sample, frameTaskMs, limitations: ['RAF intervals describe scheduling cadence, not per-frame CPU/render time.', 'Trace task durations measure main-thread occupied wall time between RAF callback markers, not GPU paint/compositor time or CPU-only execution.', 'Tracing adds measurement overhead; compare only identically instrumented runs.', 'This sample does not establish Office/WPS fidelity, all-file performance, or cross-browser performance.'] }
+    const report = { capturedAt: new Date().toISOString(), baseUrl, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'unspecified', browserFlags: ['--headless=new', '--disable-gpu'], fixture: 'First slide, 106 rendered shapes, first animation step, two seconds', tracePath, summary, sample, frameTaskMs, limitations: ['RAF intervals describe scheduling cadence, not per-frame CPU/render time.', 'Trace task durations measure main-thread occupied wall time between RAF callback markers, not GPU paint/compositor time or CPU-only execution.', 'Tracing adds measurement overhead; compare only identically instrumented runs.', 'This sample does not establish Office/WPS fidelity, all-file performance, or cross-browser performance.'] }
     await writeFile(process.env.DECKLINE_PERFORMANCE_PATH, JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify({ performanceReport: process.env.DECKLINE_PERFORMANCE_PATH, ...summary }))
   } else if (captureOnly) {
@@ -3183,7 +3256,7 @@ try {
     await writeFile(process.env.DECKLINE_CAPTURE_SLIDE_PATH, Buffer.from(screenshot.data, 'base64'))
     console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, hostFrame: initial.hostFrame, shapes: initial.shapes, paragraphs: initial.paragraphs, textRuns: initial.textRuns, textLayout }))
   } else {
-  assert(initial.shapes.length === 105, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+  assert(initial.shapes.length === 106, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
   const boundConnectorPath = await evaluate(`[...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === 'Bound straight connector')?.querySelector('.line-render path')?.getAttribute('d') || ''`)
   assert(boundConnectorPath === 'M 26.3158 142.8571 L 947.3684 857.1429', `Preset connection sites must use their indices and the rotated target transform: ${boundConnectorPath}`)
   assert(initial.warnings.includes('Only rotation animations currently accumulate repeated values; this animation repeats without accumulation.'), 'A repeated non-rotation behavior with accumulate="always" must warn when its values are not accumulated.')
@@ -3303,6 +3376,25 @@ try {
   assert(customArc?.d.includes('A 400 250 0 0 1 900') && customArc.fill === 'none' && customArc.stroke === 'rgb(22, 101, 52)', `DrawingML arcTo must render as a clockwise SVG ellipse arc: ${JSON.stringify(customArc)}`)
   const customNegativeArc = shape(initial, 'Custom geometry').customPaths[6]
   assert(customNegativeArc?.d.includes('A 400 250 0 0 0 900') && customNegativeArc.fill === 'none', `DrawingML arcTo must preserve valid negative sweep angles and map their direction to SVG: ${JSON.stringify(customNegativeArc)}`)
+  customEllipseArcCases.forEach(([width, height, radiusX, radiusY, start, sweep], index) => {
+    const path = shape(initial, 'Custom geometry').customPaths[7 + index]
+    const arcs = path?.d.split(' A ').slice(1).map(command => command.trim().split(/\s+/).map(Number))
+    const count = Math.ceil(Math.abs(sweep) / 10800000)
+    assert(arcs?.length === count && path.fill === 'none', `Ellipse sweep ${index} must preserve its segment count and no-fill mode: ${JSON.stringify(path)}`)
+    const rayIntersection = angle => {
+      const radians = angle * Math.PI / 10800000
+      const cos = Math.cos(radians), sin = Math.sin(radians)
+      const distance = 1 / Math.hypot(cos / radiusX, sin / radiusY)
+      return [distance * cos * 1000 / width, distance * sin * 1000 / height]
+    }
+    const origin = rayIntersection(start)
+    arcs.forEach((arc, segment) => {
+      const point = rayIntersection(start + sweep * (segment + 1) / count)
+      const expected = [radiusX * 1000 / width, radiusY * 1000 / height, 0, 0, sweep >= 0 ? 1 : 0, 700 - origin[0] + point[0], 500 - origin[1] + point[1]]
+      assert(arc.length === expected.length && arc.every((value, part) => Math.abs(value - expected[part]) < 1e-6), `DrawingML ellipse sweep ${index}, segment ${segment} must intersect the angle ray before path scaling: ${JSON.stringify({ arc, expected })}`)
+    })
+    if (!count) assert(path.d === 'M 700 500', `A zero sweep must keep the current pen point: ${path.d}`)
+  })
   const guideDrivenPath = shape(initial, 'Custom geometry').customPaths[3]
   assert(guideDrivenPath?.d.includes('M 250 750 L 750 750 L 750 250 Z'), `Custom geometry points must resolve chained guides, adjustment values, and standard formulas: ${JSON.stringify(guideDrivenPath)}`)
   const guideFormulaPath = shape(initial, 'Custom geometry').customPaths[4]
@@ -3484,7 +3576,7 @@ try {
     const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom gradient geometry"] .custom-geometry path')
     const read = property => {
       const paint = path?.getAttribute(property) || ''
-      const id = /^url\\(#(.+)\\)$/.exec(paint)?.[1]
+      const id = /^url\\(["']?#(.+?)["']?\\)$/.exec(paint)?.[1]
       const gradient = id ? document.getElementById(id) : undefined
       return { paint, x1: Number(gradient?.getAttribute('x1')), y1: Number(gradient?.getAttribute('y1')), x2: Number(gradient?.getAttribute('x2')), y2: Number(gradient?.getAttribute('y2')), units: gradient?.getAttribute('gradientUnits'), stops: [...(gradient?.querySelectorAll('stop') || [])].map(stop => ({ offset: stop.getAttribute('offset'), color: stop.getAttribute('stop-color'), opacity: stop.getAttribute('stop-opacity') })) }
     }
@@ -3496,6 +3588,24 @@ try {
     && Math.abs(customGradientMetrics.fill.x1) < 0.01 && Math.abs(customGradientMetrics.fill.y1 - 500) < 0.01 && Math.abs(customGradientMetrics.fill.x2 - 1000) < 0.01 && Math.abs(customGradientMetrics.fill.y2 - 500) < 0.01
     && customGradientMetrics.stroke.stops.length === 2 && Math.abs(customGradientMetrics.stroke.x1 - 500) < 0.01 && Math.abs(customGradientMetrics.stroke.y1) < 0.01 && Math.abs(customGradientMetrics.stroke.x2 - 500) < 0.01 && Math.abs(customGradientMetrics.stroke.y2 - 1000) < 0.01,
   `Custom geometry linear fills and outlines must retain DrawingML gradient directions, stops, and alpha: ${JSON.stringify(customGradientMetrics)}`)
+  const customFillMetrics = await evaluate(`['Custom text rectangle', 'Custom gradient geometry'].map(name => {
+    const host = document.querySelector('.stage-shell > .slide-host .slide-element[title="' + name + '"]')
+    return [...host.querySelectorAll('.custom-geometry path')].map(path => {
+      const id = /^url\\(#(.+)\\)$/.exec(path.getAttribute('fill') || '')?.[1]
+      const gradient = id ? document.getElementById(id) : undefined
+      return { fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, stops: [...(gradient?.querySelectorAll('stop') || [])].map(stop => ({ color: getComputedStyle(stop).stopColor, opacity: Number(stop.getAttribute('stop-opacity')) })) }
+    })
+  })`)
+  const solidFillColors = ['rgb(136, 215, 251)', 'rgb(96, 202, 249)', 'rgb(34, 113, 149)', 'rgb(45, 151, 198)']
+  const greenStopColors = ['rgb(102, 255, 102)', 'rgb(51, 255, 51)', 'rgb(0, 153, 0)', 'rgb(0, 204, 0)']
+  customFillModes.forEach((mode, index) => {
+    const solid = customFillMetrics[0][index + 1], gradient = customFillMetrics[1][index + 1]
+    assert(solid?.fill === solidFillColors[index] && solid.stroke === customFillMetrics[0][0].stroke
+      && gradient?.stops[1]?.color === greenStopColors[index] && gradient.stops[1].opacity === 0.5
+      && gradient.stroke === customFillMetrics[1][0].stroke,
+    `DrawingML ${mode} must adjust solid fill and gradient stops without changing alpha or stroke: ${JSON.stringify({ solid, gradient })}`)
+  })
+  assert(!initial.warnings.some(warning => customFillModes.some(mode => warning.includes(mode + ' path fill mode'))), 'Valid DrawingML path fill modifiers must not warn about normal-fill fallback.')
   assert(!initial.warnings.some(warning => warning.includes('custom geometry path segments')), `Valid custom-geometry arcs must not be omitted: ${JSON.stringify(initial.warnings)}`)
   const motionStart = shape(initial, 'Motion path').frameRect.left / shape(initial, 'Motion path').frameRect.frameWidth
   const relativeMotionStart = shape(initial, 'Relative position motion').frameRect.left / shape(initial, 'Relative position motion').frameRect.frameWidth
@@ -3633,6 +3743,12 @@ try {
   const afterWith = await stateAtElapsed(clickStartedAt, 150)
   assert(Number(shape(afterWith, 'Parent speed delayed').opacity) > 0.6, `A positive parent time-node speed must scale its child's delay: ${shape(afterWith, 'Parent speed delayed').opacity}`)
   assert(shape(afterWith, 'With previous').visibility === 'visible' && shape(afterWith, 'Exit after previous').visibility === 'visible', 'The with-effect delay must be applied inside the click step.')
+  const zeroIntervalRuns = afterWith.textRuns.filter(run => run.name === 'Zero-interval letters')
+  const zeroIntervalOpacities = zeroIntervalRuns.map(run => Number(run.opacity))
+  assert(zeroIntervalRuns.map(run => run.text).join('') === 'SYNC' && zeroIntervalOpacities.length === 4
+    && zeroIntervalOpacities.every(opacity => opacity > 0 && opacity < 1 && Math.abs(opacity - zeroIntervalOpacities[0]) < 0.02)
+    && !afterWith.warnings.some(warning => warning.includes('text iteration with unsupported type or interval')),
+    `A zero tmAbs interval must animate every letter concurrently without an unsupported-interval warning: ${JSON.stringify({ runs: zeroIntervalRuns, warnings: afterWith.warnings })}`)
 
   const midIteration = await stateAtElapsed(clickStartedAt, 350)
   assert(midIteration.textRuns.find(run => run.text === 'D')?.visibility === 'hidden' && shape(midIteration, 'After letters').opacity === '1', `The delayed exit must not start before the final by-letter iteration: ${JSON.stringify({ lastLetter: midIteration.textRuns.find(run => run.text === 'D'), afterEffect: shape(midIteration, 'After letters') })}`)
@@ -3999,7 +4115,7 @@ try {
   await delay(60)
   const repeatDurationAfterLaterClick = await state()
   assert(Number(shape(repeatDurationAfterLaterClick, 'Parent repeat duration target').opacity) > 0.9, `restart="whenNotActive" must remain blocked while an earlier step is still active: ${JSON.stringify({ elapsed: repeatDurationAfterLaterClick.now - repeatDurationStartedAt, opacity: shape(repeatDurationAfterLaterClick, 'Parent repeat duration target').opacity })}`)
-  await delay(Math.max(0, 900 - ((await evaluate('performance.now()')) - repeatDurationStartedAt)))
+  await delay(Math.max(0, 930 - ((await evaluate('performance.now()')) - repeatDurationStartedAt)))
   const repeatedParentDuration = await state()
   const afterRepeatOpacity = Number(shape(repeatedParentDuration, 'Parent repeat after-effect').opacity)
   assert(Number(shape(repeatedParentDuration, 'Parent repeat duration target').opacity) === 1 && afterRepeatOpacity > 0.05 && afterRepeatOpacity < 0.95, `A finite parent repeatDur must cap looping and defer the after-effect until the cap: ${JSON.stringify({ elapsed: repeatedParentDuration.now - repeatDurationStartedAt, repeatedTarget: shape(repeatedParentDuration, 'Parent repeat duration target'), afterEffect: shape(repeatedParentDuration, 'Parent repeat after-effect'), warnings: repeatedParentDuration.warnings })}`)
@@ -4007,12 +4123,12 @@ try {
   await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat after-effect"]').click()`)
   await delay(150)
   const concurrentOffBeforeAdvance = await state()
-  const concurrentOffOpacityBefore = Number(shape(concurrentOffBeforeAdvance, 'Parent repeat count target').opacity)
+  const concurrentOffOpacityBefore = Number(shape(concurrentOffBeforeAdvance, 'Parent reverse speed fade').opacity)
   assert(concurrentOffOpacityBefore > 0.1 && concurrentOffOpacityBefore < 0.9, `A sequential trigger step must be active before advancing: ${JSON.stringify({ elapsed: concurrentOffBeforeAdvance.now, opacity: concurrentOffOpacityBefore })}`)
   await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat after-effect"]').click()`)
   await delay(220)
   const concurrentOffAfterAdvance = await state()
-  const concurrentOffOpacityAfter = Number(shape(concurrentOffAfterAdvance, 'Parent repeat count target').opacity)
+  const concurrentOffOpacityAfter = Number(shape(concurrentOffAfterAdvance, 'Parent reverse speed fade').opacity)
   assert(Math.abs(concurrentOffOpacityAfter - concurrentOffOpacityBefore) < 0.08, `A non-concurrent p:seq must end its previous step when advancing: ${JSON.stringify({ before: concurrentOffOpacityBefore, after: concurrentOffOpacityAfter })}`)
 
   const reverseParent = await evaluate(`new Promise(resolve => {
@@ -4203,7 +4319,7 @@ try {
   const stockVolumeGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { type: svg?.getAttribute('data-chart-type'), categories: [...(svg?.querySelectorAll('.chart-category-label') || [])].map(item => item.textContent), bars: [...(svg?.querySelectorAll('.chart-bar') || [])].map(item => ({ fill: item.getAttribute('fill'), y: Number(item.getAttribute('y')), width: Number(item.getAttribute('width')), height: Number(item.getAttribute('height')) })), secondaryTicks: [...(svg?.querySelectorAll('.chart-secondary-value-axis-label') || [])].map(item => ({ id: item.getAttribute('data-axis-id'), label: item.textContent })), secondaryAxes: [...(svg?.querySelectorAll('.chart-secondary-value-axis-line') || [])].map(item => item.getAttribute('data-axis-id')), labels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => item.textContent) } }; return { hlc: read('Stock volume HLC chart'), ohlc: read('Stock volume OHLC chart') } })()`)
   const comboChartGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Column and line combo chart'); return { type: svg?.getAttribute('data-chart-type'), bars: svg?.querySelectorAll('.chart-bar').length, lines: [...(svg?.querySelectorAll('.chart-series-line') || [])].map(item => ({ d: item.getAttribute('d'), color: item.getAttribute('stroke') })), markers: svg?.querySelectorAll('.chart-line-marker').length, categories: [...(svg?.querySelectorAll('.chart-category-label') || [])].map(item => item.textContent), primaryTicks: [...(svg?.querySelectorAll('.chart-value-axis-label:not([data-axis-id])') || [])].map(item => item.textContent), secondaryTicks: [...(svg?.querySelectorAll('.chart-secondary-value-axis-label') || [])].map(item => ({ id: item.getAttribute('data-axis-id'), label: item.textContent })), secondaryAxes: [...(svg?.querySelectorAll('.chart-secondary-value-axis-line') || [])].map(item => ({ id: item.getAttribute('data-axis-id'), x1: Number(item.getAttribute('x1')), x2: Number(item.getAttribute('x2')) })) } })()`)
   const comboAreaGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Column and area combo chart'); return { areas: [...(svg?.querySelectorAll('.chart-area') || [])].map(item => ({ d: item.getAttribute('d'), fill: item.getAttribute('fill') })), bars: svg?.querySelectorAll('.chart-bar').length, axisIds: [...(svg?.querySelectorAll('.chart-secondary-value-axis-line') || [])].map(item => item.getAttribute('data-axis-id')), secondaryTicks: [...(svg?.querySelectorAll('.chart-secondary-value-axis-label') || [])].map(item => item.textContent) } })()`)
-  const chartLegends = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, items: [...svg.querySelectorAll('.chart-legend-label')].map(item => ({ text: item.textContent, x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')) })) })))()`)
+  const chartLegends = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, items: [...svg.querySelectorAll('.chart-legend-label')].map(item => { const key = item.parentElement?.querySelector('.chart-legend-key'); return { text: item.textContent, x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')), symbol: key?.querySelector('.chart-legend-key-marker')?.getAttribute('data-marker-shape'), line: Boolean(key?.querySelector('.chart-legend-key-line')) } }) })))()`)
   const manualLegendClip = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Value axis deleted chart'); const group = svg?.querySelector('.chart-legend-group'); const id = /url\\(#([^)]+)\\)/.exec(group?.getAttribute('clip-path') || '')?.[1]; const rect = [...(svg?.querySelectorAll('clipPath') || [])].find(item => item.id === id)?.querySelector('rect'); return rect && { x: Number(rect.getAttribute('x')), y: Number(rect.getAttribute('y')), width: Number(rect.getAttribute('width')), height: Number(rect.getAttribute('height')) } })()`)
   const dataLabelGeometry = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, labels: [...svg.querySelectorAll('.chart-data-label')].map(item => ({ text: item.textContent, x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')), anchor: item.getAttribute('text-anchor') })) })))()`)
   const chartDataLabelStyles = await evaluate(`(() => {
@@ -4222,15 +4338,17 @@ try {
           const key = item.parentElement?.querySelector('.chart-data-label-key')
           const keyBox = key?.getBBox()
           const labelBox = item.getBBox()
-          return {text: item.textContent || '', fill: key?.getAttribute('fill'), gap: keyBox && labelBox.width ? labelBox.x - keyBox.x - keyBox.width : undefined}
+          return {text: item.textContent || '', fill: key?.getAttribute('fill'), gap: keyBox && labelBox.width ? labelBox.x - keyBox.x - keyBox.width : undefined, symbol: key?.querySelector('.chart-data-label-key-marker')?.getAttribute('data-marker-shape'), line: Boolean(key?.querySelector('.chart-data-label-key-line'))}
         })
       }
     }
-    return {sales: read('Quarterly sales chart'), keyOnly: read('Horizontal axis tick chart')}
+    return {sales: read('Quarterly sales chart'), keyOnly: read('Horizontal axis tick chart'), line: read('Quarterly trend chart')}
   })()`)
   assert(chartDataLabelKeyRender.sales.labels.length === 4 && chartDataLabelKeyRender.sales.labels.every(label => !!label.fill && barChart?.bars.includes(label.fill) && label.gap !== undefined && label.gap >= 0), `Group, series, and point c:showLegendKey settings must render adjacent keys in series colors: ${JSON.stringify(chartDataLabelKeyRender.sales)}`)
   assert(chartDataLabelKeyRender.keyOnly.labels.length === 4 && chartDataLabelKeyRender.keyOnly.labels.every(label => label.text === '' && !!label.fill), `c:showLegendKey alone must render key-only labels while point-level false suppresses its indexed key: ${JSON.stringify(chartDataLabelKeyRender.keyOnly)}`)
   const lineLegend = chartLegends.find(legend => legend.name === 'Quarterly trend chart')
+  assert(lineLegend?.items.map(item => item.symbol).join(',') === 'diamond,circle' && lineLegend.items.every(item => item.line), `Line chart legend keys must match their series marker symbols and line styling: ${JSON.stringify(lineLegend)}`)
+  assert(chartDataLabelKeyRender.line.labels.some(label => label.symbol === 'diamond' && label.line) && chartDataLabelKeyRender.line.labels.some(label => label.symbol === 'triangle' && label.line), `Line chart data-label legend keys must use each series marker and the indexed point marker override: ${JSON.stringify(chartDataLabelKeyRender.line)}`)
   const pieLegend = chartLegends.find(legend => legend.name === 'Quarterly share chart')
   const barPositionedLabels = dataLabelGeometry.find(chart => chart.name === 'Quarterly sales chart')
   const linePositionedLabels = dataLabelGeometry.find(chart => chart.name === 'Quarterly trend chart')
@@ -4244,7 +4362,8 @@ try {
   assert(lineLegend?.items[0]?.x === 118 && lineLegend.items[0]?.y === 135 && lineLegend.items[1]?.x === 118 && lineLegend.items[1]?.y === 163, `Chart legend manual edge/factor coordinates must set the origin and preserve vertical spacing: ${JSON.stringify(chartLegends)}`)
   assert(Math.abs(barPositionedLabels?.labels.find(label => label.text === '18.00')?.y - 354) < 1, `A point-level c:dLblPos must override the series position and center its column label: ${JSON.stringify(dataLabelGeometry)}`)
   assert(barChart.dataLabels.join(',') === barChart.expectedDataLabels.join(','), `Chart, series, and point overrides must resolve while applying decimal/grouping formats: ${JSON.stringify(barChart)}`)
-  assert(lineChart?.markers === 6 && lineChart.paths === 6, `Line chart caches must render series paths and point markers: ${JSON.stringify(lineChart)}`)
+  const lineChartGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly trend chart'); return {paths: svg?.querySelectorAll('.chart-series-line').length, markers: svg?.querySelectorAll('.chart-line-marker').length} })()`)
+  assert(lineChartGeometry?.markers === 6 && lineChartGeometry.paths === 6, `Line chart caches must render series paths and every point marker: ${JSON.stringify({lineChart, lineChartGeometry})}`)
   assert(lineValueAxis?.ticks.map(tick => tick.label).join(',') === '10.0,15.0,20.0,25.0,30.0' && lineValueAxis.ticks[0].y < lineValueAxis.ticks.at(-1).y, `A reversed value axis must place minimum above maximum: ${JSON.stringify(valueAxisRender)}`)
   assert(lineLegend?.items.map(item => item.text).join(',') === 'North,South' && lineLegend.items.every(item => item.x === 118 && item.y >= 135) && lineValueAxis.ticks.every(tick => tick.x === 644 && tick.anchor === 'start'), `A c:catAx/crossesAt category index must position the value-axis labels at that category: ${JSON.stringify({ chartLegends, valueAxisRender })}`)
   assert(lineCategoryAxis?.labels.map(label => label.text).join(',') === 'Q1,Q2,Q3' && lineCategoryAxis.labels.every(label => Math.abs(label.y - 162.5) < 0.01 && label.anchor === 'middle'), `A c:valAx/crossesAt value must position the category-axis labels at that value: ${JSON.stringify(categoryAxisRender)}`)
@@ -4339,21 +4458,76 @@ try {
   })()`)
   assert(columnTableCellRender?.columnCount === '2' && columnTableCellRender.direction === 'rtl' && columnTableCellRender.paragraphDirection === 'ltr' && Math.abs(Number.parseFloat(columnTableCellRender.columnGap) - expectedTableColumnGap) < 0.1 && tableColumnXs.length > 1 && Math.max(...tableColumnXs) - Math.min(...tableColumnXs) > expectedTableColumnGap && tableColumnFlow?.first.left > tableColumnFlow?.last.left, `Table-cell a:bodyPr rtlCol must reverse column order while preserving text direction and EMU spacing: ${JSON.stringify({ columnTableCellRender: { ...columnTableCellRender, runRects: columnTableCellRender.runRects?.slice(0, 4) }, tableColumnFlow, expectedTableColumnGap })}`)
   const customRadialMetrics = await evaluate(`(() => {
-    const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom radial gradient geometry"] .custom-geometry path')
+    const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom radial gradient geometry"] .custom-geometry > path')
     const read = property => {
       const paint = path?.getAttribute(property) || ''
-      const id = /^url\\(#(.+)\\)$/.exec(paint)?.[1]
+      const id = /^url\\(["']?#(.+?)["']?\\)$/.exec(paint)?.[1]
       const gradient = id ? document.getElementById(id) : undefined
-      return { paint, type: gradient?.localName, units: gradient?.getAttribute('gradientUnits'), cx: Number(gradient?.getAttribute('cx')), cy: Number(gradient?.getAttribute('cy')), r: Number(gradient?.getAttribute('r')), stops: [...(gradient?.querySelectorAll('stop') || [])].map(stop => ({ offset: stop.getAttribute('offset'), color: stop.getAttribute('stop-color'), opacity: stop.getAttribute('stop-opacity') })) }
+      return { paint, type: gradient?.localName, units: gradient?.getAttribute('gradientUnits'), transform: gradient?.getAttribute('gradientTransform'), cx: Number(gradient?.getAttribute('cx')), cy: Number(gradient?.getAttribute('cy')), r: Number(gradient?.getAttribute('r')), stops: [...(gradient?.querySelectorAll('stop') || [])].map(stop => ({ offset: stop.getAttribute('offset'), color: stop.getAttribute('stop-color'), opacity: stop.getAttribute('stop-opacity') })) }
     }
     return { fill: read('fill'), stroke: read('stroke') }
   })()`)
+  const customRadialState = await state()
+  const customRadialShape = shape(customRadialState, 'Custom radial gradient geometry')
   assert(customRadialMetrics.fill.type === 'radialGradient' && customRadialMetrics.fill.units === 'userSpaceOnUse'
-    && customRadialMetrics.fill.cx === 500 && customRadialMetrics.fill.cy === 500 && customRadialMetrics.fill.r === 500
+    && customRadialMetrics.fill.cx === 500 && customRadialMetrics.fill.cy === 500 && customRadialMetrics.fill.r === 500 && customRadialMetrics.fill.transform?.includes('scale(')
     && customRadialMetrics.fill.stops.length === 3 && customRadialMetrics.fill.stops[0]?.opacity === '0.5'
-    && customRadialMetrics.stroke.type === 'radialGradient' && customRadialMetrics.stroke.stops.length === 2,
-  `Custom-geometry path gradients must preserve all radial fill and outline stops, including alpha: ${JSON.stringify(customRadialMetrics)}`)
+    && customRadialMetrics.stroke.type === 'radialGradient' && customRadialMetrics.stroke.cx === 500 && customRadialMetrics.stroke.cy === 500 && customRadialMetrics.stroke.stops.length === 2,
+  `Custom-geometry path gradients must preserve all radial fill and outline stops, including alpha: ${JSON.stringify({customRadialMetrics, slide: customRadialState.slide, customPaths: customRadialShape?.customPaths, warnings: customRadialState.warnings})}`)
+  const customRadialFocus = await evaluate(`(() => {
+    const host = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom radial gradient geometry"]')
+    const path = host?.querySelector('.custom-geometry > path')
+    const id = /^url\\(["']?#(.+?)["']?\\)$/.exec(path?.getAttribute('fill') || '')?.[1]
+    const gradient = id ? document.getElementById(id) : undefined
+    const transform = gradient?.getAttribute('gradientTransform') || ''
+    const scale = /scale\\(([-+\\d.]+)\\s+([-+\\d.]+)\\)/.exec(transform)
+    const sx = Number(scale?.[1]), sy = Number(scale?.[2])
+    const box = host?.getBoundingClientRect()
+    return {
+      x: 500 + (Number(gradient?.getAttribute('fx')) - 500) * sx,
+      y: 500 + (Number(gradient?.getAttribute('fy')) - 500) * sy,
+      radiusX: Number(gradient?.getAttribute('fr')) * sx * (box?.width || 0) / 1000,
+      radiusY: Number(gradient?.getAttribute('fr')) * sy * (box?.height || 0) / 1000,
+      hasFocusCircle: gradient?.hasAttribute('fx') && gradient?.hasAttribute('fy') && gradient?.hasAttribute('fr'),
+      hasOverlayEllipse: Boolean(host?.querySelector('.custom-geometry ellipse[clip-path]')),
+    }
+  })()`)
+  assert(customRadialFocus.hasFocusCircle && !customRadialFocus.hasOverlayEllipse
+    && Math.abs(customRadialFocus.x - 550) < 0.01 && Math.abs(customRadialFocus.y - 375) < 0.01
+    && Math.abs(customRadialFocus.radiusX - customRadialFocus.radiusY) < 0.5,
+  `Custom-path circle fillToRect must use an offset SVG focal circle with the expected physical radius: ${JSON.stringify(customRadialFocus)}`)
+  const radialModifiers = await evaluate(`(() => {
+    const host = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom radial gradient geometry"]')
+    return [...host.querySelectorAll('.custom-geometry > path')].slice(1).map(path => {
+      const id = /^url\\(["']?#(.+?)["']?\\)$/.exec(path.getAttribute('fill') || '')?.[1]
+      const gradient = id ? document.getElementById(id) : undefined
+      return { kind: gradient?.localName, color: gradient?.querySelectorAll('stop')[1]?.getAttribute('stop-color'), opacity: gradient?.querySelector('stop')?.getAttribute('stop-opacity') }
+    })
+  })()`)
+  assert(radialModifiers.length === 4 && radialModifiers.every((paint, index) => paint.kind === 'radialGradient' && paint.color === greenStopColors[index] && paint.opacity === '0.5'), `Radial path modifiers must retain their gradient type, adjusted stops, and alpha: ${JSON.stringify(radialModifiers)}`)
   assert(shape(secondSlide, 'Gradient shape').backgroundImage.includes('linear-gradient') && shape(secondSlide, 'Gradient shape').backgroundImage.includes('rgba(37, 99, 235, 0.5)'), 'Gradient stops, angle, and alpha must render as a CSS gradient.')
+  const presetCircleFocus = await evaluate(`(() => {
+    const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Path gradient focus position"]')
+    const image = getComputedStyle(element).backgroundImage
+    const prefix = 'url("data:image/svg+xml,'
+    const payload = image.startsWith(prefix) ? image.slice(prefix.length, image.lastIndexOf('"')) : undefined
+    const svgText = payload ? decodeURIComponent(payload) : undefined
+    const gradient = svgText ? new DOMParser().parseFromString(svgText, 'image/svg+xml').querySelector('radialGradient') : undefined
+    const transform = gradient?.getAttribute('gradientTransform') || ''
+    const scaleCommand = transform.split('scale(')[1]?.split(')')[0] || ''
+    const [sx, sy] = scaleCommand.split(' ').map(Number)
+    return {
+      x: 500 + (Number(gradient?.getAttribute('fx')) - 500) * sx,
+      y: 500 + (Number(gradient?.getAttribute('fy')) - 500) * sy,
+      fr: Number(gradient?.getAttribute('fr')),
+      colorInterpolation: gradient?.getAttribute('color-interpolation'),
+      dataUrl: Boolean(payload),
+    }
+  })()`)
+  assert(presetCircleFocus.dataUrl && presetCircleFocus.colorInterpolation === 'linearRGB'
+    && Math.abs(presetCircleFocus.x - 550) < 0.01 && Math.abs(presetCircleFocus.y - 375) < 0.01
+    && presetCircleFocus.fr > 0 && presetCircleFocus.fr < 500,
+  `Preset circle-gradient fillToRect must render an SVG radial gradient with the transformed focus circle: ${JSON.stringify(presetCircleFocus)}`)
   assert(shape(secondSlide, 'Gradient shape').boxShadow !== 'none', 'Shape outer shadows must render.')
   assert(shape(secondSlide, 'Luminance transform').backgroundColor === 'rgb(0, 230, 0)', 'lumMod/lumOff must modify HSL luminance while preserving the saturated green hue.')
   const grouped = shape(secondSlide, 'Rotated group child')
@@ -4753,9 +4927,36 @@ try {
     'mongolianVert text must use left-to-right upright vertical CSS flow and report its shaping approximation.')
   const wordArtRtlFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'WordArt vertical RTL')
   assert(wordArtRtlFrame?.writingMode === 'vertical-rl' && wordArtRtlFrame.textOrientation === 'upright'
-    && wordArtRtlFrame.paragraphRects?.length === 2 && wordArtRtlFrame.paragraphRects[0].left > wordArtRtlFrame.paragraphRects[1].left
-    && !verticalRandomBarTransition.warnings.some(warning => warning.includes('wordArtVertRtl')),
-    `wordArtVertRtl must stack glyphs top-to-bottom and flow paragraphs right-to-left without a fallback warning: ${JSON.stringify({ wordArtRtlFrame, warnings: verticalRandomBarTransition.warnings })}`)
+    && wordArtRtlFrame.paragraphRects?.length === 2 && wordArtRtlFrame.paragraphRects[0].left > wordArtRtlFrame.paragraphRects[1].left,
+    `wordArtVertRtl must stack glyphs top-to-bottom and flow paragraphs right-to-left: ${JSON.stringify({ wordArtRtlFrame, warnings: verticalRandomBarTransition.warnings })}`)
+  const verticalColumnFlow = await evaluate(`(() => {
+    const measure = title => {
+      const frame = document.querySelector('.stage-shell > .slide-host .slide-element[title="' + title + '"] .text-frame')
+      const paragraph = frame?.querySelector('.text-paragraph')
+      const walker = paragraph && document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT)
+      const nodes = []
+      let node = walker?.nextNode()
+      while (node) { if (node.textContent?.length) nodes.push(node); node = walker.nextNode() }
+      const length = nodes.reduce((total, item) => total + item.textContent.length, 0)
+      if (length < 2) return undefined
+      const pointAt = index => { for (const item of nodes) { if (index < item.textContent.length) return [item, index]; index -= item.textContent.length } }
+      const rectAt = index => { const [textNode, offset] = pointAt(index); const range = document.createRange(); range.setStart(textNode, offset); range.setEnd(textNode, offset + 1); const rect = range.getBoundingClientRect(); return { left: rect.left, top: rect.top } }
+      return { first: rectAt(0), last: rectAt(length - 1), writingMode: getComputedStyle(frame).writingMode, columnCount: getComputedStyle(frame).columnCount }
+    }
+    return { ltr: measure('Vertical columns LTR'), rtl: measure('Vertical columns RTL'), wordArt: measure('WordArt RTL columns missing rtlCol') }
+  })()`)
+  const verticalLtrFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'Vertical columns LTR')
+  const verticalRtlFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'Vertical columns RTL')
+  const verticalWordArtFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'WordArt RTL columns missing rtlCol')
+  assert(verticalLtrFrame?.writingMode === 'vertical-lr' && verticalColumnFlow?.ltr?.writingMode === 'vertical-lr' && verticalColumnFlow.ltr.columnCount === '2'
+    && verticalColumnFlow.ltr.first.left < verticalColumnFlow.ltr.last.left,
+    `rtlCol="0" must flow vertical text from the leftmost column to the right: ${JSON.stringify({ frame: verticalLtrFrame, flow: verticalColumnFlow?.ltr })}`)
+  assert(verticalRtlFrame?.writingMode === 'vertical-rl' && verticalColumnFlow?.rtl?.writingMode === 'vertical-rl' && verticalColumnFlow.rtl.columnCount === '2'
+    && verticalColumnFlow.rtl.first.left > verticalColumnFlow.rtl.last.left,
+    `rtlCol="1" must flow vertical text from the rightmost column to the left: ${JSON.stringify({ frame: verticalRtlFrame, flow: verticalColumnFlow?.rtl })}`)
+  assert(verticalWordArtFrame?.writingMode === 'vertical-rl' && verticalColumnFlow?.wordArt?.writingMode === 'vertical-rl'
+    && verticalRandomBarTransition.warnings.some(warning => warning.includes('wordArtVertRtl requires right-to-left column flow')),
+    `wordArtVertRtl must preserve its right-to-left flow and warn when rtlCol is absent: ${JSON.stringify({ frame: verticalWordArtFrame, flow: verticalColumnFlow?.wordArt, warnings: verticalRandomBarTransition.warnings })}`)
   assert(inheritedParagraph?.textAlign === 'center' && inheritedParagraph.lineHeight === '1.25' && inheritedParagraph.marginLeft && inheritedParagraph.marker === '→', `Placeholder paragraph defaults must cascade from master through layout: ${JSON.stringify({ inheritedParagraph, warnings: verticalRandomBarTransition.warnings })}`)
   const inheritedFontSizeRatio = Number.parseFloat(inheritedRun?.fontSize || '0') / verticalRandomBarTransition.hostFrame.width
   assert(Math.abs(inheritedFontSizeRatio - 32 * 12_700 / 12_192_000) < 0.00001 && inheritedRun?.fontWeight === '700' && inheritedRun.fontStyle === 'italic' && inheritedRun.color === 'rgb(255, 0, 0)' && inheritedRun.textDecorationLine.includes('line-through'), `Placeholder run defaults must preserve layout font size, master emphasis/color, and strike: ${JSON.stringify({ inheritedRun, inheritedFontSizeRatio })}`)
@@ -5315,7 +5516,13 @@ try {
   const characterBarnBefore = textRangeBefore.map(run => run.clipPath)
   assert(characterBarnBefore[0] === 'none' && characterBarnBefore[1]?.startsWith('inset(') && characterBarnBefore[1]?.includes('50%') && characterBarnBefore[2]?.startsWith('inset(') && characterBarnBefore[2]?.includes('50%') && characterBarnBefore[3] === 'none', `A character-range barn entrance must clip only the selected runs: ${JSON.stringify(characterBarnBefore)}`)
   await evaluate(`document.querySelector('[aria-label="Next animation step or slide"]')?.click()`)
-  await delay(150)
+  const paragraphMasksDuring = await evaluate(`new Promise(resolve => setTimeout(() => {
+    const paragraphMask = title => getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + '] .text-paragraph')).maskImage
+    resolve({ randomBars: paragraphMask('Paragraph random bars target'), strips: paragraphMask('Paragraph strips target') })
+  }, 150))`)
+  const paragraphRandomBarsDuring = paragraphMasksDuring.randomBars
+  const paragraphStripsDuring = paragraphMasksDuring.strips
+  const characterStripsDuring = await textRangeMasks('Character strips target')
   const characterBarnDuring = (await textRangeRuns()).map(run => run.clipPath)
   const textRangeFilterDuring = await evaluate(`(() => {
     const find = (title, selector) => document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + '] ' + selector)
@@ -5337,9 +5544,6 @@ try {
   const characterWedgeDuring = textRangeFilterDuring.characterWedge
   const fallbackObjectOpacityDuring = textRangeFilterDuring.fallbackObjectOpacity
   const paragraphBarnDuring = await textParagraphClip('Paragraph barn target')
-  const paragraphRandomBarsDuring = await textParagraphMask('Paragraph random bars target')
-  const paragraphStripsDuring = await textParagraphMask('Paragraph strips target')
-  const characterStripsDuring = await textRangeMasks('Character strips target')
   await delay(450)
   const fallbackObjectOpacityComplete = Number(await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Unsupported filter fallback target"]')).opacity`))
   const textRangeAfter = await textRangeRuns()
@@ -5390,7 +5594,8 @@ try {
     noWarnings: !textRangeSlide.warnings.some(warning => warning.includes('Text-range slide') || warning.includes('character-range checkerboard')),
     adjacentTransform: textRangeAfter[3]?.transform === 'none',
   }
-  assert(Object.values(textRangeChecks).every(Boolean), `Paragraph and character mask animations plus p:charRg transforms must affect only their targets: ${JSON.stringify(textRangeChecks)}`)
+  const summarizeMask = value => ({ isSvg: value.includes('data:image/svg+xml'), length: value.length, tail: value.slice(-64) })
+  assert(Object.values(textRangeChecks).every(Boolean), `Paragraph and character mask animations plus p:charRg transforms must affect only their targets: ${JSON.stringify({ checks: textRangeChecks, randomBars: [paragraphRandomBarsStart, paragraphRandomBarsDuring, paragraphRandomBarsComplete].map(summarizeMask), strips: [paragraphStripsStart, paragraphStripsDuring, paragraphStripsComplete].map(summarizeMask) })}`)
   const motionOnFirstCharacter = rangeMatrix(textRangeAfter[0]?.transform || '')
   const motionOnAdjacentCharacters = textRangeAfter.slice(1, 3).map(run => rangeMatrix(run.transform))
   assert(motionOnFirstCharacter && Math.abs(motionOnFirstCharacter[4]) > 20 && Math.abs(motionOnFirstCharacter[5]) > 5
@@ -5500,6 +5705,8 @@ try {
   const gradientSetOpacityEnd = gradientStopAlphas(shape(gradientOpacityComplete, 'Gradient p:set opacity').backgroundImage)
   assert(gradientOpacityEnd.length === 2 && Math.abs(gradientOpacityEnd[0] - 0.5) < 0.03 && Math.abs(gradientOpacityEnd[1] - 0.25) < 0.03, `A held fill.opacity animation must multiply CSS gradient stop alphas: ${JSON.stringify(gradientOpacityEnd)}`)
   assert(customGradientOpacityEnd?.length === 2 && Math.abs(customGradientOpacityEnd[0] - 0.5) < 0.03 && Math.abs(customGradientOpacityEnd[1] - 0.25) < 0.03, `A held fill.opacity animation must multiply SVG custom-gradient stop alphas: ${JSON.stringify(customGradientOpacityEnd)}`)
+  const modifierOpacityEnd = shape(gradientOpacityComplete, 'Custom gradient opacity').customPaths.slice(1)
+  assert(modifierOpacityEnd.length === 4 && modifierOpacityEnd.every(path => path.gradientStops.length === 2 && Math.abs(path.gradientStops[0] - 0.5) < 0.03 && Math.abs(path.gradientStops[1] - 0.25) < 0.03), `Fill modifiers must preserve animated gradient opacity: ${JSON.stringify(modifierOpacityEnd)}`)
   assert(gradientSetOpacityEnd.length === 2 && Math.abs(gradientSetOpacityEnd[0] - 0.25) < 0.03 && Math.abs(gradientSetOpacityEnd[1] - 0.125) < 0.03, `A p:set fill.opacity value must multiply CSS gradient stop alphas: ${JSON.stringify(gradientSetOpacityEnd)}`)
   const connectorPaths = await evaluate(`Object.fromEntries([...document.querySelectorAll('.slide-host .slide-element')].filter(element => /^(?:Bent|Curved) connector [2-5]$/.test(element.dataset.elementName || '')).map(element => [element.dataset.elementName, element.querySelector('.line-render path')?.getAttribute('d') || '']))`)
   const additionalConnectorPaths = await evaluate(`Object.fromEntries(['Custom bound connector', 'Grouped bound connector'].map(name => { const element = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === name); return [name, element?.querySelector('.line-render path')?.getAttribute('d') || ''] }))`)

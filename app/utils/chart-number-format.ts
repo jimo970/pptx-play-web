@@ -6,6 +6,8 @@ interface NumberFormatOptions {
   style?: 'decimal' | 'percent'
 }
 
+type FractionNumberFormat = { whole?: string; numerator: string; denominator: string; fixedDenominator?: number; maximumDenominator: number; percent: boolean }
+
 interface NumberFormatSection {
   options: NumberFormatOptions
   parentheses: boolean
@@ -13,6 +15,7 @@ interface NumberFormatSection {
   suffix: string
   scale: number
   scientific?: { symbol: string; sign: '+' | '-'; minimumDigits: number; integerDigits: number }
+  fraction?: FractionNumberFormat
 }
 
 type DateFormatToken = { kind: 'literal'; value: string } | { kind: 'date'; code: 'd' | 'm' | 'y' | 'h' | 's'; length: number; elapsed?: boolean } | { kind: 'fraction'; digits: number } | { kind: 'ampm'; short: boolean }
@@ -137,7 +140,7 @@ function parseDateFormat(formatCode: string): DateFormatToken[] | undefined {
     if (char === '.') {
       const previousToken = tokens.at(-1)
       if (previousToken?.kind === 'date' && previousToken.code === 's') {
-        const fraction = /^\.0{1,3}(?!0)/.exec(remaining)
+        const fraction = /^\.0{1,6}(?!0)/.exec(remaining)
         if (!fraction) return undefined
         tokens.push({kind: 'literal', value: '.'})
         tokens.push({kind: 'fraction', digits: fraction[0].length - 1})
@@ -170,18 +173,20 @@ function parseDateFormat(formatCode: string): DateFormatToken[] | undefined {
 function formatDateNumber(value: number, tokens: DateFormatToken[], date1904: boolean): string | undefined {
   if (!Number.isFinite(value) || value < 0 || value > 2_958_465) return undefined
   const fractionDigits = tokens.find((token): token is Extract<DateFormatToken, {kind: 'fraction'}> => token.kind === 'fraction')?.digits
-  const millisecondStep = fractionDigits === undefined ? 1 : 10 ** (3 - fractionDigits)
-  const totalMilliseconds = Math.round(value * 86_400_000 / millisecondStep) * millisecondStep
+  const precisionDigits = Math.max(fractionDigits ?? 3, 3)
+  const unitsPerSecond = 10 ** precisionDigits
+  const unitsPerDay = 86_400 * unitsPerSecond
+  const displayStep = 10 ** (precisionDigits - (fractionDigits ?? 3))
   let serialDay = Math.floor(value)
-  let time = totalMilliseconds - serialDay * 86_400_000
-  if (time >= 86_400_000) {
+  let timeUnits = Math.round((value - serialDay) * unitsPerDay / displayStep) * displayStep
+  if (timeUnits >= unitsPerDay) {
     serialDay++
-    time = 0
+    timeUnits = 0
   }
   const fictitiousLeapDay = !date1904 && serialDay === 60
   const adjustedDay = !date1904 && serialDay > 60 ? serialDay - 1 : serialDay
   const base = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 31)
-  const date = new Date(base + adjustedDay * 86_400_000 + time)
+  const date = new Date(base + adjustedDay * 86_400_000 + Math.floor(timeUnits * 1_000 / unitsPerSecond))
   if (!Number.isFinite(date.getTime())) return undefined
   const year = date.getUTCFullYear()
   const month = fictitiousLeapDay ? 1 : date.getUTCMonth()
@@ -190,7 +195,8 @@ function formatDateNumber(value: number, tokens: DateFormatToken[], date1904: bo
   const hour = date.getUTCHours()
   const minute = date.getUTCMinutes()
   const second = date.getUTCSeconds()
-  const millisecond = time % 1_000
+  const fractionValue = Math.floor((timeUnits % unitsPerSecond) / displayStep)
+  const totalSeconds = serialDay * 86_400 + timeUnits / unitsPerSecond
   const ampm = tokens.some(token => token.kind === 'ampm')
   const monthDate = fictitiousLeapDay ? new Date(Date.UTC(1900, 1, 1)) : date
   const local = (options: Intl.DateTimeFormatOptions, target = date) => new Intl.DateTimeFormat(undefined, {...options, timeZone: 'UTC'}).format(target)
@@ -198,10 +204,10 @@ function formatDateNumber(value: number, tokens: DateFormatToken[], date1904: bo
   return tokens.map(token => {
     if (token.kind === 'literal') return token.value
     if (token.kind === 'ampm') return token.short ? (hour < 12 ? 'A' : 'P') : (hour < 12 ? 'AM' : 'PM')
-    if (token.kind === 'fraction') return String(millisecond / (10 ** (3 - token.digits))).padStart(token.digits, '0')
+    if (token.kind === 'fraction') return String(fractionValue).padStart(token.digits, '0')
     if (token.elapsed) {
-      const unitMilliseconds = token.code === 'h' ? 3_600_000 : token.code === 'm' ? 60_000 : 1_000
-      const duration = String(Math.floor(totalMilliseconds / unitMilliseconds))
+      const unitSeconds = token.code === 'h' ? 3_600 : token.code === 'm' ? 60 : 1
+      const duration = String(Math.floor(totalSeconds / unitSeconds))
       return token.length === 1 ? duration : duration.padStart(2, '0')
     }
     if (token.length < 0) {
@@ -270,6 +276,71 @@ function parseNumberFormatLiteral(value: string): string | undefined {
   return quoted ? undefined : literal
 }
 
+function formatFractionMaskInteger(value: number, mask: string): string {
+  const minimumIntegerDigits = Math.max(1, [...mask].filter(char => char === '0').length)
+  const formatted = new Intl.NumberFormat(undefined, {
+    useGrouping: mask.includes(','),
+    minimumIntegerDigits,
+    maximumFractionDigits: 0,
+  }).format(value)
+  return mask.includes('?') ? formatted.padStart(mask.length, '\u00a0') : formatted
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+  while (right) [left, right] = [right, left % right]
+  return left
+}
+
+function formatFractionNumber(value: number, fraction: FractionNumberFormat): string | undefined {
+  if (!Number.isFinite(value)) return undefined
+  const magnitude = Math.abs(value) * (fraction.percent ? 100 : 1)
+  const hasWhole = Boolean(fraction.whole)
+  let whole = hasWhole ? Math.floor(magnitude) : 0
+  if (!Number.isSafeInteger(whole)) return undefined
+  const target = hasWhole ? magnitude - whole : magnitude
+  let numerator = 0
+  let denominator = fraction.fixedDenominator || 1
+
+  if (fraction.fixedDenominator) {
+    if (target > Number.MAX_SAFE_INTEGER / denominator) return undefined
+    numerator = Math.round(target * denominator)
+  } else {
+    if (target > Number.MAX_SAFE_INTEGER / fraction.maximumDenominator) return undefined
+    let bestError = Number.POSITIVE_INFINITY
+    for (let candidate = 1; candidate <= fraction.maximumDenominator; candidate++) {
+      const candidateNumerator = Math.round(target * candidate)
+      const error = Math.abs(target - candidateNumerator / candidate)
+      if (error < bestError - Number.EPSILON * Math.max(1, target)) {
+        bestError = error
+        numerator = candidateNumerator
+        denominator = candidate
+      }
+    }
+    if (numerator) {
+      const divisor = greatestCommonDivisor(numerator, denominator)
+      numerator /= divisor
+      denominator /= divisor
+    }
+  }
+
+  if (hasWhole && numerator >= denominator) {
+    whole++
+    numerator = 0
+  }
+  const wholeMask = fraction.whole
+  const showWhole = Boolean(wholeMask && (whole > 0 || wholeMask.includes('0')))
+  const wholeText = showWhole ? formatFractionMaskInteger(whole, wholeMask!) : ''
+  const sign = value < 0 ? '-' : ''
+  if (!numerator) return `${sign}${wholeText || '0'}`
+
+  const numeratorText = formatFractionMaskInteger(numerator, fraction.numerator)
+  const denominatorText = fraction.fixedDenominator
+    ? new Intl.NumberFormat(undefined, {maximumFractionDigits: 0}).format(denominator)
+    : formatFractionMaskInteger(denominator, fraction.denominator)
+  const fractionText = `${numeratorText}/${denominatorText}`
+  return `${sign}${wholeText ? `${wholeText} ` : ''}${fractionText}`
+}
+
 function parseNumberFormatSection(code: string, index: number): NumberFormatSection | null | undefined {
   if (!code) return null
   const parentheses = code.startsWith('(') && code.endsWith(')')
@@ -285,12 +356,39 @@ function parseNumberFormatSection(code: string, index: number): NumberFormatSect
       continue
     }
     if (char === '"') quoted = !quoted
-    else if (!quoted && (char === '#' || char === '0')) {
+    else if (!quoted && (char === '#' || char === '0' || char === '?')) {
       start = offset
       break
     }
   }
   if (start < 0) return undefined
+  const fractionMatch = /^(?:([#0?]+(?:,[#0?]{3})*) +)?([#0?]+)\/([#0?]+|[1-9]\d*)/.exec(code.slice(start))
+  if (fractionMatch) {
+    const whole = fractionMatch[1] || undefined
+    const numerator = fractionMatch[2]!
+    const denominator = fractionMatch[3]!
+    const fixedDenominator = /^\d+$/.test(denominator) ? Number(denominator) : undefined
+    const denominatorEnd = start + fractionMatch[0].length
+    const rawSuffix = code.slice(denominatorEnd)
+    const percentMatch = /^(\s*)%/.exec(rawSuffix)
+    const percent = Boolean(percentMatch)
+    const suffixStart = denominatorEnd + (percentMatch?.[0].length || 0)
+    const prefix = parseNumberFormatLiteral(code.slice(0, start))
+    const percentSpacing = percentMatch ? parseNumberFormatLiteral(percentMatch[1]!) : ''
+    const remainingSuffix = parseNumberFormatLiteral(code.slice(suffixStart))
+    if (prefix === undefined || percentSpacing === undefined || remainingSuffix === undefined || (!percent && rawSuffix.includes('%')) || numerator.length > 3 || (fixedDenominator === undefined && denominator.length > 3)
+      || (whole && whole.replaceAll(',', '').length > 15)
+      || (fixedDenominator !== undefined && (!Number.isSafeInteger(fixedDenominator) || fixedDenominator < 1 || fixedDenominator > 999_999))) return undefined
+    const suffix = `${percentSpacing}${percent ? '%' : ''}${remainingSuffix}`
+    return {
+      options: {useGrouping: Boolean(whole?.includes(',')), minimumIntegerDigits: 1, minimumFractionDigits: 0, maximumFractionDigits: 0},
+      parentheses,
+      prefix,
+      suffix,
+      scale: 0,
+      fraction: {whole, numerator, denominator, ...(fixedDenominator !== undefined ? {fixedDenominator} : {}), maximumDenominator: fixedDenominator === undefined ? 10 ** denominator.length - 1 : 0, percent},
+    }
+  }
   let end = start
   while (/[#0,.%]/.test(code[end] || '')) end++
   const maskEnd = end
@@ -404,9 +502,12 @@ export function formatChartNumber(value: number, formatCode?: string, date1904 =
 
   let scaledValue = formattedValue
   for (let index = 0; index < section.scale; index++) scaledValue /= 1000
-  const formatted = section.scientific
+  const formatted = section.fraction
+    ? formatFractionNumber(scaledValue, section.fraction)
+    : section.scientific
     ? formatScientificNumber(scaledValue, section)
     : new Intl.NumberFormat(undefined, section.options).format(scaledValue)
+  if (formatted === undefined) return String(value)
   const valueText = `${section.prefix}${formatted}${section.suffix}`
   return section.parentheses ? `(${valueText})` : valueText
 }

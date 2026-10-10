@@ -61,11 +61,17 @@ async function loadEmbeddedFonts(presentation: PptxDocument) {
 
 export async function parsePptxInWorker(file: File): Promise<PptxDocument> {
   let document: PptxDocument
-  if (typeof Worker === 'undefined') {
+  let worker: Worker | undefined
+  try {
+    if (typeof Worker !== 'undefined') worker = getWorker()
+  } catch {
+    worker = undefined
+  }
+  if (!worker) {
     const { parsePptx } = await import('./pptx')
     document = await parsePptx(file)
+    document.warnings = [...new Set([...document.warnings, 'The PPTX parsing worker could not start; parsing ran on the main thread and may be slower.'])]
   } else {
-    const worker = getWorker()
     const id = ++nextRequestId
     document = await new Promise<PptxDocument>((resolve, reject) => {
       pending.set(id, { resolve, reject })
