@@ -72,7 +72,7 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2
 .primary-button:hover { background: #c5fb7d; }
 .primary-button:disabled { opacity: .55; cursor: wait; }
 
-.stage-shell { flex: 1; min-height: 350px; border: 1px solid #303632; border-radius: 16px; background: radial-gradient(ellipse at 50% 45%, #252a27 0%, #191c1a 53%, #141715 100%); position: relative; display: grid; place-items: center; padding: 25px; overflow: hidden; }
+.stage-shell { flex: 1; min-height: 350px; border: 1px solid #303632; border-radius: 16px; background: radial-gradient(ellipse at 50% 45%, #252a27 0%, #191c1a 53%, #141715 100%); position: relative; display: grid; place-items: center; padding: 25px; overflow: hidden; touch-action: none; }
 .slide-transition-shell { position: relative; isolation: isolate; overflow: hidden; }
 .slide-transition-shell.is-fading-through-black { background: #000; }
 .slide-transition-shell.is-cut-through-black::after { content: ''; position: absolute; z-index: 3; inset: 0; background: #000; }
@@ -81,7 +81,9 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2
 .slide-transition-shell.is-prism-transition > .slide-host, .slide-transition-shell.is-prism-transition > .slide-transition-underlay > .slide-host, .slide-transition-shell.is-flip-transition > .slide-host, .slide-transition-shell.is-flip-transition > .slide-transition-underlay > .slide-host, .slide-transition-shell.is-switch-transition > .slide-host, .slide-transition-shell.is-switch-transition > .slide-transition-underlay > .slide-host, .slide-transition-shell.is-ferris-transition > .slide-host, .slide-transition-shell.is-ferris-transition > .slide-transition-underlay > .slide-host, .slide-transition-shell.is-gallery-transition > .slide-host, .slide-transition-shell.is-gallery-transition > .slide-transition-underlay > .slide-host, .slide-transition-shell.is-conveyor-transition > .slide-host, .slide-transition-shell.is-conveyor-transition > .slide-transition-underlay > .slide-host, .slide-transition-shell.is-preset-transition > .slide-host, .slide-transition-shell.is-preset-transition > .slide-transition-underlay > .slide-host { backface-visibility: hidden; }
 .stage-grid { position: absolute; inset: 0; pointer-events: none; opacity: .13; background-image: radial-gradient(#adb8b0 0.6px, transparent .6px); background-size: 18px 18px; mask-image: radial-gradient(ellipse at center, black 10%, transparent 80%); }
 .slide-transition-underlay { position: absolute; inset: 25px; display: grid; place-items: center; z-index: 1; pointer-events: none; }
-.continuing-media-host { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.continuing-media-host { position: absolute; z-index: 4; width: 0; height: 0; overflow: visible; pointer-events: none; }
+.continuing-media-host > audio { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+.continuing-video-frame { position: absolute; overflow: hidden; pointer-events: auto; }
 .slide-transition-underlay.is-pulling, .slide-transition-underlay.is-splitting-in, .slide-transition-underlay.is-shredding-out, .slide-transition-underlay.is-flythrough, .slide-transition-underlay.is-warping-out, .slide-transition-underlay.is-vortexing { z-index: 2; }
 .slide-host { width: min(100%, calc((100vh - 255px) * var(--slide-ratio, 1.7778))); max-height: 100%; aspect-ratio: var(--slide-ratio, 1.7778); position: relative; z-index: 1; }
 .flash-transition-overlay { position: absolute; z-index: 3; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
@@ -229,3 +231,21 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2
   .slide-transition-underlay { inset: 8px; }
   .player-controls { height: 43px; }
 }
+
+.app-shell.is-reading-view { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; background: #101210; }
+.app-shell.is-reading-view > .topbar, .app-shell.is-reading-view .deck-sidebar, .app-shell.is-reading-view .deck-toolbar { display: none; }
+.app-shell.is-reading-view .workspace { width: 100%; max-width: none; padding: 0; display: flex; gap: 0; }
+.app-shell.is-reading-view .player-column { position: relative; min-height: 0; flex: 1; gap: 0; }
+.app-shell.is-reading-view .stage-shell { min-height: 0; padding: 24px; border: 0; border-radius: 0; }
+.app-shell.is-reading-view .slide-transition-underlay { inset: 24px; }
+.app-shell.is-reading-view .slide-host { width: min(100%, calc((100dvh - 112px) * var(--slide-ratio, 1.7778))); }
+.app-shell.is-reading-view .player-controls { height: 64px; flex: 0 0 auto; gap: 14px; border-top: 1px solid #303632; background: #141715; }
+.app-shell.is-reading-view .zoom-button, .app-shell.is-reading-view .zoom-value, .app-shell.is-reading-view .shortcut-hint { display: none; }
+.reading-control-button { border: 1px solid #434b45; border-radius: 8px; background: #202521; color: #e8ece8; padding: 8px 11px; font-size: 11px; }
+.reading-control-button:hover { border-color: #82917f; background: #2a302b; }
+.reading-notes-panel { position: absolute; z-index: 8; right: 24px; bottom: 76px; width: min(420px, calc(100% - 48px)); max-height: min(55dvh, 480px); overflow: hidden; border: 1px solid #444c46; border-radius: 12px; background: #fff; color: #111; box-shadow: 0 18px 55px #0009; }
+.reading-notes-panel > header { height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 15px; border-bottom: 1px solid #e3e6e3; color: #252925; font: 600 11px Consolas, monospace; letter-spacing: .06em; text-transform: uppercase; }
+.reading-notes-panel > header button { width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #444; font-size: 20px; cursor: pointer; }
+.reading-notes-panel > header button:hover { background: #edf0ed; }
+.reading-notes-panel .speaker-notes-rich { max-height: min(48dvh, 420px); padding: 10px 15px 16px; }
+.reading-notes-plain { max-height: min(48dvh, 420px); margin: 0; padding: 12px 15px 16px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.65; }

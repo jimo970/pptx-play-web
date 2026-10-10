@@ -1,5 +1,5 @@
-import { nextTick, watch, type Ref } from 'vue'
-import type { PptxSlide, PptxTransitionPlayback } from '~/utils/pptx'
+import { nextTick, onUnmounted, watch, type Ref } from 'vue'
+import type { PptxSlide, PptxTransitionPlayback } from '~/utils/pptx-model'
 import { combClipPath, dissolveClipPath, glitterTransitionClipPath, gridTransitionClipPath, plusTransitionClipPath, randomBarClipPath, rippleTransitionClipPath, shredTransitionClipPath, stripsClipPath, wedgeTransitionClipPath, wheelClipPath } from '~/utils/transitionMasks'
 
 interface SlideTransitionOptions {
@@ -29,10 +29,140 @@ function honeycombClipPath(width: number, height: number, collapsed: boolean): s
   return `path("${paths.join(' ')}")`
 }
 
+interface MorphTextToken {
+  text: string
+  key: string
+  left: number
+  top: number
+  width: number
+  height: number
+  content: DocumentFragment
+  style: Pick<CSSStyleDeclaration, 'color' | 'fontFamily' | 'fontSize' | 'fontStyle' | 'fontWeight' | 'fontVariant' | 'fontStretch' | 'lineHeight' | 'letterSpacing' | 'wordSpacing' | 'textDecoration' | 'textShadow' | 'textTransform' | 'direction' | 'writingMode' | 'verticalAlign'>
+}
+
+function morphTextSegments(text: string, mode: 'byWord' | 'byChar'): {text: string; key: string; start: number; end: number}[] {
+  if (typeof Intl.Segmenter !== 'function') {
+    if (mode === 'byChar') {
+      let offset = 0
+      return Array.from(text, segment => {
+        const start = offset
+        offset += segment.length
+        return {text: segment, key: segment, start, end: offset}
+      })
+    }
+    return [...text.matchAll(/\S+\s*|\s+/gu)].map(match => ({text: match[0], key: match[0].trimEnd() || match[0], start: match.index!, end: match.index! + match[0].length}))
+  }
+
+  const segments = [...new Intl.Segmenter(undefined, {granularity: mode === 'byChar' ? 'grapheme' : 'word'}).segment(text)]
+  if (mode === 'byChar') return segments.map(segment => ({text: segment.segment, key: segment.segment, start: segment.index, end: segment.index + segment.segment.length}))
+  const words = segments.filter(segment => segment.isWordLike)
+  if (!words.length) return text ? [{text, key: text, start: 0, end: text.length}] : []
+  return words.map((word, index) => {
+    const start = index === 0 ? 0 : word.index
+    const end = index + 1 < words.length ? words[index + 1]!.index : text.length
+    return {text: text.slice(start, end), key: word.segment, start, end}
+  })
+}
+
+function morphTextTokens(frame: HTMLElement, mode: 'byWord' | 'byChar'): MorphTextToken[] {
+  const tokens: MorphTextToken[] = []
+  const frameRect = frame.getBoundingClientRect()
+  for (const paragraph of frame.querySelectorAll<HTMLElement>('.text-paragraph')) {
+    const nodes: {node: Text; start: number; end: number}[] = []
+    let text = ''
+    for (const run of paragraph.querySelectorAll<HTMLElement>('.text-run')) {
+      const walker = document.createTreeWalker(run, NodeFilter.SHOW_TEXT)
+      let node = walker.nextNode() as Text | null
+      while (node) {
+        const start = text.length
+        text += node.data
+        nodes.push({node, start, end: text.length})
+        node = walker.nextNode() as Text | null
+      }
+    }
+    for (const segment of morphTextSegments(text, mode)) {
+      const start = nodes.find(item => segment.start >= item.start && segment.start < item.end)
+      const end = [...nodes].reverse().find(item => segment.end > item.start && segment.end <= item.end)
+      if (!start || !end) continue
+      const range = document.createRange()
+      range.setStart(start.node, segment.start - start.start)
+      range.setEnd(end.node, segment.end - end.start)
+      const rect = range.getBoundingClientRect()
+      if (!rect.width || !rect.height) continue
+      const computed = getComputedStyle(start.node.parentElement || frame)
+      tokens.push({
+        text: segment.text,
+        key: segment.key,
+        left: rect.left - frameRect.left,
+        top: rect.top - frameRect.top,
+        width: rect.width,
+        height: rect.height,
+        content: range.cloneContents(),
+        style: {
+          color: computed.color,
+          fontFamily: computed.fontFamily,
+          fontSize: computed.fontSize,
+          fontStyle: computed.fontStyle,
+          fontWeight: computed.fontWeight,
+          fontVariant: computed.fontVariant,
+          fontStretch: computed.fontStretch,
+          lineHeight: computed.lineHeight,
+          letterSpacing: computed.letterSpacing,
+          wordSpacing: computed.wordSpacing,
+          textDecoration: computed.textDecoration,
+          textShadow: computed.textShadow,
+          textTransform: computed.textTransform,
+          direction: computed.direction,
+          writingMode: computed.writingMode,
+          verticalAlign: computed.verticalAlign,
+        },
+      })
+    }
+  }
+  return tokens
+}
+
+function morphTextNode(layer: HTMLElement, token: MorphTextToken, left: number, top: number): HTMLElement {
+  const node = document.createElement('span')
+  node.className = 'morph-text-token'
+  node.dataset.morphToken = token.text
+  node.dataset.morphMatch = token.key
+  node.setAttribute('aria-hidden', 'true')
+  Object.assign(node.style, {
+    position: 'absolute',
+    display: 'block',
+    left: `${left}px`,
+    top: `${top}px`,
+    width: `${Math.max(token.width, 0.01)}px`,
+    height: `${Math.max(token.height, 0.01)}px`,
+    margin: '0',
+    padding: '0',
+    border: '0',
+    overflow: 'visible',
+    whiteSpace: 'pre',
+    pointerEvents: 'none',
+    transformOrigin: 'top left',
+    ...token.style,
+  })
+  node.append(token.content)
+  for (const run of node.querySelectorAll<HTMLElement>('.text-run')) run.style.setProperty('white-space', 'pre', 'important')
+  layer.append(node)
+  return node
+}
+
 
 export function useSlideTransition({ slide, shell, incomingHost, underlay, flash, playback }: SlideTransitionOptions) {
+  let morphCleanup: (() => void) | undefined
+
+  onUnmounted(() => {
+    morphCleanup?.()
+    morphCleanup = undefined
+  })
+
   watch(slide, (nextSlide, previousSlide) => {
     if (nextSlide?.id === previousSlide?.id) return
+    morphCleanup?.()
+    morphCleanup = undefined
     underlay.value?.replaceChildren()
     if (!nextSlide) return
     const current = incomingHost.value
@@ -73,20 +203,8 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
     }
     const timing: KeyframeAnimationOptions = { duration: transition.durationMs, easing: 'ease-in-out', fill: 'both', delay: animationDelay }
     const animations: Animation[] = []
+    const textMode = transition.morphOption === 'byWord' || transition.morphOption === 'byChar' ? transition.morphOption : undefined
     stage.classList.add('is-morph-transition')
-    if (transition.morphOption !== 'byObject') {
-      const incomingAnimation = incoming.animate([{ opacity: 0 }, { opacity: 1 }], timing)
-      const outgoingAnimation = outgoing.animate([{ opacity: 1 }, { opacity: 0 }], timing)
-      animations.push(incomingAnimation, outgoingAnimation)
-      incomingAnimation.onfinish = () => {
-        animations.forEach(animation => animation.cancel())
-        if (slide.value?.id === activeSlide.id) {
-          underlay.value?.replaceChildren()
-          stage.classList.remove('is-morph-transition')
-        }
-      }
-      return
-    }
     const outgoingFrame = outgoing.querySelector<HTMLElement>('.slide-frame')
     const incomingFrame = incoming.querySelector<HTMLElement>('.slide-frame')
     const outgoingElements = [...(outgoingFrame?.querySelectorAll<HTMLElement>('.slide-element') || [])]
@@ -104,6 +222,83 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
     }
     const oldByName = uniqueByName(outgoingElements)
     const newByName = uniqueByName(incomingElements)
+    const restoreTextStyles: (() => void)[] = []
+    if (textMode && incomingFrame) {
+      const transformed = (element: HTMLElement) => {
+        const value = getComputedStyle(element).transform
+        if (value === 'none') return false
+        try {
+          const matrix = new DOMMatrixReadOnly(value)
+          return Math.abs(matrix.a - 1) > 0.001 || Math.abs(matrix.b) > 0.001 || Math.abs(matrix.c) > 0.001 || Math.abs(matrix.d - 1) > 0.001
+        } catch {
+          return true
+        }
+      }
+      for (const [key, element] of newByName) {
+        const previous = oldByName.get(key)
+        if (!previous) continue
+        const sourceText = previous.querySelector<HTMLElement>('.text-frame')
+        const targetText = element.querySelector<HTMLElement>('.text-frame')
+        if (!sourceText || !targetText) continue
+        if (element.dataset.elementKind !== 'shape') {
+          console.warn(`Morph ${textMode} text matching is not supported on ${element.dataset.elementKind} elements; object motion is used.`)
+          continue
+        }
+        if (transformed(previous) || transformed(element)) {
+          console.warn(`Morph ${textMode} text matching uses object motion for transformed shape "${element.dataset.elementName}".`)
+          continue
+        }
+        const sourceTokens = morphTextTokens(sourceText, textMode)
+        const targetTokens = morphTextTokens(targetText, textMode)
+        if (!sourceTokens.length && !targetTokens.length) continue
+        const position = targetText.style.getPropertyValue('position')
+        const positionPriority = targetText.style.getPropertyPriority('position')
+        targetText.style.setProperty('position', 'relative')
+        restoreTextStyles.push(() => position ? targetText.style.setProperty('position', position, positionPriority) : targetText.style.removeProperty('position'))
+        const layer = document.createElement('span')
+        layer.className = 'morph-text-layer'
+        layer.setAttribute('aria-hidden', 'true')
+        Object.assign(layer.style, {position: 'absolute', display: 'block', inset: '0', overflow: 'hidden', pointerEvents: 'none', zIndex: '2'})
+        targetText.append(layer)
+
+        const available = new Map<string, {tokens: MorphTextToken[]; index: number}>()
+        for (const token of targetTokens) {
+          const bucket = available.get(token.key) || {tokens: [], index: 0}
+          bucket.tokens.push(token)
+          available.set(token.key, bucket)
+        }
+        const matchedTargets = new Set<MorphTextToken>()
+        for (const token of sourceTokens) {
+          const matches = available.get(token.key)
+          if (matches && matches.index < matches.tokens.length) {
+            const target = matches.tokens[matches.index++]!
+            matchedTargets.add(target)
+            const node = morphTextNode(layer, target, token.left, token.top)
+            const scaleX = token.width / Math.max(target.width, 0.01)
+            const scaleY = token.height / Math.max(target.height, 0.01)
+            animations.push(node.animate([
+              {left: `${token.left}px`, top: `${token.top}px`, transform: `scale(${scaleX}, ${scaleY})`},
+              {left: `${target.left}px`, top: `${target.top}px`, transform: 'scale(1, 1)'},
+            ], timing))
+          } else {
+            const node = morphTextNode(layer, token, token.left, token.top)
+            animations.push(node.animate([{opacity: 1}, {opacity: 0}], timing))
+          }
+        }
+        for (const token of targetTokens) {
+          if (matchedTargets.has(token)) continue
+          const node = morphTextNode(layer, token, token.left, token.top)
+          animations.push(node.animate([{opacity: 0}, {opacity: 1}], timing))
+        }
+        for (const run of sourceText.querySelectorAll<HTMLElement>('.text-run')) run.style.setProperty('visibility', 'hidden', 'important')
+        for (const run of targetText.querySelectorAll<HTMLElement>('.text-run')) {
+          const visibility = run.style.getPropertyValue('visibility')
+          const priority = run.style.getPropertyPriority('visibility')
+          run.style.setProperty('visibility', 'hidden', 'important')
+          restoreTextStyles.push(() => visibility ? run.style.setProperty('visibility', visibility, priority) : run.style.removeProperty('visibility'))
+        }
+      }
+    }
     for (const element of incomingElements) {
       const key = `${element.dataset.elementKind}:${element.dataset.elementName}`
       const previous = oldByName.get(key)
@@ -149,9 +344,19 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
         { backgroundColor: getComputedStyle(incomingFrame).backgroundColor },
       ], timing)
       animations.push(backgroundAnimation)
-      backgroundAnimation.onfinish = () => {
+      let cleaned = false
+      const cleanup = () => {
+        if (cleaned) return
+        cleaned = true
         animations.forEach(animation => animation.cancel())
+        restoreTextStyles.forEach(restore => restore())
+        incomingFrame.querySelectorAll('.morph-text-layer').forEach(layer => layer.remove())
+        if (morphCleanup === cleanup) morphCleanup = undefined
+      }
+      morphCleanup = cleanup
+      backgroundAnimation.onfinish = () => {
         if (slide.value?.id === activeSlide.id) {
+          cleanup()
           underlay.value?.replaceChildren()
           stage.classList.remove('is-morph-transition')
         }

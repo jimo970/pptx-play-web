@@ -1,144 +1,49 @@
 import JSZip from 'jszip'
+import presetShapeDefinitionsUrl from './preset-shape-definitions.xml?url'
 import {inverseTimingProgress, type TimingCurve} from './animation-timing'
-import {isSupportedChartNumberFormat} from './chart-number-format'
+import {getChartDateAxisMajorTicks, isSupportedChartNumberFormat} from './chart-number-format'
 import {hslToRgb} from './color'
+import type {
+    AnimationOnOffProperty,
+    AnimatedLineArrow,
+    AnimatedLineArrowProperty,
+    AnimatedLineArrowSize,
+    AnimatedLineArrowSizeProperty,
+    AnimatedStrokeDashStyle,
+    AnimatedVisibility,
+    PptxAnimation,
+    PptxChart,
+    PptxChartAxis,
+    PptxChartAxisCrosses,
+    PptxChartAxisPosition,
+    PptxChartDataLabelPosition,
+    PptxChartDataLabelStyle,
+    PptxChartGrouping,
+    PptxChartMarkerSymbol,
+    PptxChartSeries,
+    PptxChartStackSegment,
+    PptxChartTickLabelPosition,
+    PptxChartTickMark,
+    PptxCustomPath,
+    PptxDocument,
+    PptxElement,
+    PptxEmbeddedFontFace,
+    PptxGlow,
+    PptxHyperlink,
+    PptxLineEnd,
+    PptxParagraph,
+    PptxRun,
+    PptxShadow,
+    PptxSlide,
+    PptxTableCell,
+    PptxTextOrientation,
+    TextStyleAnimationProperty,
+    TextStyleAnimationValue
+} from './pptx-model'
 
 // ponytail: cap animated strokes at about 10,500 CSS px before stage scaling; raise only for real decks that need wider strokes.
 const MAX_ANIMATED_STROKE_WIDTH_EMU = 100_000_000
-
-export interface PptxRun {
-    text: string
-    fontFamily?: string
-    fontFamilyEastAsia?: string
-    fontFamilyComplexScript?: string
-    fontSizePt?: number
-    letterSpacingPt?: number
-    baselineOffsetEm?: number
-    color?: string
-    outlineColor?: string
-    outlineWidth?: number
-    bold?: boolean
-    italic?: boolean
-    underline?: boolean
-    underlineStyle?: 'double' | 'dotted' | 'dashed' | 'wavy'
-    lineThrough?: boolean
-    lineThroughStyle?: 'solid' | 'double'
-    hyperlink?: PptxHyperlink
-    shadow?: PptxShadow
-}
-
-export type PptxHyperlink =
-    | {kind: 'external'; url: string; tooltip?: string}
-    | {kind: 'slide'; targetPath: string; tooltip?: string}
-    | {kind: 'showJump'; jump: 'firstslide' | 'lastslide' | 'nextslide' | 'previousslide' | 'number'; slideNumber?: number; tooltip?: string}
-
-export interface PptxShadow {
-    color: string
-    blur: number
-    distance: number
-    angle: number
-}
-
-export interface PptxParagraph {
-    align: 'left' | 'center' | 'right' | 'justify'
-    direction?: 'ltr' | 'rtl'
-    runs: PptxRun[]
-    level?: number
-    marginLeft?: number
-    marginRight?: number
-    indent?: number
-    spaceBefore?: {unit: 'emu' | 'ratio'; value: number}
-    spaceAfter?: {unit: 'emu' | 'ratio'; value: number}
-    lineSpacing?: {unit: 'emu' | 'ratio'; value: number}
-    bullet?: ({kind: 'char'; char: string} | {kind: 'number'; type: string; startAt?: number} | {kind: 'image'; target?: string; url?: string}) & {size?: {unit: 'ratio' | 'points'; value: number}}
-}
-
-export interface PptxTableCell {
-    paragraphs: PptxParagraph[]
-    textColumnCount?: number
-    textColumnSpacing?: number
-    textColumnsRightToLeft?: boolean
-    textFontScale?: number
-    textLineSpacingReduction?: number
-    textAutoFitDynamic?: boolean
-    fill: string
-    margins: {left: number; right: number; top: number; bottom: number}
-    verticalAlign: 'top' | 'middle' | 'bottom'
-    colSpan: number
-    rowSpan: number
-    hidden: boolean
-    borders: Partial<Record<'top' | 'right' | 'bottom' | 'left', {color: string; width: number}>>
-}
-
-export interface PptxTable {
-    columns: number[]
-    rows: {height: number; cells: PptxTableCell[]}[]
-}
-
-export type PptxChartAxisPosition = 'b' | 'l' | 'r' | 't'
-export type PptxChartAxisCrosses = 'autoZero' | 'max' | 'min'
-export type PptxChartTickMark = 'cross' | 'in' | 'none' | 'out'
-export type PptxChartTickLabelPosition = 'high' | 'low' | 'nextTo' | 'none'
-export type PptxChartDataLabelPosition = 'bestFit' | 'b' | 'ctr' | 'inBase' | 'inEnd' | 'l' | 'outEnd' | 'r' | 't'
-
-export interface PptxChartSeries {
-    legendIndex: number
-    name: string
-    values: Array<number | null>
-    chartType?: 'bar' | 'line' | 'area' | 'stock'
-    chartGroupIndex?: number
-    grouping?: PptxChartGrouping
-    valueAxisId?: string
-    lineShowLine?: boolean
-    lineShowMarker?: boolean
-    xValues?: Array<number | null>
-    bubbleSizes?: Array<number | null>
-    scatterShowLine?: boolean
-    scatterShowMarker?: boolean
-    radarShowLine?: boolean
-    radarShowMarker?: boolean
-    radarMarkerSize?: number
-    color: string
-    pointColors: Record<number, string>
-    showValueLabels: boolean
-    valueLabelOverrides: Record<number, boolean>
-    showPercentLabels: boolean
-    percentLabelOverrides: Record<number, boolean>
-    showBubbleSizeLabels: boolean
-    bubbleSizeLabelOverrides: Record<number, boolean>
-    showCategoryNameLabels: boolean
-    categoryNameLabelOverrides: Record<number, boolean>
-    showSeriesNameLabels: boolean
-    seriesNameLabelOverrides: Record<number, boolean>
-    labelSeparator?: string
-    labelSeparatorOverrides: Record<number, string>
-    numberFormat?: string
-    valueNumberFormatOverrides: Record<number, string>
-    dataLabelPosition?: PptxChartDataLabelPosition
-    dataLabelPositionOverrides: Record<number, PptxChartDataLabelPosition>
-}
-
-export type PptxChartGrouping = 'clustered' | 'stacked' | 'percentStacked'
-
-export interface PptxChartAxis {
-    min: number
-    max: number
-    majorUnit?: number
-    numberFormat?: string
-    reverse?: boolean
-    deleted?: boolean
-    majorGridlines?: boolean
-    position?: PptxChartAxisPosition
-    crosses?: PptxChartAxisCrosses
-    crossesAt?: number
-    majorTickMark?: PptxChartTickMark
-    tickLabelPosition?: PptxChartTickLabelPosition
-}
-
-export interface PptxChartStackSegment {
-    start: number
-    end: number
-}
+const PRESET_GEOMETRIES_WITH_HANDWRITTEN_RENDERERS = new Set(['rect', 'roundRect', 'round1Rect', 'round2DiagRect', 'round2SameRect', 'snipRoundRect', 'ellipse', 'line', 'lineInv', 'straightConnector1', 'plus', 'mathMinus', 'mathEqual', 'mathPlus', 'mathDivide', 'mathMultiply', 'mathNotEqual', 'snip1Rect', 'snip2DiagRect', 'snip2SameRect', 'homePlate', 'nonIsoscelesTrapezoid', 'heptagon', 'decagon', 'leftRightArrow', 'upDownArrow', 'upArrow', 'downArrow', 'bentUpArrow', 'quadArrow', 'leftRightUpArrow', 'rightArrow', 'leftArrow', 'notchedRightArrow', 'heart', 'lightningBolt', 'triangle', 'rtTriangle', 'diamond', 'cube', 'plaque', 'frame', 'halfFrame', 'cornerTabs', 'squareTabs', 'plaqueTabs', 'donut', 'pie', 'chord', 'arc', 'blockArc', 'pieWedge', 'flowChartConnector', 'flowChartSummingJunction', 'flowChartOr', 'flowChartProcess', 'flowChartAlternateProcess', 'flowChartDelay', 'flowChartDisplay', 'flowChartInternalStorage', 'flowChartDecision', 'flowChartSort', 'flowChartCollate', 'flowChartPunchedCard', 'flowChartOfflineStorage', 'flowChartOnlineStorage', 'flowChartPunchedTape', 'flowChartMagneticDisk', 'flowChartMagneticDrum', 'flowChartMagneticTape', 'flowChartMultidocument', 'flowChartOffpageConnector', 'flowChartDocument', 'flowChartManualInput', 'flowChartManualOperation', 'flowChartInputOutput', 'flowChartPreparation', 'flowChartTerminator', 'flowChartPredefinedProcess', 'flowChartExtract', 'flowChartMerge', 'parallelogram', 'trapezoid', 'hexagon', 'octagon', 'pentagon', 'star4', 'star5', 'star6', 'star7', 'star8', 'star10', 'star12', 'star16', 'star24', 'star32', 'dodecagon', 'chevron', 'leftBracket', 'rightBracket', 'bracketPair', 'leftBrace', 'rightBrace', 'bracePair', 'custom', 'cloud'])
 
 export function getPptxChartStacking(series: PptxChartSeries[], grouping: Exclude<PptxChartGrouping, 'clustered'>) {
     const categoryCount = Math.max(0, ...series.map(item => item.values.length))
@@ -170,357 +75,23 @@ export function getPptxChartStacking(series: PptxChartSeries[], grouping: Exclud
     return {segments, min, max}
 }
 
-export interface PptxChart {
-    type: 'bar' | 'line' | 'area' | 'pie' | 'doughnut' | 'scatter' | 'bubble' | 'radar' | 'stock'
-    direction?: 'horizontal' | 'vertical'
-    grouping?: PptxChartGrouping
-    radarStyle?: 'standard' | 'marker' | 'filled'
-    stock?: {
-        highIndex: number
-        lowIndex: number
-        closeIndex: number
-        openIndex?: number
-        volumeIndex?: number
-        volumeGapWidth?: number
-        highLowColor: string
-        showHighLowLines: boolean
-        showDropLines: boolean
-        showUpDownBars: boolean
-        upColor: string
-        downColor: string
-        gapWidth: number
-    }
-    holeSize?: number
-    firstSliceAngle?: number
-    bubbleScale?: number
-    bubbleSizeRepresents?: 'area' | 'w'
-    showNegativeBubbles?: boolean
-    bubbleVaryColors?: boolean
-    title?: string
-    categories: string[]
-    palette: string[]
-    series: PptxChartSeries[]
-    valueAxes?: Array<{id: string; axis: PptxChartAxis; primary?: boolean}>
-    labelSeparator?: string
-    numberFormat?: string
-    valueAxis?: PptxChartAxis
-    xAxis?: PptxChartAxis
-    categoryAxisPosition?: PptxChartAxisPosition
-    categoryAxisCrosses?: PptxChartAxisCrosses
-    categoryAxisCrossesAt?: number
-    categoryAxisDeleted?: boolean
-    categoryAxisMajorGridlines?: boolean
-    categoryAxisMajorTickMark?: PptxChartTickMark
-    categoryAxisTickLabelPosition?: PptxChartTickLabelPosition
-    legend?: {
-        position: 'bottom' | 'top' | 'left' | 'right' | 'topRight'
-        hiddenEntries?: number[]
-        overlay?: boolean
-        manualLayout?: {
-            x?: {value: number; mode: 'edge' | 'factor'}
-            y?: {value: number; mode: 'edge' | 'factor'}
-            w?: {value: number; mode: 'edge' | 'factor'}
-            h?: {value: number; mode: 'edge' | 'factor'}
-        }
-    }
-    dataLabelPosition?: PptxChartDataLabelPosition
-}
-
-export interface PptxCustomPath {
-    d: string
-    fill: boolean
-    stroke: boolean
-}
-
-type PptxTextOrientation = 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 'eaVert' | 'mongolianVert' | 'wordArtVertRtl'
-type PptxLineEnd = {type: 'none' | 'triangle' | 'stealth' | 'diamond' | 'oval' | 'arrow'; width: 'sm' | 'med' | 'lg'; length: 'sm' | 'med' | 'lg'}
-
-export interface PptxElement {
-    id: string
-    name: string
-    hyperlink?: PptxHyperlink
-    kind: 'shape' | 'picture' | 'video' | 'audio' | 'line' | 'placeholder' | 'table' | 'chart'
-    geometry: string
-    customPaths?: PptxCustomPath[]
-    customTextRect?: {left: number; top: number; right: number; bottom: number}
-    x: number
-    y: number
-    width: number
-    height: number
-    rotation: number
-    flipH: boolean
-    flipV: boolean
-    renderMatrix?: [number, number, number, number, number, number]
-    motionParent?: {matrix: [number, number, number, number, number, number]; x: number; y: number}
-    fill: string
-    stroke: string
-    strokeWidth: number
-    strokeDash?: string | number[]
-    strokeCap?: 'butt' | 'round' | 'square'
-    lineHeadEnd?: PptxLineEnd
-    lineTailEnd?: PptxLineEnd
-    shadow?: PptxShadow
-    imageUrl?: string
-    mediaUrl?: string
-    mediaType?: 'video' | 'audio'
-    mediaMime?: string
-    mediaFormat?: string
-    mediaTrim?: {startMs: number; endMs: number}
-    mediaFade?: {inMs: number; outMs: number}
-    imageCrop?: {left: number; top: number; right: number; bottom: number}
-    table?: PptxTable
-    chart?: PptxChart
-    paragraphs: PptxParagraph[]
-    margins: {left: number; right: number; top: number; bottom: number}
-    verticalAlign: 'top' | 'middle' | 'bottom'
-    textWrap?: 'square' | 'none'
-    textHorizontalOverflow?: 'overflow' | 'clip'
-    textVerticalOverflow?: 'overflow' | 'clip' | 'ellipsis'
-    textOrientation?: PptxTextOrientation
-    textColumnCount?: number
-    textColumnSpacing?: number
-    textColumnsRightToLeft?: boolean
-    textFontScale?: number
-    textLineSpacingReduction?: number
-    textAutoFit?: 'normal' | 'shape'
-    textAutoFitDynamic?: boolean
-    placeholder?: {type: string; index?: string}
-}
-
-export interface PptxSlide {
-    id: string
-    packagePath?: string
-    name: string
-    elements: PptxElement[]
-    background: string
-    backgroundImage?: {
-        url: string
-        crop: {left: number; top: number; right: number; bottom: number}
-        tile?: {scaleX: number; scaleY: number; align: 'tl' | 't' | 'tr' | 'l' | 'ctr' | 'r' | 'bl' | 'b' | 'br'; flip: 'none' | 'x' | 'y' | 'xy'; offsetX: number; offsetY: number}
-    }
-    speakerNotes?: string
-    automaticAnimations?: PptxAnimation[]
-    animationSteps?: PptxAnimation[][]
-    animationSequence?: {
-        nextAction: 'none' | 'seek'
-        advancesOnNext?: boolean
-        rewindsOnPrevious?: boolean
-    }
-    triggeredAnimations?: {
-        trigger: {type: 'shape'; id: string; event: 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut'} | {type: 'slide'; event: 'onNext' | 'onPrev'}
-        steps: PptxAnimation[][]
-    }[]
-    advanceOnClick?: boolean
-    advanceAfterMs?: number
-    transition?: {
-        effect:
-            | 'fade'
-            | 'push'
-            | 'wipe'
-            | 'zoom'
-            | 'cover'
-            | 'pull'
-            | 'split'
-            | 'circle'
-            | 'diamond'
-            | 'plus'
-            | 'wedge'
-            | 'newsflash'
-            | 'flash'
-            | 'doors'
-            | 'window'
-            | 'prism'
-            | 'pan'
-            | 'vortex'
-            | 'ferris'
-            | 'gallery'
-            | 'conveyor'
-            | 'ripple'
-            | 'glitter'
-            | 'shred'
-            | 'flythrough'
-            | 'warp'
-            | 'flip'
-            | 'switch'
-            | 'reveal'
-            | 'morph'
-            | 'preset'
-            | 'random'
-            | 'cut'
-            | 'honeycomb'
-            | 'blinds'
-            | 'checker'
-            | 'comb'
-            | 'dissolve'
-            | 'wheel'
-            | 'wheelReverse'
-            | 'randomBar'
-            | 'strips'
-        morphOption?: 'byObject' | 'byWord' | 'byChar'
-        presetName?: 'fallOver' | 'drape' | 'curtains' | 'wind' | 'prestige' | 'fracture' | 'crush' | 'peelOff' | 'pageCurlDouble' | 'pageCurlSingle' | 'airplane' | 'origami'
-        invertX?: boolean
-        invertY?: boolean
-        pattern?: 'diamond' | 'hexagon'
-        shredPattern?: 'strip' | 'rectangle'
-        hasBounce?: boolean
-        direction: string
-        orientation?: 'horz' | 'vert'
-        barOrientation?: 'horizontal' | 'vertical'
-        spokes?: number
-        isInverted?: boolean
-        isContent?: boolean
-        throughBlack?: boolean
-        durationMs: number
-    }
-}
-
-export interface PptxTransitionPlayback {
-    slideId: string
-    startedAtEpoch: number
-    transition: NonNullable<PptxSlide['transition']>
-}
-
-type TextStyleAnimationProperty = 'fontStyle' | 'fontFamily' | 'underline' | 'lineThrough' | 'textTransform' | 'outline' | 'textShadow' | 'emboss'
-type TextStyleAnimationValue = boolean | 'none' | 'normal' | 'sub' | 'super' | string
-type AnimatedVisibility = 'visible' | 'hidden'
-type AnimatedImageCropProperty = 'left' | 'top' | 'right' | 'bottom'
-type AnimatedImageToneProperty = 'gain' | 'blacklevel' | 'gamma'
-
-export interface PptxAnimation {
-    targetId: string
-    paragraphRange?: {start: number; end: number}
-    characterRange?: {start: number; end: number}
-    iteration?: {intervalMs: number; ranges: Array<{start: number; end: number}>; backwards?: boolean}
-    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'textStyle' | 'visibility' | 'grayscale' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
-    direction: 'in' | 'out'
-    durationMs: number
-    delayMs: number
-    fillMode?: 'hold' | 'freeze' | 'remove'
-    sequenceKey?: string
-    sequenceOrder?: number
-    repeatCount?: number
-    repeatDurationMs?: number
-    autoReverse?: boolean
-    wipeDirection?: 'right' | 'left' | 'up' | 'down'
-    blindsOrientation?: 'horizontal' | 'vertical'
-    checkerOrientation?: 'horz' | 'vert'
-    randomBarOrientation?: 'horizontal' | 'vertical'
-    stripsDirection?: 'ld' | 'lu' | 'rd' | 'ru'
-    barnOrientation?: 'horizontal' | 'vertical'
-    barnMotion?: 'in' | 'out'
-    shapeFilter?: 'circle' | 'diamond' | 'box' | 'plus'
-    shapeDirection?: 'in' | 'out'
-    slideFrom?: 'left' | 'right' | 'top' | 'bottom'
-    wheelSpokes?: 1 | 2 | 3 | 4 | 8
-    scaleFrom?: [number, number]
-    scaleTo?: [number, number]
-    rotationFrom?: number
-    rotationTo?: number
-    rotationRelative?: boolean
-    colorProperty?: 'fillcolor' | 'style.color' | 'stroke.color' | 'shadow.color'
-    opacityProperty?: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity'
-    colorFrom?: [number, number, number, number]
-    colorTo?: [number, number, number, number]
-    colorSpace?: 'rgb' | 'hsl'
-    colorDirection?: 'cw' | 'ccw'
-    fontSizeFrom?: number
-    fontSizeTo?: number
-    fontSizeKeyframes?: Array<{offset: number; value: number}>
-    fontSizeKeyframeMode?: 'lin' | 'discrete'
-    fontSizeFormulaSamples?: Array<{offset: number; value: number}>
-    fontWeightFrom?: number
-    fontWeightTo?: number
-    fontWeightReset?: boolean
-    fontWeightKeyframes?: Array<{offset: number; value: number}>
-    fontWeightKeyframeMode?: 'lin' | 'discrete'
-    fontWeightFormulaSamples?: Array<{offset: number; value: number}>
-    strokeWidthFrom?: number
-    strokeWidthTo?: number
-    strokeWidthKeyframes?: Array<{offset: number; value: number}>
-    strokeWidthKeyframeMode?: 'lin' | 'discrete'
-    strokeWidthFormulaSamples?: Array<{offset: number; value: number}>
-    textStyleProperty?: TextStyleAnimationProperty
-    textStyleFrom?: TextStyleAnimationValue
-    textStyleTo?: TextStyleAnimationValue
-    textStyleKeyframes?: Array<{offset: number; value: TextStyleAnimationValue}>
-    visibilityFrom?: AnimatedVisibility
-    visibilityTo?: AnimatedVisibility
-    visibilityKeyframes?: Array<{offset: number; value: AnimatedVisibility}>
-    grayscaleFrom?: boolean
-    grayscaleTo?: boolean
-    grayscaleKeyframes?: Array<{offset: number; value: boolean}>
-    imageCropProperty?: AnimatedImageCropProperty
-    imageCropFrom?: number
-    imageCropTo?: number
-    imageCropKeyframes?: Array<{offset: number; value: number}>
-    imageCropKeyframeMode?: 'lin' | 'discrete'
-    imageToneProperty?: AnimatedImageToneProperty
-    imageToneFrom?: number
-    imageToneTo?: number
-    imageToneKeyframes?: Array<{offset: number; value: number}>
-    imageToneKeyframeMode?: 'lin' | 'discrete'
-    opacityFrom?: number
-    opacityTo?: number
-    opacityKeyframes?: Array<{offset: number; value: number}>
-    opacityKeyframeMode?: 'lin' | 'discrete'
-    opacityFormulaSamples?: Array<{offset: number; value: number}>
-    mediaCommand?: 'play' | 'pause' | 'togglePause' | 'stop'
-    mediaActionKey?: string
-    mediaDurationMs?: number
-    mediaSlideCount?: number
-    mediaWaitForEnd?: boolean
-    mediaWaitForEndKeys?: string[]
-    mediaWaitDelayMs?: number
-    mediaStartSeconds?: number
-    mediaVolume?: number
-    mediaMuted?: boolean
-    motionPath?: Array<{x: number; y: number; distance: number}>
-    motionPathLength?: number
-    motionPathSamples?: Array<{progress: number; x: number; y: number}>
-    acceleration?: number
-    deceleration?: number
-    playbackSpeed?: number
-    reversePlayback?: boolean
-    timingWarp?: TimingCurve & {
-        groupOffsetMs: number
-        groupDurationMs: number
-        groupSpeed: number
-        groupReversePlayback: boolean
-        groupAutoReverse: boolean
-        groupPlaybackDurationMs: number
-        childOffsetMs: number
-        groupEndDelayMs: number
-    }
-}
-
-export interface PptxTriggerPlayback {
-    sequence: number
-    step: number
-    startedAt: number
-}
-
 interface PptxRelationship {
     target: string
     type: string
     external?: boolean
 }
 
-export interface PptxDocument {
-    name: string
-    width: number
-    height: number
-    slides: PptxSlide[]
-    warnings: string[]
-    objectUrls: string[]
-}
-
 type PptxTextStyle = Omit<PptxRun, 'text'>
+
 type ParagraphValues = Partial<Omit<PptxParagraph, 'runs'>>
+
 interface ParagraphDefaults {
     values: ParagraphValues
     text: PptxTextStyle
 }
+
 type ParagraphDefaultsByLevel = Record<number, ParagraphDefaults>
+
 interface MasterTextStyle {
     style: PptxTextStyle
     paragraphs: ParagraphDefaultsByLevel
@@ -536,6 +107,12 @@ interface ParsedPlaceholder {
 
 const MAX_FILE_BYTES = 150 * 1024 * 1024
 const MAX_ARCHIVE_BYTES = 250 * 1024 * 1024
+const MAX_ARCHIVE_ENTRIES = 20_000
+const LINE_GEOMETRIES = new Set(['line', 'lineInv', 'straightConnector1', 'bentConnector2', 'bentConnector3', 'bentConnector4', 'bentConnector5', 'curvedConnector2', 'curvedConnector3', 'curvedConnector4', 'curvedConnector5'])
+// MS-CFB compound-file header signature: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/05060311-bfce-4b12-874d-71fd4ce63aea
+const COMPOUND_FILE_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1] as const
+const MAX_EMBEDDED_FONT_BYTES = 64 * 1024 * 1024
+const MAX_EMBEDDED_FONT_FACES = 256
 const OFFICE_REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const PRESENTATION_NS = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 const DRAWING_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main'
@@ -633,6 +210,101 @@ function parseXml(source: string, label: string): XMLDocument {
     }
 }
 
+// ECMA-376 Part 1, presetShapeDefinitions.xml, cloud.
+let cloudPresetGeometryCache: Element | undefined
+function getCloudPresetGeometry(): Element {
+    if (!cloudPresetGeometryCache) {
+        cloudPresetGeometryCache = parseXml(`<a:custGeom xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+            <a:gdLst>
+                <a:gd name="il" fmla="*/ w 2977 21600"/><a:gd name="it" fmla="*/ h 3262 21600"/>
+                <a:gd name="ir" fmla="*/ w 17087 21600"/><a:gd name="ib" fmla="*/ h 17337 21600"/>
+                <a:gd name="g27" fmla="*/ w 67 21600"/><a:gd name="g28" fmla="*/ h 21577 21600"/>
+                <a:gd name="g29" fmla="*/ w 21582 21600"/><a:gd name="g30" fmla="*/ h 1235 21600"/>
+            </a:gdLst>
+            <a:rect l="il" t="it" r="ir" b="ib"/>
+            <a:pathLst>
+                <a:path w="43200" h="43200">
+                    <a:moveTo><a:pt x="3900" y="14370"/></a:moveTo>
+                    <a:arcTo wR="6753" hR="9190" stAng="-11429249" swAng="7426832"/>
+                    <a:arcTo wR="5333" hR="7267" stAng="-8646143" swAng="5396714"/>
+                    <a:arcTo wR="4365" hR="5945" stAng="-8748475" swAng="5983381"/>
+                    <a:arcTo wR="4857" hR="6595" stAng="-7859164" swAng="7034504"/>
+                    <a:arcTo wR="5333" hR="7273" stAng="-4722533" swAng="6541615"/>
+                    <a:arcTo wR="6775" hR="9220" stAng="-2776035" swAng="7816140"/>
+                    <a:arcTo wR="5785" hR="7867" stAng="37501" swAng="6842000"/>
+                    <a:arcTo wR="6752" hR="9215" stAng="1347096" swAng="6910353"/>
+                    <a:arcTo wR="7720" hR="10543" stAng="3974558" swAng="4542661"/>
+                    <a:arcTo wR="4360" hR="5918" stAng="-16496525" swAng="8804134"/>
+                    <a:arcTo wR="4345" hR="5945" stAng="-14809710" swAng="9151131"/>
+                    <a:close/>
+                </a:path>
+                <a:path w="43200" h="43200" fill="none" extrusionOk="false">
+                    <a:moveTo><a:pt x="4693" y="26177"/></a:moveTo><a:arcTo wR="4345" hR="5945" stAng="5204520" swAng="1585770"/>
+                    <a:moveTo><a:pt x="6928" y="34899"/></a:moveTo><a:arcTo wR="4360" hR="5918" stAng="4416628" swAng="686848"/>
+                    <a:moveTo><a:pt x="16478" y="39090"/></a:moveTo><a:arcTo wR="6752" hR="9215" stAng="8257449" swAng="844866"/>
+                    <a:moveTo><a:pt x="28827" y="34751"/></a:moveTo><a:arcTo wR="6752" hR="9215" stAng="387196" swAng="959901"/>
+                    <a:moveTo><a:pt x="34129" y="22954"/></a:moveTo><a:arcTo wR="5785" hR="7867" stAng="-4217541" swAng="4255042"/>
+                    <a:moveTo><a:pt x="41798" y="15354"/></a:moveTo><a:arcTo wR="5333" hR="7273" stAng="1819082" swAng="1665090"/>
+                    <a:moveTo><a:pt x="38324" y="5426"/></a:moveTo><a:arcTo wR="4857" hR="6595" stAng="-824660" swAng="891534"/>
+                    <a:moveTo><a:pt x="29078" y="3952"/></a:moveTo><a:arcTo wR="4857" hR="6595" stAng="-8950887" swAng="1091722"/>
+                    <a:moveTo><a:pt x="22141" y="4720"/></a:moveTo><a:arcTo wR="4365" hR="5945" stAng="-9809656" swAng="1061181"/>
+                    <a:moveTo><a:pt x="14000" y="5192"/></a:moveTo><a:arcTo wR="6753" hR="9190" stAng="-4002417" swAng="739161"/>
+                    <a:moveTo><a:pt x="4127" y="15789"/></a:moveTo><a:arcTo wR="6753" hR="9190" stAng="9459261" swAng="711490"/>
+                </a:path>
+            </a:pathLst>
+        </a:custGeom>`, 'ECMA-376 cloud preset geometry').documentElement
+    }
+    return cloudPresetGeometryCache
+}
+
+// ECMA-376 Part 1's preset definitions supply paths and text rectangles for presets without custom renderers.
+let presetShapeDefinitionCache: Map<string, Element> | undefined
+let presetShapeDefinitionLoad: Promise<void> | undefined
+async function loadPresetShapeDefinitions(): Promise<boolean> {
+    if (presetShapeDefinitionCache) return true
+    const load = presetShapeDefinitionLoad ??= (async () => {
+        const response = await fetch(presetShapeDefinitionsUrl)
+        if (!response.ok) throw new Error(`Preset geometry resource returned ${response.status}.`)
+        const root = parseXml((await response.text()).replace(/^\uFEFF/, ''), 'ECMA-376 preset shape definitions').documentElement
+        presetShapeDefinitionCache = new Map(children(root).map(definition => [definition.localName, definition]))
+    })()
+    try {
+        await load
+        return true
+    } catch {
+        if (presetShapeDefinitionLoad === load) presetShapeDefinitionLoad = undefined
+        return false
+    }
+}
+
+function getPresetShapeDefinition(name: string, source: Element | undefined, width: number, height: number): Element | undefined {
+    const definition = presetShapeDefinitionCache?.get(name)
+    if (!definition) return undefined
+
+    const result = definition.cloneNode(true) as Element
+    for (const path of children(child(result, 'pathLst'), 'path')) {
+        if (!path.hasAttribute('w')) path.setAttribute('w', String(width))
+        if (!path.hasAttribute('h')) path.setAttribute('h', String(height))
+    }
+    const sourceAdjustments = children(child(source, 'avLst'), 'gd')
+    if (!sourceAdjustments.length) return result
+
+    let adjustmentList = child(result, 'avLst')
+    if (!adjustmentList) {
+        adjustmentList = result.ownerDocument.createElementNS(DRAWING_NS, 'a:avLst')
+        result.insertBefore(adjustmentList, child(result, 'gdLst') ?? null)
+    }
+    for (const sourceAdjustment of sourceAdjustments) {
+        const adjustmentName = sourceAdjustment.getAttribute('name')
+        const formula = sourceAdjustment.getAttribute('fmla')
+        if (!adjustmentName || !formula) continue
+        const defaultAdjustment = children(adjustmentList, 'gd').find(node => node.getAttribute('name') === adjustmentName)
+        if (defaultAdjustment) defaultAdjustment.setAttribute('fmla', formula)
+        else adjustmentList.appendChild(result.ownerDocument.importNode(sourceAdjustment, true))
+    }
+    return result
+}
+
 function numberAttr(node: Element | undefined, key: string, fallback = 0): number {
     const raw = node?.getAttribute(key)
     if (!raw) return fallback
@@ -640,11 +312,16 @@ function numberAttr(node: Element | undefined, key: string, fallback = 0): numbe
     return Number.isFinite(value) ? value : fallback
 }
 
-function fixedPercentage(value: string | null): number | undefined {
+function percentageValue(value: string | null): number | undefined {
     if (value === null) return undefined
     const raw = value.trim()
-    const percent = /^(?:\d+\.?\d*|\.\d+)%$/.test(raw) ? Number(raw.slice(0, -1)) / 100 : /^\d+$/.test(raw) ? Number(raw) / 100_000 : Number.NaN
-    return Number.isFinite(percent) && percent >= 0 && percent <= 1 ? percent : undefined
+    const percent = /^[+-]?(?:\d+\.?\d*|\.\d+)%$/.test(raw) ? Number(raw.slice(0, -1)) / 100 : /^[+-]?\d+$/.test(raw) ? Number(raw) / 100_000 : Number.NaN
+    return Number.isFinite(percent) ? percent : undefined
+}
+
+function fixedPercentage(value: string | null): number | undefined {
+    const percent = percentageValue(value)
+    return percent !== undefined && percent >= 0 && percent <= 1 ? percent : undefined
 }
 
 function namespacedAttr(node: Element | undefined, name: string): string | null {
@@ -691,6 +368,114 @@ async function loadRelationships(zip: JSZip, path: string): Promise<Map<string, 
     )
 }
 
+const EMBEDDED_FONT_VARIANTS = [
+    {element: 'regular', weight: '400', style: 'normal'},
+    {element: 'bold', weight: '700', style: 'normal'},
+    {element: 'italic', weight: '400', style: 'italic'},
+    {element: 'boldItalic', weight: '700', style: 'italic'}
+] as const
+
+function embeddedFontMime(data: Uint8Array): string | undefined {
+    const signature = String.fromCharCode(...data.subarray(0, 4))
+    if (signature === '\u0000\u0001\u0000\u0000' || signature === 'true' || signature === 'typ1') return 'font/ttf'
+    if (signature === 'OTTO') return 'font/otf'
+    if (signature === 'wOFF') return 'font/woff'
+    if (signature === 'wOF2') return 'font/woff2'
+    return undefined
+}
+
+async function parseEmbeddedFonts(
+    presentation: XMLDocument,
+    relationships: Map<string, PptxRelationship>,
+    zip: JSZip,
+    urls: string[],
+    warnings: Set<string>
+): Promise<PptxEmbeddedFontFace[]> {
+    const list = firstDescendant(presentation.documentElement, 'embeddedFontLst')
+    if (!list) return []
+
+    const faces: PptxEmbeddedFontFace[] = []
+    const seenFaces = new Set<string>()
+    const urlsByTarget = new Map<string, string | null>()
+    let totalBytes = 0
+    let warnedSizeLimit = false
+    let warnedFaceLimit = false
+
+    for (const embeddedFont of children(list, 'embeddedFont')) {
+        const family = child(embeddedFont, 'font')?.getAttribute('typeface')?.trim()
+        if (!family) {
+            warnings.add('An embedded font without a typeface name was skipped.')
+            continue
+        }
+
+        for (const variant of EMBEDDED_FONT_VARIANTS) {
+            const variantNode = child(embeddedFont, variant.element)
+            if (!variantNode) continue
+            if (faces.length >= MAX_EMBEDDED_FONT_FACES) {
+                if (!warnedFaceLimit) warnings.add('Only the first 256 embedded font styles were read.')
+                warnedFaceLimit = true
+                continue
+            }
+            const relationId = namespacedAttr(variantNode, 'id')
+            const relation = relationId ? relationships.get(relationId) : undefined
+            if (!relation || relation.external || !relation.type.endsWith('/font')) {
+                warnings.add(`The embedded ${variant.element} font for "${family}" has no valid internal font relationship and was skipped.`)
+                continue
+            }
+
+            const faceKey = `${family.toLowerCase()}\u0000${variant.weight}\u0000${variant.style}`
+            if (seenFaces.has(faceKey)) {
+                warnings.add(`Duplicate embedded font style for "${family}" was ignored.`)
+                continue
+            }
+            seenFaces.add(faceKey)
+
+            let url = urlsByTarget.get(relation.target)
+            if (url === undefined) {
+                const entry = zip.file(relation.target)
+                if (!entry) {
+                    warnings.add(`The embedded font data for "${family}" is missing from the presentation.`)
+                    urlsByTarget.set(relation.target, null)
+                    continue
+                }
+                const size = (entry as JSZip.JSZipObject & {_data?: {uncompressedSize?: number}})._data?.uncompressedSize
+                if (!Number.isFinite(size) || size! < 0) {
+                    warnings.add(`The embedded font data for "${family}" has invalid ZIP size metadata and was skipped.`)
+                    urlsByTarget.set(relation.target, null)
+                    continue
+                }
+                if (totalBytes + size! > MAX_EMBEDDED_FONT_BYTES) {
+                    if (!warnedSizeLimit) warnings.add('Embedded font data beyond the 64 MB browser limit was skipped.')
+                    warnedSizeLimit = true
+                    urlsByTarget.set(relation.target, null)
+                    continue
+                }
+                const data = await entry.async('arraybuffer')
+                if (totalBytes + data.byteLength > MAX_EMBEDDED_FONT_BYTES) {
+                    if (!warnedSizeLimit) warnings.add('Embedded font data beyond the 64 MB browser limit was skipped.')
+                    warnedSizeLimit = true
+                    urlsByTarget.set(relation.target, null)
+                    continue
+                }
+                totalBytes += data.byteLength
+                const mime = embeddedFontMime(new Uint8Array(data))
+                if (!mime) {
+                    warnings.add(`The embedded font data for "${family}" is not a supported TrueType, OpenType, WOFF, or WOFF2 font.`)
+                    urlsByTarget.set(relation.target, null)
+                    continue
+                }
+                url = URL.createObjectURL(new Blob([data], {type: mime}))
+                urls.push(url)
+                urlsByTarget.set(relation.target, url)
+            }
+
+            if (url) faces.push({family, weight: variant.weight, style: variant.style, url})
+        }
+    }
+
+    return faces
+}
+
 function parseHyperlink(node: Element | undefined, rels: Map<string, PptxRelationship> | undefined, warnings: Set<string>): PptxHyperlink | undefined {
     if (!node) return undefined
     const tooltip = node.getAttribute('tooltip') || undefined
@@ -732,14 +517,21 @@ function parseHyperlink(node: Element | undefined, rels: Map<string, PptxRelatio
     return undefined
 }
 
-function validateArchiveSize(zip: JSZip): void {
+async function validateArchiveSize(zip: JSZip): Promise<void> {
     let total = 0
+    let entryCount = 0
     for (const entry of Object.values(zip.files)) {
+        if (++entryCount > MAX_ARCHIVE_ENTRIES) throw new Error('This presentation contains more than 20,000 package entries and exceeds the browser safety limit.')
         if (entry.dir) continue
         // ponytail: JSZip keeps expanded size private; replace this guard if it adds public metadata.
-        const size = (entry as JSZip.JSZipObject & {_data?: {uncompressedSize?: number}})._data?.uncompressedSize
-        if (!Number.isFinite(size)) throw new Error('This presentation has incomplete ZIP size metadata and cannot be read safely.')
-        total += size!
+        const data: unknown = await (entry as JSZip.JSZipObject & {_data?: unknown})._data
+        const size = typeof data === 'string' && data.length === 0
+            ? 0
+            : data !== null && typeof data === 'object' && 'uncompressedSize' in data
+                ? data.uncompressedSize
+                : undefined
+        if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) throw new Error('This presentation has incomplete or invalid ZIP size metadata and cannot be read safely.')
+        total += size
         if (total > MAX_ARCHIVE_BYTES) throw new Error('This presentation expands beyond the 250 MB browser safety limit.')
     }
 }
@@ -761,7 +553,8 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
         min = Math.min(r, g, b),
         delta = max - min
     const lightness = (max + min) / 2
-    if (!delta) return [0, 0, lightness]
+    // HSL rotation can leave rounding noise at RGB endpoints; treat it as achromatic.
+    if (delta <= Number.EPSILON * 8) return [0, 0, lightness]
     const saturation = delta / (1 - Math.abs(2 * lightness - 1))
     let hue = max === r ? ((g - b) / delta) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4
     hue = (hue / 6 + 1) % 1
@@ -771,42 +564,91 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
 function readColor(node: Element | undefined, theme: Record<string, string>): string | undefined {
     if (!node) return undefined
     let hex = ''
+    let hsl: [number, number, number] | undefined
     if (node.localName === 'srgbClr') hex = node.getAttribute('val') || ''
     else if (node.localName === 'sysClr') hex = node.getAttribute('lastClr') || '000000'
     else if (node.localName === 'schemeClr') hex = theme[node.getAttribute('val') || ''] || '#000000'
     else if (node.localName === 'hslClr') {
-        const [r, g, b] = hslToRgb(numberAttr(node, 'hue') / 21_600_000, numberAttr(node, 'sat', 100_000) / 100_000, numberAttr(node, 'lum', 50_000) / 100_000)
+        const saturation = percentageValue(node.getAttribute('sat')) ?? 1
+        const lightness = percentageValue(node.getAttribute('lum')) ?? 0.5
+        hsl = [numberAttr(node, 'hue') / 21_600_000, Math.max(0, Math.min(1, saturation)), Math.max(0, Math.min(1, lightness))]
+        const [r, g, b] = hslToRgb(...hsl)
         hex = [r, g, b].map(channel => Math.round(channel).toString(16).padStart(2, '0')).join('')
+    } else if (node.localName === 'scrgbClr') {
+        // scRGB channels are linear; encode them for the browser's sRGB colors.
+        // https://www.w3.org/TR/css-color-4/#color-conversion-code
+        hex = ['r', 'g', 'b'].map(name => {
+            const linear = Math.max(0, Math.min(1, percentageValue(node.getAttribute(name)) ?? 0))
+            const encoded = linear <= 0.0031308 ? linear * 12.92 : 1.055 * linear ** (1 / 2.4) - 0.055
+            return Math.round(encoded * 255).toString(16).padStart(2, '0')
+        }).join('')
     } else if (node.localName === 'prstClr') {
         const preset: Record<string, string> = {black: '#000000', white: '#ffffff', red: '#ff0000', green: '#008000', blue: '#0000ff', yellow: '#ffff00', gray: '#808080', grey: '#808080'}
         hex = preset[node.getAttribute('val') || ''] || '#000000'
     }
     if (!hex) return undefined
-    if (!hex.startsWith('#')) hex = `#${hex}`
-    let r = parseInt(hex.slice(1, 3), 16)
-    let g = parseInt(hex.slice(3, 5), 16)
-    let b = parseInt(hex.slice(5, 7), 16)
-    let alpha = 1
+    // Resolved style-reference colors may already carry alpha when used as phClr.
+    const rgba = /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*(?:,\s*([\d.]+)\s*)?\)$/i.exec(hex)
+    if (!rgba && !hex.startsWith('#')) hex = `#${hex}`
+    let r = rgba ? Number(rgba[1]) : parseInt(hex.slice(1, 3), 16)
+    let g = rgba ? Number(rgba[2]) : parseInt(hex.slice(3, 5), 16)
+    let b = rgba ? Number(rgba[3]) : parseInt(hex.slice(5, 7), 16)
+    let alpha = rgba?.[4] === undefined ? 1 : Number(rgba[4])
     for (const mod of children(node)) {
-        const value = numberAttr(mod, 'val', 100_000) / 100_000
+        // Percentage strings are used by ISO OOXML; Office also writes thousandths of a percent.
+        // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/376a9585-53ee-4ab6-9a86-b58cafd200ba
+        const kind = mod.localName
+        if (kind === 'alphaInv') {
+            alpha = 1 - Math.max(0, Math.min(1, alpha))
+            continue
+        }
+        if (kind === 'inv') {
+            ;[r, g, b] = [255 - r, 255 - g, 255 - b]
+            hsl = undefined
+            continue
+        }
+        if (kind === 'comp') {
+            hsl ??= rgbToHsl(r, g, b)
+            hsl[0] = ((hsl[0] + 0.5) % 1 + 1) % 1
+            ;[r, g, b] = hslToRgb(...hsl)
+            continue
+        }
+        const raw = mod.getAttribute('val')
+        const value = kind === 'hue' || kind === 'hueOff'
+            ? raw !== null && /^[+-]?\d+$/.test(raw.trim()) ? Number(raw) / 21_600_000 : undefined
+            : percentageValue(raw)
+        if (value === undefined || !Number.isFinite(value)) continue
         if (mod.localName === 'alpha') alpha = value
+        else if (mod.localName === 'alphaMod') alpha = Math.max(0, Math.min(1, alpha * value))
+        else if (mod.localName === 'alphaOff') alpha = Math.max(0, Math.min(1, alpha + value))
         else if (mod.localName === 'tint') {
-            r += (255 - r) * value
-            g += (255 - g) * value
-            b += (255 - b) * value
+            hsl = undefined
+            // Tint is the proportion of input color mixed with white (10% = 10% input + 90% white).
+            r = r * value + 255 * (1 - value)
+            g = g * value + 255 * (1 - value)
+            b = b * value + 255 * (1 - value)
         } else if (mod.localName === 'shade') {
+            hsl = undefined
             r *= value
             g *= value
             b *= value
-        } else if (mod.localName === 'lumMod') {
-            // DrawingML luminance transforms operate on HSL lightness, not RGB channels.
-            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.luminancemodulation
-            const [hue, saturation, lightness] = rgbToHsl(r, g, b)
-            ;[r, g, b] = hslToRgb(hue, saturation, Math.max(0, Math.min(lightness * value, 1)))
-        } else if (mod.localName === 'lumOff') {
-            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.luminanceoffset
-            const [hue, saturation, lightness] = rgbToHsl(r, g, b)
-            ;[r, g, b] = hslToRgb(hue, saturation, Math.max(0, Math.min(lightness + value, 1)))
+        } else if (['hue', 'hueMod', 'hueOff', 'sat', 'satMod', 'satOff', 'lum', 'lumMod', 'lumOff'].includes(kind)) {
+            // Preserve HSL between transforms, including hue while saturation is zero.
+            // https://learn.microsoft.com/en-us/previous-versions/office/jj603569(v=office.15)
+            hsl ??= rgbToHsl(r, g, b)
+            const index = kind.startsWith('hue') ? 0 : kind.startsWith('sat') ? 1 : 2
+            const transformed = kind.endsWith('Mod') ? hsl[index] * value : kind.endsWith('Off') ? hsl[index] + value : value
+            hsl[index] = index === 0 ? ((transformed % 1) + 1) % 1 : Math.max(0, Math.min(1, transformed))
+            ;[r, g, b] = hslToRgb(...hsl)
+        } else if (['red', 'redMod', 'redOff', 'green', 'greenMod', 'greenOff', 'blue', 'blueMod', 'blueOff'].includes(kind)) {
+            // Channel transforms leave the other components and alpha unchanged.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.redmodulation
+            const channels: [number, number, number] = [r, g, b]
+            const index = kind.startsWith('red') ? 0 : kind.startsWith('green') ? 1 : 2
+            const transformed = kind.endsWith('Mod') ? channels[index] * value : kind.endsWith('Off') ? channels[index] + value * 255 : value * 255
+            channels[index] = Math.max(0, Math.min(255, transformed))
+            ;[r, g, b] = channels
+            hsl = undefined
         }
     }
     return rgbToCss(
@@ -836,35 +678,139 @@ function animationColorChannels(node: Element | undefined, theme: Record<string,
     return [hue, saturation, lightness, channels[3]]
 }
 
-function outerShadow(parent: Element | undefined, theme: Record<string, string>): PptxShadow | undefined {
-    const shadow = firstDescendant(parent, 'outerShdw')
-    if (!shadow) return undefined
+function parsedShadow(shadow: Element, theme: Record<string, string>, inset = false): PptxShadow {
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.outershadow
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.innershadow?view=openxml-3.0.1
     return {
         color: readColor(children(shadow)[0], theme) || 'rgba(0, 0, 0, .35)',
         blur: numberAttr(shadow, 'blurRad'),
         distance: numberAttr(shadow, 'dist'),
-        angle: numberAttr(shadow, 'dir') / 60_000
+        angle: numberAttr(shadow, 'dir') / 60_000,
+        ...(inset ? {inset: true} : {})
     }
 }
 
-function fillColor(parent: Element | undefined, theme: Record<string, string>, warnings: Set<string>): string {
-    const fillKinds = ['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill', 'grpFill']
-    const fill = parent && fillKinds.includes(parent.localName) ? parent : children(parent).find(node => fillKinds.includes(node.localName))
+const CSS_INSET_SHADOW_GEOMETRIES = new Set(['rect', 'ellipse', 'roundRect', 'flowChartConnector', 'flowChartSummingJunction', 'flowChartOr', 'flowChartProcess', 'flowChartAlternateProcess', 'flowChartInternalStorage'])
+
+function parsedInnerShadow(shadow: Element, theme: Record<string, string>, warnings: Set<string>, target: 'shape' | 'picture' | 'text', supported: boolean): PptxShadow | undefined {
+    if (!supported) {
+        warnings.add(target === 'text'
+            ? 'DrawingML inner shadows on text runs are not supported by CSS text-shadow and were skipped.'
+            : 'DrawingML inner shadows on custom or non-rectangular shape geometry are not rendered.')
+        return undefined
+    }
+    warnings.add('DrawingML inner shadow is approximated with CSS inset box-shadow and has not been calibrated against Office/WPS.')
+    return parsedShadow(shadow, theme, true)
+}
+
+function effectShadows(parent: Element | undefined, theme: Record<string, string>, warnings: Set<string>, target: 'shape' | 'picture' | 'text', supportsInset: boolean): PptxShadow[] {
+    return children(parent).flatMap(shadow => {
+        if (shadow.localName === 'outerShdw') return [parsedShadow(shadow, theme)]
+        if (shadow.localName !== 'innerShdw') return []
+        const parsed = parsedInnerShadow(shadow, theme, warnings, target, supportsInset)
+        return parsed ? [parsed] : []
+    })
+}
+
+function parsedGlow(glow: Element, theme: Record<string, string>, warnings: Set<string>): PptxGlow | undefined {
+    const radius = numberAttr(glow, 'rad', Number.NaN)
+    const color = readColor(children(glow)[0], theme)
+    if (!Number.isFinite(radius) || radius <= 0 || !color) {
+        warnings.add('An invalid DrawingML glow effect was skipped.')
+        return undefined
+    }
+    // DrawingML glow adds a blurred colored contour; CSS shadow rendering is pending Office/WPS calibration.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.glow?view=openxml-3.0.1
+    warnings.add('DrawingML glow is approximated with CSS shadows and has not been calibrated against Office/WPS.')
+    return {color, radius}
+}
+
+function glowEffects(parent: Element | undefined, theme: Record<string, string>, warnings: Set<string>): PptxGlow[] {
+    const glows = parent?.localName === 'glow' ? [parent] : children(parent, 'glow')
+    return glows.map(glow => parsedGlow(glow, theme, warnings)).filter((glow): glow is PptxGlow => Boolean(glow))
+}
+
+const FILL_KINDS = ['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill', 'grpFill']
+
+const patternLineStyles: Record<string, [number[], number, number]> = {
+    horz: [[0], 1, 6], vert: [[90], 1, 6], cross: [[0, 90], 1, 6],
+    ltHorz: [[0], 0.5, 6], ltVert: [[90], 0.5, 6], dkHorz: [[0], 2, 6], dkVert: [[90], 2, 6],
+    narHorz: [[0], 1, 4], narVert: [[90], 1, 4], dashHorz: [[0], 1, 8], dashVert: [[90], 1, 8],
+    dnDiag: [[45], 1, 6], upDiag: [[135], 1, 6], ltDnDiag: [[45], 0.5, 7], ltUpDiag: [[135], 0.5, 7],
+    dkDnDiag: [[45], 2, 6], dkUpDiag: [[135], 2, 6], wdDnDiag: [[45], 3, 8], wdUpDiag: [[135], 3, 8],
+    dashDnDiag: [[45], 1, 8], dashUpDiag: [[135], 1, 8], diagCross: [[45, 135], 1, 7],
+    smGrid: [[0, 90], 1, 4], lgGrid: [[0, 90], 1, 10]
+}
+
+function patternFillColor(fill: Element, theme: Record<string, string>, warnings: Set<string>, allowCssPattern: boolean): string {
+    const preset = fill.getAttribute('prst') || ''
+    const foreground = readColor(children(child(fill, 'fgClr'))[0], theme) || 'transparent'
+    const background = readColor(children(child(fill, 'bgClr'))[0], theme) || 'transparent'
+    const fallback = background === 'transparent' ? foreground : background
+    const density = /^pct(5|10|20|25|30|40|50|60|70|75|80|90)$/.exec(preset)
+    const lines = patternLineStyles[preset]
+    if (!density && !lines) {
+        warnings.add(`The "${preset || 'unknown'}" DrawingML pattern fill is unsupported and was rendered as a solid color.`)
+        return fallback
+    }
+    if (!allowCssPattern) {
+        warnings.add(`The "${preset}" DrawingML pattern fill was rendered as a solid color in this context.`)
+        return foreground === 'transparent' ? fallback : foreground
+    }
+    warnings.add('DrawingML pattern fills use approximate CSS rendering; text patterns repeat within each text run, while SVG path fills fall back to a solid color. Pattern scale may differ from Office/WPS.')
+    if (density) {
+        const spacing = 12
+        const radius = spacing * Math.sqrt(Number(density[1]) / 100 / Math.PI)
+        return `radial-gradient(circle ${radius.toFixed(2)}px at center, ${foreground} 99%, transparent 100%) 0 0 / ${spacing}px ${spacing}px, ${background}`
+    }
+    const [angles, width, spacing] = lines!
+    const layers = angles.map(angle => `repeating-linear-gradient(${angle}deg, ${foreground} 0px, ${foreground} ${width}px, transparent ${width}px, transparent ${spacing}px)`)
+    return `${layers.join(', ')}, ${background}`
+}
+
+function isPatternFillCss(value: string): boolean {
+    return /repeating-linear-gradient\(/i.test(value) || /\) 0 0 \/ \d+(?:\.\d+)?px \d+(?:\.\d+)?px,/i.test(value)
+}
+
+function fillColor(parent: Element | undefined, theme: Record<string, string>, warnings: Set<string>, groupFill?: string, allowCssPattern = false): string {
+    const fill = parent && FILL_KINDS.includes(parent.localName) ? parent : children(parent).find(node => FILL_KINDS.includes(node.localName))
+    // MS-OI29500: a line with omitted fill properties defaults to solidFill.
+    if (!fill && parent?.localName === 'ln') {
+        if (theme.phClr) return theme.phClr
+        warnings.add('A line without fill properties or an inherited color uses a solid black fallback.')
+        return '#000000'
+    }
     if (!fill || fill.localName === 'noFill') return 'transparent'
+    if (fill.localName === 'grpFill') {
+        if (groupFill !== undefined) {
+            if (isPatternFillCss(groupFill)) warnings.add('Inherited group patterns are applied separately to child shapes and may differ from PowerPoint shared group coordinates.')
+            else if (groupFill.startsWith('linear-gradient(') || groupFill.startsWith('radial-gradient(')) {
+                warnings.add('Inherited group gradients are applied separately to child shapes and may differ from PowerPoint shared group coordinates.')
+            }
+            return groupFill
+        }
+        warnings.add('The grp fill was simplified.')
+        return 'transparent'
+    }
     if (fill.localName === 'gradFill') {
         // OOXML gradient stops and clockwise angle:
         // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.gradientfill
         // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.lineargradientfill.angle
         const stopNodes = children(child(fill, 'gsLst'), 'gs')
-        const stops = stopNodes.map(stop => {
+        const validStops = stopNodes.flatMap(stop => {
+            const position = fixedPercentage(stop.getAttribute('pos'))
+            if (position === undefined) {
+                warnings.add('A gradient stop with an invalid or missing position was ignored.')
+                return []
+            }
             const color = readColor(children(stop)[0], theme) || 'transparent'
-            return `${color} ${Math.max(0, Math.min(numberAttr(stop, 'pos') / 1000, 100))}%`
+            return [{ color, position }]
         })
-        if (stops.length < 2) {
+        if (validStops.length < 2) {
             warnings.add('A gradient with fewer than two stops was ignored.')
-            return readColor(children(stopNodes[0])[0], theme) || 'transparent'
+            return validStops[0]?.color || 'transparent'
         }
+        const stops = validStops.map(stop => `${stop.color} ${stop.position * 100}%`)
         const path = child(fill, 'path')
         if (path) {
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.pathgradientfill
@@ -875,6 +821,7 @@ function fillColor(parent: Element | undefined, theme: Record<string, string>, w
         const angle = numberAttr(child(fill, 'lin'), 'ang') / 60_000
         return `linear-gradient(${(90 + angle) % 360}deg, ${stops.join(', ')})`
     }
+    if (fill.localName === 'pattFill') return patternFillColor(fill, theme, warnings, allowCssPattern)
     if (fill.localName !== 'solidFill') {
         warnings.add(`The ${fill.localName.replace('Fill', '').toLowerCase()} fill was simplified.`)
         return 'transparent'
@@ -908,7 +855,12 @@ function lineDashStyle(line: Element | undefined, warnings: Set<string>): PptxEl
             const space = ratio(stop.getAttribute('sp'))
             return dash === undefined || space === undefined ? [] : [dash, space]
         })
-        if (stops.length && pattern.length === stops.length * 2) return pattern
+        if (stops.length && pattern.length === stops.length * 2) {
+            if (line?.getAttribute('cap') === 'rnd' && pattern.some((length, index) => index % 2 === 0 && length < 1)) {
+                warnings.add('Custom round-cap dashes shorter than the pen width are approximated by SVG dots at the pen width.')
+            }
+            return pattern
+        }
         warnings.add('A malformed custom line dash was approximated with a dash.')
         return 'dash'
     }
@@ -917,7 +869,9 @@ function lineDashStyle(line: Element | undefined, warnings: Set<string>): PptxEl
 
 function lineCapStyle(line: Element | undefined, warnings: Set<string>): PptxElement['strokeCap'] {
     const value = line?.getAttribute('cap')
-    if (!value) return undefined
+    // Office uses flat for omitted caps (MS-OI29500 2.1.1212).
+    // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/5564035f-88ff-4ab8-bbfb-d2998a83324d
+    if (!value) return line ? 'butt' : undefined
     if (value === 'flat') return 'butt'
     if (value === 'rnd') return 'round'
     if (value === 'sq') return 'square'
@@ -930,13 +884,7 @@ function lineCapStyle(line: Element | undefined, warnings: Set<string>): PptxEle
 function customGeometryGuideResolver(geometry: Element | undefined, width: number, height: number, warnings: Set<string>) {
     const nodes = [...children(child(geometry, 'avLst'), 'gd'), ...children(child(geometry, 'gdLst'), 'gd')]
     if (nodes.length > 1024) warnings.add('Custom geometry guide lists with more than 1024 entries were truncated.')
-    const guides = new Map(
-        nodes.slice(0, 1024).flatMap(node => {
-            const name = node.getAttribute('name'),
-                formula = node.getAttribute('fmla')
-            return name && formula ? [[name, formula] as const] : []
-        })
-    )
+    const guides = new Map<string, string>()
     const shortSide = Math.min(width, height),
         longSide = Math.max(width, height)
     const values = new Map<string, number | null>()
@@ -1063,7 +1011,22 @@ function customGeometryGuideResolver(geometry: Element | undefined, width: numbe
         return result
     }
 
+    // Guide declarations are evaluated in order; later declarations may reuse a prior guide name.
+    for (const node of nodes.slice(0, 1024)) {
+        const name = node.getAttribute('name'),
+            formula = node.getAttribute('fmla')
+        if (!name || !formula) continue
+        guides.set(name, formula)
+        values.delete(name)
+        resolve(name)
+    }
     return resolve
+}
+
+export function presetEllipsePoint(width: number, height: number, angle: number): [number, number] {
+    const radians = angle * Math.PI / 10_800_000
+    const ellipseAngle = Math.atan2(width * Math.sin(radians), height * Math.cos(radians))
+    return [500 + 500 * Math.cos(ellipseAngle), 500 + 500 * Math.sin(ellipseAngle)]
 }
 
 function parseCustomGeometryTextRect(geometry: Element | undefined, warnings: Set<string>): PptxElement['customTextRect'] {
@@ -1182,7 +1145,7 @@ function parseCustomGeometry(geometry: Element | undefined, warnings: Set<string
                 }
                 const radiusX = (radiusXValue! / width) * 1000
                 const radiusY = (radiusYValue! / height) * 1000
-                if (!hasMove || !currentPoint || !Number.isFinite(radiusX) || !Number.isFinite(radiusY) || !(radiusX > 0) || !(radiusY > 0) || !Number.isFinite(startAngleValue) || !Number.isFinite(sweepAngleValue) || sweepAngleValue! < 0 || sweepAngleValue! > 21_600_000) {
+                if (!hasMove || !currentPoint || !Number.isFinite(radiusX) || !Number.isFinite(radiusY) || !(radiusX > 0) || !(radiusY > 0) || !Number.isFinite(startAngleValue) || !Number.isFinite(sweepAngleValue) || sweepAngleValue! < -21_600_000 || sweepAngleValue! > 21_600_000) {
                     unsupported = true
                     break
                 }
@@ -1222,15 +1185,49 @@ function parseCustomGeometry(geometry: Element | undefined, warnings: Set<string
 }
 
 const textUnderlineStyles: Record<string, PptxRun['underlineStyle']> = {
-    none: undefined, words: undefined, sng: undefined, dbl: 'double', heavy: undefined,
+    // Office does not support the DrawingML "words" type and loads it as one solid underline.
+    // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/d4795664-b08f-48b4-bb8a-a64e6de09778
+    none: undefined, words: 'solid', sng: 'solid', dbl: 'double', heavy: undefined,
     dotted: 'dotted', dottedHeavy: 'dotted', dash: 'dashed', dashHeavy: 'dashed', dashLong: 'dashed', dashLongHeavy: 'dashed',
     dotDash: 'dashed', dotDashHeavy: 'dashed', dotDotDash: 'dashed', dotDotDashHeavy: 'dashed',
     wavy: 'wavy', wavyHeavy: 'wavy', wavyDbl: 'wavy',
 }
 const approximatedTextUnderlineValues = new Set(['words', 'heavy', 'dottedHeavy', 'dashHeavy', 'dashLong', 'dashLongHeavy', 'dotDash', 'dotDashHeavy', 'dotDotDash', 'dotDotDashHeavy', 'wavyHeavy', 'wavyDbl'])
 
-function textStyle(style: Element | undefined, theme: Record<string, string>, warnings: Set<string>): PptxTextStyle {
-    const fill = child(style, 'solidFill')
+// DrawingML run properties permit every fill variant, including noFill and grpFill.
+// https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.runproperties?view=openxml-3.0.1
+function textFillColor(fill: Element | undefined, theme: Record<string, string>, warnings: Set<string>, groupFill?: string, target: 'text' | 'underline' = 'text'): string | undefined {
+    const label = target === 'text' ? 'text' : 'underline'
+    const capitalizedLabel = target === 'text' ? 'Text' : 'Underline'
+    if (!fill) return undefined
+    if (fill.localName === 'solidFill') return readColor(children(fill)[0], theme)
+    if (fill.localName === 'noFill') return 'transparent'
+    if (fill.localName === 'grpFill') {
+        if (groupFill && !groupFill.includes('gradient(')) return groupFill
+        warnings.add(groupFill ? `${capitalizedLabel} group gradients use the inherited ${label} color because shared group coordinates are not supported.` : `A ${label} grpFill without a resolved group fill uses the inherited ${label} color.`)
+        return undefined
+    }
+    if (fill.localName === 'pattFill') {
+        if (target === 'underline') return patternFillColor(fill, theme, warnings, false)
+        return readColor(children(child(fill, 'fgClr'))[0], theme) || readColor(children(child(fill, 'bgClr'))[0], theme)
+    }
+    if (fill.localName === 'gradFill') {
+        warnings.add(`Gradient ${label} fills are approximated with their first color stop.`)
+        const firstStop = children(child(fill, 'gsLst'), 'gs')[0]
+        return readColor(children(firstStop)[0], theme)
+    }
+    warnings.add(`The ${fill.localName.replace('Fill', '').toLowerCase()} ${label} fill is unsupported; inherited ${label} color is used.`)
+    return undefined
+}
+
+function textFillPattern(fill: Element | undefined, theme: Record<string, string>, warnings: Set<string>): string | undefined {
+    if (fill?.localName !== 'pattFill') return undefined
+    const pattern = patternFillColor(fill, theme, warnings, true)
+    return isPatternFillCss(pattern) ? pattern : undefined
+}
+
+function textStyle(style: Element | undefined, theme: Record<string, string>, warnings: Set<string>, groupFill?: string): PptxTextStyle {
+    const fill = children(style).find(node => FILL_KINDS.includes(node.localName))
     const line = child(style, 'ln')
     const lineFill = children(line).find(node => ['solidFill', 'noFill', 'gradFill', 'pattFill'].includes(node.localName))
     let outlineColor: string | undefined
@@ -1255,13 +1252,8 @@ function textStyle(style: Element | undefined, theme: Record<string, string>, wa
     }
     const typeface = (script: 'latin' | 'ea' | 'cs') => {
         const value = child(style, script)?.getAttribute('typeface')?.trim()
-        const token = value && /^\+m[jn]-(lt|ea|cs)$/.exec(value)
-        if (token) {
-            const family = token[0].slice(1, 3) === 'mj' ? 'major' : 'minor'
-            const tokenScript = token[1] === 'lt' ? 'latin' : token[1]
-            return theme[`font-${family}-${tokenScript}`]
-        }
-        return value || theme[`font-minor-${script}`]
+        // Missing local font properties inherit; theme defaults belong at the bottom of the cascade.
+        return value || undefined
     }
     // a:rPr/@spc is ST_TextSpacingPoint, stored in hundredths of a point.
     // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/b6aeb5af-90ac-41dc-8964-f7ba99ed5181
@@ -1281,10 +1273,60 @@ function textStyle(style: Element | undefined, theme: Record<string, string>, wa
     const validUnderline = rawUnderline === undefined || Object.prototype.hasOwnProperty.call(textUnderlineStyles, rawUnderline)
     if (rawUnderline !== undefined && !validUnderline) warnings.add(`A text run with unsupported underline value "${rawUnderline}" was rendered as a solid underline.`)
     else if (rawUnderline !== undefined && approximatedTextUnderlineValues.has(rawUnderline)) warnings.add(`The DrawingML underline value "${rawUnderline}" is approximated as CSS ${textUnderlineStyles[rawUnderline] || 'solid'}.`)
+    // uLn is an underline stroke; uLnTx follows the run outline. uFill controls its fill color.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.underline?view=openxml-3.0.1
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.underlinefollowstext?view=openxml-3.0.1
+    // uFill sets underline paint; uFillTx follows this run's text color per DrawingML.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.underlinefill?view=openxml-3.0.1
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.underlinefilltext?view=openxml-3.0.1
+    const underlineFill = child(style, 'uFill')
+    const underlineFillFollowsText = Boolean(child(style, 'uFillTx'))
+    const underlineLine = child(style, 'uLn')
+    const underlineLineFollowsText = Boolean(child(style, 'uLnTx'))
+    if (underlineFill && underlineFillFollowsText) warnings.add('A text run has both uFill and uFillTx; the explicit uFill is used.')
+    if (underlineLine && underlineLineFollowsText) warnings.add('A text run has both uLn and uLnTx; the explicit uLn is used.')
+    const underlineFillColor = underlineFill ? textFillColor(children(underlineFill)[0], theme, warnings, groupFill, 'underline') ?? 'currentColor' : undefined
+    const underlineStrokeFill = children(underlineLine).find(node => FILL_KINDS.includes(node.localName))
+    const underlineStrokeColor = underlineLine
+        ? underlineStrokeFill ? textFillColor(underlineStrokeFill, theme, warnings, groupFill, 'underline') ?? 'currentColor' : undefined
+        : underlineLineFollowsText ? outlineColor ?? 'currentColor' : undefined
+    const underlineColor = underlineFillColor ?? (underlineFillFollowsText ? 'currentColor' : underlineStrokeColor)
+    if (underlineFillColor && underlineStrokeColor && underlineFillColor !== underlineStrokeColor) warnings.add('Different DrawingML underline fill and stroke colors are simplified to the fill color.')
+    const underlineStroke = underlineLine || (underlineLineFollowsText ? line : undefined)
+    const underlineStrokeDash = lineDashStyle(underlineStroke, warnings)
+    const hasUnderlineStrokeDash = Boolean(child(underlineStroke, 'prstDash') || child(underlineStroke, 'custDash'))
+    let underlineStyle = validUnderline && rawUnderline !== undefined ? textUnderlineStyles[rawUnderline] : undefined
+    if (hasUnderlineStrokeDash) {
+        const strokeStyle = Array.isArray(underlineStrokeDash)
+            ? 'dashed'
+            : underlineStrokeDash === 'dot' || underlineStrokeDash === 'sysDot' ? 'dotted'
+                : underlineStrokeDash === 'solid' ? 'solid' : 'dashed'
+        if (Array.isArray(underlineStrokeDash)) warnings.add('A custom underline dash pattern is approximated with a CSS dashed underline.')
+        if (underlineStyle && underlineStyle !== 'solid' && underlineStyle !== strokeStyle) warnings.add('Underline style and stroke dash are combined using the underline style.')
+        else underlineStyle = strokeStyle
+    }
+    let underlineThicknessEmu: number | undefined
+    const rawUnderlineWidth = underlineLine?.getAttribute('w')
+    if (rawUnderlineWidth !== null && rawUnderlineWidth !== undefined) {
+        const value = Number(rawUnderlineWidth)
+        if (!/^\+?\d+$/.test(rawUnderlineWidth.trim()) || !Number.isSafeInteger(value) || value > 2_147_483_647) {
+            warnings.add('A malformed DrawingML underline width was ignored.')
+        } else if (value > 0) underlineThicknessEmu = value
+    } else if (!underlineLine && underlineLineFollowsText && outlineWidth !== undefined && outlineWidth > 0) {
+        underlineThicknessEmu = outlineWidth
+    }
+    if (underlineStroke && (['algn', 'cmpd', 'cap'].some(name => underlineStroke.hasAttribute(name)) || children(underlineStroke).some(node => ![...FILL_KINDS, 'prstDash', 'custDash', 'round', 'bevel', 'miter', 'extLst'].includes(node.localName)))) {
+        warnings.add('Additional DrawingML underline stroke details are simplified.')
+    }
     const strike = style?.getAttribute('strike')
     const validStrike = strike == null || ['noStrike', 'sngStrike', 'dblStrike'].includes(strike)
     if (!validStrike) warnings.add(`A text run with unsupported strike value "${strike}" was rendered without strikethrough.`)
+    const effectContainer = child(style, 'effectLst') || child(style, 'effectDag')
+    const dagEffects = effectContainer?.localName === 'effectDag' ? drawingEffectDag(effectContainer, theme, warnings, 'text', false) : undefined
+    const shadows = dagEffects ? dagEffects.shadows || (dagEffects.shadow ? [dagEffects.shadow] : []) : effectShadows(effectContainer, theme, warnings, 'text', false)
+    const glows = dagEffects ? dagEffects.glows || (dagEffects.glow ? [dagEffects.glow] : []) : glowEffects(effectContainer, theme, warnings)
     return {
+        language: style?.getAttribute('lang')?.trim() || undefined,
         fontFamily: typeface('latin'),
         fontFamilyEastAsia: typeface('ea'),
         fontFamilyComplexScript: typeface('cs'),
@@ -1294,13 +1336,19 @@ function textStyle(style: Element | undefined, theme: Record<string, string>, wa
         bold: style?.hasAttribute('b') ? style.getAttribute('b') === '1' : undefined,
         italic: style?.hasAttribute('i') ? style.getAttribute('i') === '1' : undefined,
         underline: rawUnderline === undefined ? undefined : rawUnderline !== 'none',
-        underlineStyle: validUnderline && rawUnderline !== undefined ? textUnderlineStyles[rawUnderline] : undefined,
+        underlineStyle,
+        underlineColor,
+        underlineThicknessEmu,
         lineThrough: validStrike && strike !== undefined ? strike !== 'noStrike' : undefined,
         lineThroughStyle: validStrike && strike !== undefined ? strike === 'dblStrike' ? 'double' : 'solid' : undefined,
-        color: readColor(children(fill)[0], theme),
+        color: textFillColor(fill, theme, warnings, groupFill),
+        fillPattern: textFillPattern(fill, theme, warnings),
         outlineColor,
         outlineWidth,
-        shadow: outerShadow(style, theme)
+        shadow: dagEffects ? dagEffects.shadow : shadows[0],
+        shadows: shadows.length > 1 ? shadows : undefined,
+        glow: glows[0],
+        glows: glows.length > 1 ? glows : undefined
     }
 }
 
@@ -1314,10 +1362,36 @@ function mergeTextStyles(...styles: PptxTextStyle[]): PptxTextStyle {
     return result
 }
 
-function warnTextDecorationStyleConflict(style: PptxTextStyle, warnings: Set<string>): void {
-    if (style.underline && style.lineThrough && (style.underlineStyle || 'solid') !== (style.lineThroughStyle || 'solid')) {
-        warnings.add('A text run uses different underline and strikethrough styles; CSS applies one style to both and prioritizes the underline style.')
+function resolveTextFonts(style: PptxTextStyle, text: string, theme: Record<string, string>, warnings: Set<string>): PptxTextStyle {
+    let languageScript: string | undefined
+    if (style.language) {
+        try { languageScript = new Intl.Locale(style.language).maximize().script }
+        catch { warnings.add('An invalid text language tag was ignored when resolving theme fonts.') }
     }
+    // CT_SupplementalFont uses ISO script tags; DrawingML uses Hang for Korean.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.supplementalfont
+    if (languageScript === 'Kore') languageScript = 'Hang'
+    if (['Hira', 'Kana', 'Hrkt'].includes(languageScript || '')) languageScript = 'Jpan'
+    const eastAsianScripts = ['Hans', 'Hant', 'Jpan', 'Hang']
+    const inferredEastAsia = /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text) ? 'Jpan'
+        : /\p{Script=Hangul}/u.test(text) ? 'Hang' : /\p{Script=Han}/u.test(text) ? 'Hans' : undefined
+    // ponytail: untagged Han defaults to Hans; the document's language is needed to distinguish Hant or Kanji-only Japanese.
+    if (inferredEastAsia === 'Hans' && !eastAsianScripts.includes(languageScript || '')) warnings.add('Han text without an East Asian language uses the simplified Chinese theme-font mapping.')
+    const inferredComplex = /\p{Script=Arabic}/u.test(text) ? 'Arab' : /\p{Script=Hebrew}/u.test(text) ? 'Hebr' : undefined
+    const result = {...style}
+    for (const key of ['fontFamily', 'fontFamilyEastAsia', 'fontFamilyComplexScript'] as const) {
+        const value = style[key]
+        const token = value && /^\+m([jn])-(lt|ea|cs)$/.exec(value)
+        if (!token) continue
+        const role = token[1] === 'j' ? 'major' : 'minor'
+        const category = token[2] === 'lt' ? 'latin' : token[2]
+        const script = category === 'ea' ? eastAsianScripts.includes(languageScript || '') ? languageScript : inferredEastAsia
+            : category === 'cs' ? languageScript && !['Latn', 'Cyrl', 'Grek', ...eastAsianScripts].includes(languageScript) ? languageScript : inferredComplex
+                : languageScript
+        result[key] = theme[`font-${role}-${category}`] || (script ? theme[`font-${role}-script-${script}`] : undefined)
+        if (!result[key] && ((category === 'ea' && inferredEastAsia) || (category === 'cs' && script))) warnings.add(`A ${role} ${category} theme font could not be resolved for this text; browser font fallback is used.`)
+    }
+    return result
 }
 
 function parseSpacing(properties: Element | undefined, name: string): PptxParagraph['lineSpacing'] {
@@ -1365,7 +1439,21 @@ function parseBullet(properties: Element | undefined, warnings: Set<string>, rel
             'alphaLcPeriod',
             'alphaUcParenR',
             'alphaUcParenBoth',
-            'alphaUcPeriod'
+            'alphaUcPeriod',
+            'arabicDbPlain',
+            'arabicDbPeriod',
+            'ea1ChsPeriod',
+            'ea1ChsPlain',
+            'ea1ChtPeriod',
+            'ea1ChtPlain',
+            'thaiAlphaParenBoth',
+            'thaiAlphaParenR',
+            'thaiAlphaPeriod',
+            'thaiNumParenBoth',
+            'thaiNumParenR',
+            'thaiNumPeriod',
+            'hindiNumParenR',
+            'hindiNumPeriod'
         ])
         if (!supported.has(type)) warnings.add(`The ${type} numbered bullet style is simplified to decimal numbering.`)
         return {kind: 'number', type, startAt: automatic.hasAttribute('startAt') ? numberAttr(automatic, 'startAt', 1) : undefined, size}
@@ -1381,7 +1469,7 @@ function parseBullet(properties: Element | undefined, warnings: Set<string>, rel
     return undefined
 }
 
-function parseParagraphDefaults(properties: Element | undefined, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>): ParagraphDefaults {
+function parseParagraphDefaults(properties: Element | undefined, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>, groupFill?: string): ParagraphDefaults {
     const values: ParagraphValues = {}
     const rawDirection = properties?.getAttribute('rtl')
     const direction = rawDirection?.trim()
@@ -1408,7 +1496,7 @@ function parseParagraphDefaults(properties: Element | undefined, theme: Record<s
     if (children(properties).some(item => ['buNone', 'buChar', 'buAutoNum', 'buBlip'].includes(item.localName))) {
         values.bullet = parseBullet(properties, warnings, rels)
     }
-    return {values, text: textStyle(child(properties, 'defRPr') || child(properties, 'endParaRPr'), theme, warnings)}
+    return {values, text: textStyle(child(properties, 'defRPr') || child(properties, 'endParaRPr'), theme, warnings, groupFill)}
 }
 
 function mergeParagraphDefaults(...defaults: (ParagraphDefaults | undefined)[]): ParagraphDefaults {
@@ -1431,11 +1519,11 @@ function mergeParagraphDefaultsByLevel(...maps: (ParagraphDefaultsByLevel | unde
     return result
 }
 
-function paragraphDefaultsByLevel(styleList: Element | undefined, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>): ParagraphDefaultsByLevel {
-    const fallback = parseParagraphDefaults(child(styleList, 'defPPr'), theme, warnings, rels)
+function paragraphDefaultsByLevel(styleList: Element | undefined, theme: Record<string, string>, warnings: Set<string>, rels?: Map<string, PptxRelationship>, groupFill?: string): ParagraphDefaultsByLevel {
+    const fallback = parseParagraphDefaults(child(styleList, 'defPPr'), theme, warnings, rels, groupFill)
     const result: ParagraphDefaultsByLevel = {}
     for (let level = 0; level < 9; level++) {
-        result[level] = mergeParagraphDefaults(fallback, parseParagraphDefaults(child(styleList, `lvl${level + 1}pPr`), theme, warnings, rels))
+        result[level] = mergeParagraphDefaults(fallback, parseParagraphDefaults(child(styleList, `lvl${level + 1}pPr`), theme, warnings, rels, groupFill))
     }
     return result
 }
@@ -1461,7 +1549,8 @@ function parseText(
     warnings: Set<string>,
     inheritedStyle: PptxTextStyle = {},
     inheritedParagraphStyles: ParagraphDefaultsByLevel = {},
-    rels?: Map<string, PptxRelationship>
+    rels?: Map<string, PptxRelationship>,
+    groupFill?: string
 ): {
     paragraphs: PptxParagraph[]
     margins: PptxElement['margins']
@@ -1480,6 +1569,26 @@ function parseText(
 } {
     const txBody = child(shape, 'txBody')
     if (!txBody) return {paragraphs: [], margins: {left: 0, right: 0, top: 0, bottom: 0}, verticalAlign: 'top'}
+    const fontReference = child(child(shape, 'style'), 'fontRef')
+    const fontIndex = fontReference?.getAttribute('idx')
+    const referenceStyle: PptxTextStyle = {}
+    // fontRef supplies theme font and color defaults below explicit text formatting.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.fontreference
+    if (fontIndex === 'major' || fontIndex === 'minor' || fontIndex === 'none') {
+        if (fontIndex !== 'none') {
+            const role = fontIndex === 'major' ? 'mj' : 'mn'
+            referenceStyle.fontFamily = `+${role}-lt`
+            referenceStyle.fontFamilyEastAsia = `+${role}-ea`
+            referenceStyle.fontFamilyComplexScript = `+${role}-cs`
+        }
+        referenceStyle.color = readColor(children(fontReference)[0], theme)
+        if (referenceStyle.color) theme = {...theme, phClr: referenceStyle.color}
+    } else if (fontReference) warnings.add('An invalid shape fontRef index was ignored; text fonts and colors inherit.')
+    inheritedStyle = mergeTextStyles({
+        fontFamily: '+mn-lt',
+        fontFamilyEastAsia: '+mn-ea',
+        fontFamilyComplexScript: '+mn-cs'
+    }, referenceStyle, inheritedStyle)
     const body = child(txBody, 'bodyPr')
     const rawColumnCount = body?.getAttribute('numCol')
     const columnCount = rawColumnCount === null || rawColumnCount === undefined ? undefined : Number(rawColumnCount)
@@ -1508,35 +1617,36 @@ function parseText(
     if (shapeAutoFit) warnings.add('a:spAutoFit shape resizing uses browser font metrics; PowerPoint may produce different dimensions.')
     if (rawFontScale !== null && parsedFontScale === undefined) warnings.add('An invalid a:normAutofit fontScale was ignored.')
     if (rawLineSpaceReduction !== null && parsedLineSpaceReduction === undefined) warnings.add('An invalid a:normAutofit lnSpcReduction was ignored.')
-    const listParagraphStyles = paragraphDefaultsByLevel(child(txBody, 'lstStyle'), theme, warnings, rels)
+    const listParagraphStyles = paragraphDefaultsByLevel(child(txBody, 'lstStyle'), theme, warnings, rels, groupFill)
     const paragraphs: PptxParagraph[] = children(txBody, 'p').map(paragraph => {
         const props = child(paragraph, 'pPr')
         const level = props?.hasAttribute('lvl') ? numberAttr(props, 'lvl') : 0
-        const resolved = mergeParagraphDefaults(inheritedParagraphStyles[level], listParagraphStyles[level], parseParagraphDefaults(props, theme, warnings, rels))
+        const resolved = mergeParagraphDefaults(inheritedParagraphStyles[level], listParagraphStyles[level], parseParagraphDefaults(props, theme, warnings, rels, groupFill))
         const paragraphStyle = mergeTextStyles(inheritedStyle, resolved.text)
-        warnTextDecorationStyleConflict(paragraphStyle, warnings)
         const runs: PptxRun[] = []
         for (const run of children(paragraph)) {
             if (run.localName === 'br') {
                 // DrawingML a:br is a forced line break between runs in one paragraph.
                 // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.break
                 const styleNode = child(run, 'rPr')
-                const style = mergeTextStyles(paragraphStyle, textStyle(styleNode, theme, warnings))
-                warnTextDecorationStyleConflict(style, warnings)
+                const style = mergeTextStyles(paragraphStyle, textStyle(styleNode, theme, warnings, groupFill))
                 const hyperlink = parseHyperlink(child(styleNode, 'hlinkClick'), rels, warnings)
-                runs.push({text: '\n', ...style, ...(hyperlink ? {hyperlink} : {})})
+                runs.push({text: '\n', ...resolveTextFonts(style, '\n', theme, warnings), ...(hyperlink ? {hyperlink} : {})})
                 continue
             }
             if (!['r', 'fld'].includes(run.localName)) continue
             const textNode = child(run, 't')
             if (!textNode) continue
             const style = child(run, 'rPr') || child(run, 'endParaRPr')
-            const runStyle = mergeTextStyles(paragraphStyle, textStyle(style, theme, warnings))
-            warnTextDecorationStyleConflict(runStyle, warnings)
+            const runStyle = mergeTextStyles(paragraphStyle, textStyle(style, theme, warnings, groupFill))
             const hyperlink = parseHyperlink(child(style, 'hlinkClick'), rels, warnings)
-            runs.push({text: textNode.textContent || '', ...runStyle, ...(hyperlink ? {hyperlink} : {})})
+            const text = textNode.textContent || ''
+            runs.push({text, ...resolveTextFonts(runStyle, text, theme, warnings), ...(hyperlink ? {hyperlink} : {})})
         }
-        if (!runs.length && paragraph.textContent?.trim()) runs.push({text: paragraph.textContent.trim(), ...paragraphStyle})
+        if (!runs.length && paragraph.textContent?.trim()) {
+            const text = paragraph.textContent.trim()
+            runs.push({text, ...resolveTextFonts(paragraphStyle, text, theme, warnings)})
+        }
         return {
             ...resolved.values,
             align: resolved.values.align || 'left',
@@ -1556,9 +1666,11 @@ function parseText(
     const textVerticalOverflow = verticalOverflow === 'clip' || verticalOverflow === 'overflow' || verticalOverflow === 'ellipsis' ? verticalOverflow : undefined
     if (horizontalOverflow && !textHorizontalOverflow) warnings.add(`The unsupported text horizontal overflow mode "${horizontalOverflow}" was ignored.`)
     if (verticalOverflow && !textVerticalOverflow) warnings.add(`The unsupported text vertical overflow mode "${verticalOverflow}" was ignored.`)
-    if (textVerticalOverflow === 'ellipsis') warnings.add('a:bodyPr vertOverflow="ellipsis" is clipped; trailing ellipsis rendering is not supported.')
     const rawTextOrientation = body?.getAttribute('vert')
     const validTextOrientations: PptxTextOrientation[] = ['horz', 'vert', 'vert270', 'wordArtVert', 'eaVert', 'mongolianVert', 'wordArtVertRtl']
+    if (textVerticalOverflow === 'ellipsis' && ((textColumnCount ?? 1) > 1 || rawTextOrientation && rawTextOrientation !== 'horz')) {
+        warnings.add('a:bodyPr vertOverflow="ellipsis" is clipped for vertical or multi-column text.')
+    }
     if (rawTextOrientation && !validTextOrientations.includes(rawTextOrientation as PptxTextOrientation)) {
         warnings.add('The unsupported text vertical mode "' + rawTextOrientation + '" was ignored.')
     } else if (rawTextOrientation === 'wordArtVert' || rawTextOrientation === 'mongolianVert') {
@@ -1607,15 +1719,24 @@ function parsePlaceholderIdentity(shape: Element): PptxElement['placeholder'] {
     return {type: placeholder.getAttribute('type') || 'obj', index: placeholder.getAttribute('idx') || undefined}
 }
 
-function parseSpeakerNotes(xml: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>): string | undefined {
+function parseSpeakerNotes(xml: XMLDocument | undefined, master: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>, rels: Map<string, PptxRelationship>, masterRels: Map<string, PptxRelationship>): Pick<PptxSlide, 'speakerNotes' | 'speakerNoteParagraphs'> {
     const tree = firstDescendant(xml?.documentElement, 'spTree')
     const bodies = children(tree, 'sp').filter(shape => parsePlaceholderIdentity(shape)?.type === 'body')
-    const text = bodies
-        .flatMap(shape => parseText(shape, theme, warnings).paragraphs)
+    const masterBodies = children(firstDescendant(master?.documentElement, 'spTree'), 'sp').filter(shape => parsePlaceholderIdentity(shape)?.type === 'body')
+    // Notes have their own master text defaults and color map, independent of the slide master.
+    // https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-notes-slides
+    const defaults = paragraphDefaultsByLevel(child(master?.documentElement, 'notesStyle'), theme, warnings, masterRels)
+    const paragraphs = bodies.flatMap(shape => {
+        const identity = parsePlaceholderIdentity(shape)
+        const placeholder = masterBodies.find(body => parsePlaceholderIdentity(body)?.index === identity?.index) || masterBodies[0]
+        const inherited = mergeParagraphDefaultsByLevel(defaults, placeholder ? placeholderParagraphDefaults(placeholder, theme, warnings, masterRels) : undefined)
+        return parseText(shape, theme, warnings, {}, inherited, rels).paragraphs
+    })
+    const text = paragraphs
         .map(paragraph => paragraph.runs.map(run => run.text).join(''))
         .join('\n')
         .trim()
-    return text || undefined
+    return text ? {speakerNotes: text, speakerNoteParagraphs: paragraphs} : {}
 }
 
 function placeholderStyleCategory(type: string): 'titleStyle' | 'bodyStyle' | 'otherStyle' {
@@ -1655,11 +1776,12 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
     const transform = child(properties, 'xfrm')
     const offset = child(transform, 'off')
     const extent = child(transform, 'ext')
-    const fillNames = ['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill']
-    const hasFill = children(properties).some(item => fillNames.includes(item.localName))
+    const fillNames = ['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill', 'grpFill']
+    const hasFill = children(properties).some(item => fillNames.includes(item.localName)) || !!child(child(node, 'style'), 'fillRef')
     const line = child(properties, 'ln')
-    const hasLineFill = children(line).some(item => fillNames.includes(item.localName))
-    const hasEffectProperties = children(properties).some(item => ['effectLst', 'effectDag'].includes(item.localName))
+    const hasLineReference = !!child(child(node, 'style'), 'lnRef')
+    const hasLineFill = hasLineReference || children(line).some(item => fillNames.includes(item.localName))
+    const hasEffectProperties = children(properties).some(item => ['effectLst', 'effectDag'].includes(item.localName)) || !!child(child(node, 'style'), 'effectRef')
     const bodyPr = child(child(node, 'txBody'), 'bodyPr')
     const hasTextAutoFit = Boolean(child(bodyPr, 'normAutofit') || child(bodyPr, 'spAutoFit') || child(bodyPr, 'noAutofit'))
     const fallbackMargins = fallbackElement.margins
@@ -1684,19 +1806,26 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
         rotation: transform?.hasAttribute('rot') ? element.rotation : fallbackElement.rotation,
         flipH: transform?.hasAttribute('flipH') ? element.flipH : fallbackElement.flipH,
         flipV: transform?.hasAttribute('flipV') ? element.flipV : fallbackElement.flipV,
+        kind: currentGeometry ? element.kind : fallbackElement.kind,
         geometry: currentGeometry ? element.geometry : fallbackElement.geometry,
+        linePath: currentGeometry ? element.linePath : fallbackElement.linePath,
+        presetAdjustment: currentGeometry ? element.presetAdjustment : fallbackElement.presetAdjustment,
+        presetAdjustments: currentGeometry ? element.presetAdjustments : fallbackElement.presetAdjustments,
         customPaths: currentGeometry ? element.customPaths : fallbackElement.customPaths,
         customTextRect: currentGeometry ? element.customTextRect : fallbackElement.customTextRect,
         fill: hasFill ? element.fill : fallbackElement.fill,
         stroke: hasLineFill ? element.stroke : fallbackElement.stroke,
-        strokeWidth: line?.hasAttribute('w') ? element.strokeWidth : fallbackElement.strokeWidth,
-        strokeDash: child(line, 'prstDash') || child(line, 'custDash') ? element.strokeDash : fallbackElement.strokeDash,
-        strokeCap: line?.hasAttribute('cap') ? element.strokeCap : fallbackElement.strokeCap,
-        lineHeadEnd: child(line, 'headEnd') ? element.lineHeadEnd : fallbackElement.lineHeadEnd,
-        lineTailEnd: child(line, 'tailEnd') ? element.lineTailEnd : fallbackElement.lineTailEnd,
+        strokeWidth: hasLineReference || line?.hasAttribute('w') ? element.strokeWidth : fallbackElement.strokeWidth,
+        strokeDash: hasLineReference || child(line, 'prstDash') || child(line, 'custDash') ? element.strokeDash : fallbackElement.strokeDash,
+        strokeCap: hasLineReference || line?.hasAttribute('cap') ? element.strokeCap : fallbackElement.strokeCap,
+        lineHeadEnd: hasLineReference || child(line, 'headEnd') ? element.lineHeadEnd : fallbackElement.lineHeadEnd,
+        lineTailEnd: hasLineReference || child(line, 'tailEnd') ? element.lineTailEnd : fallbackElement.lineTailEnd,
         // A slide placeholder inherits visual properties from its matching layout/master placeholder.
         // https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/b3e45aed-2196-42bd-8b88-c98dba85ffe4
         shadow: hasEffectProperties ? element.shadow : fallbackElement.shadow,
+        shadows: hasEffectProperties ? element.shadows : fallbackElement.shadows,
+        glow: hasEffectProperties ? element.glow : fallbackElement.glow,
+        glows: hasEffectProperties ? element.glows : fallbackElement.glows,
         margins: {
             left: margin('lIns', fallbackMargins.left),
             right: margin('rIns', fallbackMargins.right),
@@ -1718,7 +1847,7 @@ function inheritPlaceholderProperties(element: PptxElement, node: Element, fallb
     }
 }
 
-function parsePlaceholderCandidates(xml: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>, masterStyles: Record<string, MasterTextStyle>, fallbacks: ParsedPlaceholder[] = [], warnPlaceholders = false, rels?: Map<string, PptxRelationship>): ParsedPlaceholder[] {
+function parsePlaceholderCandidates(xml: XMLDocument | undefined, theme: Record<string, string>, warnings: Set<string>, masterStyles: Record<string, MasterTextStyle>, fallbacks: ParsedPlaceholder[] = [], warnPlaceholders = false, rels?: Map<string, PptxRelationship>, fillStyles?: ParsedTheme): ParsedPlaceholder[] {
     const tree = xml && firstDescendant(xml.documentElement, 'spTree')
     const candidates: ParsedPlaceholder[] = []
     for (const node of children(tree)) {
@@ -1728,33 +1857,802 @@ function parsePlaceholderCandidates(xml: XMLDocument | undefined, theme: Record<
         const fallback = matchPlaceholder(identity, fallbacks)
         const masterStyle = masterStyles[placeholderStyleCategory(identity.type)]
         const paragraphStyles = mergeParagraphDefaultsByLevel(masterStyle?.paragraphs, fallback?.paragraphStyles, placeholderParagraphDefaults(node, theme, warnings, rels))
-        let element = parseShape(node, theme, warnings, masterStyle?.style || {}, paragraphStyles, warnPlaceholders, rels)
+        let element = parseShape(node, theme, warnings, masterStyle?.style || {}, paragraphStyles, warnPlaceholders, rels, fillStyles)
         element = inheritPlaceholderProperties(element, node, fallback, warnings)
         candidates.push({node, type: identity.type, index: identity.index, element, paragraphStyles})
     }
     return candidates
 }
 
-function parseShape(shape: Element, theme: Record<string, string>, warnings: Set<string>, inheritedStyle: PptxTextStyle = {}, inheritedParagraphStyles: ParagraphDefaultsByLevel = {}, warnPlaceholder = true, rels?: Map<string, PptxRelationship>): PptxElement {
+function referencedShapeFill(shape: Element, theme: Record<string, string>, warnings: Set<string>, styles?: ParsedTheme, allowCssPattern = false): string {
+    const reference = child(child(shape, 'style'), 'fillRef')
+    if (!reference) return 'transparent'
+    const raw = reference.getAttribute('idx') || ''
+    const index = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
+    if (index === 0 || index === 1000) return 'transparent'
+    const style = Number.isSafeInteger(index) && index > 0 ? index < 1000 ? styles?.fillStyles[index - 1] : styles?.backgroundFillStyles[index - 1001] : undefined
+    if (!style) {
+        warnings.add('An invalid or missing shape fillRef style was rendered without fill.')
+        return 'transparent'
+    }
+    const color = readColor(children(reference)[0], theme)
+    return fillColor(style, color ? {...theme, phClr: color} : theme, warnings, undefined, allowCssPattern)
+}
+
+function referencedShapeLine(shape: Element, theme: Record<string, string>, warnings: Set<string>, styles?: ParsedTheme): {line?: Element; theme: Record<string, string>} {
+    const local = child(child(shape, 'spPr'), 'ln')
+    const reference = child(child(shape, 'style'), 'lnRef')
+    if (!reference) return {line: local, theme}
+    const raw = reference.getAttribute('idx') || ''
+    const index = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
+    const base = Number.isSafeInteger(index) && index > 0 ? styles?.lineStyles[index - 1] : undefined
+    if (!base && index !== 0) warnings.add('An invalid or missing shape lnRef style was rendered using local line properties.')
+    if (!base) return {line: local, theme}
+    const line = base.cloneNode(true) as Element
+    for (const attribute of Array.from(local?.attributes || [])) line.setAttribute(attribute.name, attribute.value)
+    const groups = [['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill', 'grpFill'], ['prstDash', 'custDash'], ['round', 'bevel', 'miter']]
+    for (const property of children(local)) {
+        const names = groups.find(group => group.includes(property.localName)) || [property.localName]
+        for (const inherited of children(line)) if (names.includes(inherited.localName)) line.removeChild(inherited)
+        line.appendChild(property.cloneNode(true))
+    }
+    const color = readColor(children(reference)[0], theme)
+    return {line, theme: color ? {...theme, phClr: color} : theme}
+}
+
+function drawingEffectDag(effects: Element, theme: Record<string, string>, warnings: Set<string>, target: 'shape' | 'picture' | 'text', supportsInset: boolean): {shadow?: PptxShadow; shadows?: PptxShadow[]; glow?: PptxGlow; glows?: PptxGlow[]} {
+    const type = effects.getAttribute('type') || 'sib'
+    const entries = children(effects)
+    if (type !== 'sib' && type !== 'tree') {
+        warnings.add(`The ${target} effect DAG container type "${type}" is not supported.`)
+        return {}
+    }
+    if (type === 'tree' && entries.length > 1) {
+        // ECMA-376: tree containers apply each effect to the previous effect's result.
+        warnings.add(`Multi-effect tree-ordered ${target} effect DAGs are not rendered.`)
+        return {}
+    }
+
+    const shadows: PptxShadow[] = []
+    const glows: PptxGlow[] = []
+    for (const effect of entries) {
+        if (effect.localName === 'outerShdw') {
+            shadows.push(parsedShadow(effect, theme))
+        } else if (effect.localName === 'innerShdw') {
+            const shadow = parsedInnerShadow(effect, theme, warnings, target, supportsInset)
+            if (shadow) shadows.push(shadow)
+        } else if (effect.localName === 'glow') {
+            const glow = parsedGlow(effect, theme, warnings)
+            if (glow) glows.push(glow)
+        } else {
+            warnings.add(effect.localName === 'cont'
+                ? `Nested ${target} effect DAG containers are not rendered.`
+                : `The ${target} ${effect.localName} effect in an effect DAG is not rendered.`)
+        }
+    }
+    if (shadows.length > 1) warnings.add(`Multiple ${target} shadows use layered CSS box-shadows and have not been calibrated against Office/WPS.`)
+    if (target !== 'text' && glows.length > 1) warnings.add(`Multiple ${target} glows use layered CSS drop-shadows and have not been calibrated against Office/WPS.`)
+    return {shadow: shadows[0], shadows: shadows.length > 1 ? shadows : undefined, glow: glows[0], glows: glows.length > 1 ? glows : undefined}
+}
+
+function referencedShapeEffects(shape: Element, theme: Record<string, string>, warnings: Set<string>, styles?: ParsedTheme, target: 'shape' | 'picture' = 'shape'): {shadow?: PptxShadow; shadows?: PptxShadow[]; glow?: PptxGlow; glows?: PptxGlow[]} {
+    const properties = child(shape, 'spPr')
+    const geometry = child(properties, 'prstGeom')?.getAttribute('prst') || (child(properties, 'custGeom') ? 'custom' : 'rect')
+    const supportsInset = target === 'picture' || CSS_INSET_SHADOW_GEOMETRIES.has(geometry)
+    let effects = child(properties, 'effectLst') || child(properties, 'effectDag')
+    if (!effects) {
+        const reference = child(child(shape, 'style'), 'effectRef')
+        if (!reference) return {}
+        const raw = reference.getAttribute('idx') || ''
+        const index = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
+        if (index === 0) return {}
+        const style = Number.isSafeInteger(index) && index > 0 ? styles?.effectStyles[index - 1] : undefined
+        if (!style) {
+            warnings.add(`An invalid or missing ${target} effectRef style was rendered without effects.`)
+            return {}
+        }
+        const color = readColor(children(reference)[0], theme)
+        if (color) theme = {...theme, phClr: color}
+        effects = child(style, 'effectLst') || child(style, 'effectDag')
+        if (child(style, 'scene3d') || child(style, 'sp3d')) warnings.add(`Theme 3D ${target} effects are not rendered.`)
+    }
+    if (effects?.localName === 'effectDag') {
+        return drawingEffectDag(effects, theme, warnings, target, supportsInset)
+    }
+    const glows = glowEffects(effects, theme, warnings)
+    const shadows = effectShadows(effects, theme, warnings, target, supportsInset)
+    for (const effect of children(effects)) if (!['outerShdw', 'innerShdw', 'glow'].includes(effect.localName)) warnings.add(`The ${target} ${effect.localName} effect is not rendered.`)
+    if (shadows.length > 1) warnings.add(`Multiple ${target} shadows use layered CSS box-shadows and have not been calibrated against Office/WPS.`)
+    if (glows.length > 1) warnings.add(`Multiple ${target} glows use layered CSS drop-shadows and have not been calibrated against Office/WPS.`)
+    return {shadow: shadows[0], shadows: shadows.length > 1 ? shadows : undefined, glow: glows[0], glows: glows.length > 1 ? glows : undefined}
+}
+
+function connectorGeometryPath(geometry: string, adjustments: Record<string, number>): string | undefined {
+    const adjustment = (name: string) => Number(((adjustments[name] ?? 50_000) / 100).toFixed(3))
+    if (geometry === 'bentConnector2') return 'M 0 0 L 1000 0 L 1000 1000'
+    if (geometry === 'bentConnector3') {
+        const x1 = adjustment('adj1')
+        return `M 0 0 L ${x1} 0 L ${x1} 1000 L 1000 1000`
+    }
+    if (geometry === 'bentConnector4') {
+        const x1 = adjustment('adj1')
+        const y2 = adjustment('adj2')
+        return `M 0 0 L ${x1} 0 L ${x1} ${y2} L 1000 ${y2} L 1000 1000`
+    }
+    if (geometry === 'bentConnector5') {
+        const x1 = adjustment('adj1')
+        const y2 = adjustment('adj2')
+        const x3 = adjustment('adj3')
+        return `M 0 0 L ${x1} 0 L ${x1} ${y2} L ${x3} ${y2} L ${x3} 1000 L 1000 1000`
+    }
+    if (geometry === 'curvedConnector2') return 'M 0 0 C 500 0 1000 500 1000 1000'
+    if (geometry === 'curvedConnector3') {
+        const midX = adjustment('adj1')
+        return `M 0 0 C ${midX / 2} 0 ${midX} 250 ${midX} 500 C ${midX} 750 ${(1000 + midX) / 2} 1000 1000 1000`
+    }
+    if (geometry === 'curvedConnector4') {
+        const midX = adjustment('adj1')
+        const y4 = adjustment('adj2')
+        const x1 = midX / 2
+        const x3 = (1000 + midX) / 2
+        const x4 = (midX + x3) / 2
+        const x5 = (x3 + 1000) / 2
+        const y1 = y4 / 2
+        const y2 = y1 / 2
+        const y3 = (y1 + y4) / 2
+        const y5 = (1000 + y4) / 2
+        return `M 0 0 C ${x1} 0 ${midX} ${y2} ${midX} ${y1} C ${midX} ${y3} ${x4} ${y4} ${x3} ${y4} C ${x5} ${y4} 1000 ${y5} 1000 1000`
+    }
+    if (geometry === 'curvedConnector5') {
+        const x3 = adjustment('adj1')
+        const y4 = adjustment('adj2')
+        const x6 = adjustment('adj3')
+        const x1 = (x3 + x6) / 2
+        const x2 = x3 / 2
+        const x4 = (x3 + x1) / 2
+        const x5 = (x6 + x1) / 2
+        const x7 = (x6 + 1000) / 2
+        const y1 = y4 / 2
+        const y2 = y1 / 2
+        const y3 = (y1 + y4) / 2
+        const y5 = (1000 + y4) / 2
+        const y6 = (y5 + y4) / 2
+        const y7 = (y5 + 1000) / 2
+        return `M 0 0 C ${x2} 0 ${x3} ${y2} ${x3} ${y1} C ${x3} ${y3} ${x4} ${y4} ${x1} ${y4} C ${x5} ${y4} ${x6} ${y6} ${x6} ${y5} C ${x6} ${y7} ${x7} 1000 1000 1000`
+    }
+    return undefined
+}
+
+function parseShape(shape: Element, theme: Record<string, string>, warnings: Set<string>, inheritedStyle: PptxTextStyle = {}, inheritedParagraphStyles: ParagraphDefaultsByLevel = {}, warnPlaceholder = true, rels?: Map<string, PptxRelationship>, fillStyles?: ParsedTheme, groupFill?: string): PptxElement {
     const properties = child(shape, 'spPr')
     const customGeometry = child(properties, 'custGeom')
+    const transform = shapeTransform(properties)
     const geometry = child(properties, 'prstGeom')?.getAttribute('prst') || (customGeometry ? 'custom' : 'rect')
-    const customPaths = customGeometry ? parseCustomGeometry(customGeometry, warnings) : undefined
-    const customTextRect = customGeometry ? parseCustomGeometryTextRect(customGeometry, warnings) : undefined
-    const supportedGeometry = new Set(['rect', 'roundRect', 'ellipse', 'line', 'triangle', 'rtTriangle', 'diamond', 'parallelogram', 'hexagon', 'chevron', 'custom'])
-    if (!supportedGeometry.has(geometry)) warnings.add(`The ${geometry} shape is simplified to a rectangle.`)
+    const isLineGeometry = LINE_GEOMETRIES.has(geometry)
+    const presetGeometry = child(properties, 'prstGeom')
+    const presetDefinition = geometry === 'cloud' ? getCloudPresetGeometry()
+        : PRESET_GEOMETRIES_WITH_HANDWRITTEN_RENDERERS.has(geometry) ? undefined
+            : getPresetShapeDefinition(geometry, presetGeometry, transform.width, transform.height)
+    let presetAdjustment: number | undefined
+    const shortSide = Math.min(transform.width, transform.height)
+    const presetAdjustmentDefaults: Record<string, [number, number]> = {
+        roundRect: [16667, 50000], round1Rect: [16667, 50000], triangle: [50000, 100000], parallelogram: [25000, 100000], trapezoid: [25000, 50000], hexagon: [25000, 50000], octagon: [29289, 50000], pentagon: [19098, 50000], star4: [12500, 50000], star5: [19098, 50000], star6: [28868, 50000], star7: [34601, 50000], star8: [37500, 50000], star10: [42533, 50000], star12: [37500, 50000], star16: [37500, 50000], star24: [37500, 50000], star32: [37500, 50000], plus: [25000, 50000], chevron: [50000, 100000], cube: [25000, 100000], plaque: [16667, 50000], snip1Rect: [16667, 50000], homePlate: [50000, 50000],
+    }
+    const presetGuideResolver = customGeometryGuideResolver(presetGeometry, transform.width, transform.height, warnings)
+    presetAdjustmentDefaults.donut = [25000, 50000]
+    const presetAdjustments = Object.fromEntries(children(child(presetGeometry, 'avLst'), 'gd').flatMap(node => {
+        const name = node.getAttribute('name')
+        const value = name ? presetGuideResolver(name) : undefined
+        if (name && value === undefined && name !== 'adj') warnings.add(`The ${geometry} adjustment ${name} could not be evaluated; the preset default was used.`)
+        return name && value !== undefined ? [[name, value] as const] : []
+    }))
+    if (geometry === 'bracketPair') {
+        const adjustment = presetAdjustments.adj ?? 16_667
+        presetAdjustments.adj = Math.max(0, Math.min(50_000, adjustment))
+        if (presetAdjustments.adj !== adjustment) warnings.add('The bracketPair adjustment was constrained to its valid range.')
+    }
+    if (geometry === 'bracePair') {
+        const adjustment = presetAdjustments.adj ?? 8_333
+        presetAdjustments.adj = Math.max(0, Math.min(25_000, adjustment))
+        if (presetAdjustments.adj !== adjustment) warnings.add('The bracePair adjustment was constrained to its valid range.')
+    }
+    if (geometry === 'leftBrace' || geometry === 'rightBrace') {
+        const adjustment2 = presetAdjustments.adj2 ?? 50_000
+        presetAdjustments.adj2 = Math.max(0, Math.min(100_000, adjustment2))
+        if (presetAdjustments.adj2 !== adjustment2) warnings.add(`The ${geometry} adjustment adj2 was constrained to its valid range.`)
+        const maximumAdjustment1 = shortSide > 0 ? Math.min(presetAdjustments.adj2, 100_000 - presetAdjustments.adj2) / 2 * transform.height / shortSide : 0
+        const adjustment1 = presetAdjustments.adj1 ?? 8_333
+        presetAdjustments.adj1 = Math.max(0, Math.min(maximumAdjustment1, adjustment1))
+        if (presetAdjustments.adj1 !== adjustment1) warnings.add(`The ${geometry} adjustment adj1 was constrained to its valid range.`)
+    }
+    if (geometry === 'leftBracket' || geometry === 'rightBracket') {
+        const maximumAdjustment = shortSide > 0 ? 50_000 * transform.height / shortSide : 50_000
+        const adjustment = presetAdjustments.adj ?? 8_333
+        presetAdjustments.adj = Math.max(0, Math.min(maximumAdjustment, adjustment))
+        if (presetAdjustments.adj !== adjustment) warnings.add(`The ${geometry} adjustment was constrained to its valid range.`)
+    }
+    if (geometry === 'pie' || geometry === 'chord' || geometry === 'arc' || geometry === 'blockArc') {
+        const defaults = geometry === 'pie' ? {adj1: 0, adj2: 16_200_000}
+            : geometry === 'chord' ? {adj1: 2_700_000, adj2: 16_200_000}
+                : geometry === 'arc' ? {adj1: 16_200_000, adj2: 0}
+                    : {adj1: 10_800_000, adj2: 0}
+        for (const name of ['adj1', 'adj2'] as const) {
+            const value = presetAdjustments[name] ?? defaults[name]
+            presetAdjustments[name] = Math.max(0, Math.min(21_599_999, value))
+            if (presetAdjustments[name] !== value) warnings.add(`The ${geometry} adjustment ${name} was constrained to its valid angle range.`)
+        }
+    }
+    if (geometry === 'blockArc') {
+        const value = presetAdjustments.adj3 ?? 25_000
+        presetAdjustments.adj3 = Math.max(0, Math.min(50_000, value))
+        if (presetAdjustments.adj3 !== value) warnings.add('The blockArc adjustment adj3 was constrained to its valid thickness range.')
+    }
+    const adjustmentConfig = presetAdjustmentDefaults[geometry]
+    if (adjustmentConfig) {
+        const [defaultAdjustment, defaultMaximum] = adjustmentConfig
+        const maximumAdjustment = defaultMaximum * (['parallelogram', 'trapezoid', 'hexagon', 'chevron', 'homePlate'].includes(geometry) ? transform.width / Math.min(transform.width, transform.height) : 1)
+        const hasAdjustment = children(child(presetGeometry, 'avLst'), 'gd').some(node => node.getAttribute('name') === 'adj')
+        const adjustment = hasAdjustment ? presetGuideResolver('adj') : defaultAdjustment
+        if (adjustment === undefined) warnings.add(`An invalid ${geometry} adjustment uses the default geometry.`)
+        presetAdjustment = Math.max(0, Math.min(maximumAdjustment, adjustment ?? defaultAdjustment)) / 100000
+    }
+    if (geometry === 'snip2DiagRect') {
+        presetAdjustments.adj1 = Math.max(0, Math.min(50000, presetAdjustments.adj1 ?? 0))
+        presetAdjustments.adj2 = Math.max(0, Math.min(50000, presetAdjustments.adj2 ?? 16667))
+    }
+    if (geometry === 'snip2SameRect') {
+        presetAdjustments.adj1 = Math.max(0, Math.min(50000, presetAdjustments.adj1 ?? 16667))
+        presetAdjustments.adj2 = Math.max(0, Math.min(50000, presetAdjustments.adj2 ?? 0))
+    }
+    if (geometry === 'round2DiagRect' || geometry === 'round2SameRect') {
+        presetAdjustments.adj1 = Math.max(0, Math.min(50000, presetAdjustments.adj1 ?? 16667))
+        presetAdjustments.adj2 = Math.max(0, Math.min(50000, presetAdjustments.adj2 ?? 0))
+    }
+    if (geometry === 'snipRoundRect') {
+        presetAdjustments.adj1 = Math.max(0, Math.min(50000, presetAdjustments.adj1 ?? 16667))
+        presetAdjustments.adj2 = Math.max(0, Math.min(50000, presetAdjustments.adj2 ?? 16667))
+    }
+    if (geometry === 'frame') presetAdjustments.adj1 = Math.max(0, Math.min(50000, presetAdjustments.adj1 ?? 12500))
+    if (geometry === 'halfFrame') {
+        const maximumAdj2 = shortSide > 0 ? 100000 * transform.width / shortSide : 0
+        const adj2 = Math.max(0, Math.min(maximumAdj2, presetAdjustments.adj2 ?? 33333))
+        const x1 = shortSide * adj2 / 100000
+        const maximumAdj1 = transform.width > 0 && shortSide > 0 ? 100000 * (transform.height - transform.height * x1 / transform.width) / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(maximumAdj1, presetAdjustments.adj1 ?? 33333))
+        presetAdjustments.adj2 = adj2
+    }
+    if (geometry === 'nonIsoscelesTrapezoid') {
+        const maximumAdjustment = shortSide > 0 ? 50000 * transform.width / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(maximumAdjustment, presetAdjustments.adj1 ?? 25000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(maximumAdjustment, presetAdjustments.adj2 ?? 25000))
+    }
+    if (geometry === 'mathMultiply') presetAdjustments.adj1 = Math.max(0, Math.min(51965, presetAdjustments.adj1 ?? 23520))
+    if (geometry === 'mathDivide') {
+        const adj1 = Math.max(1000, Math.min(36745, presetAdjustments.adj1 ?? 23520))
+        const maximumAdj3 = transform.height > 0 ? Math.min((73490 + adj1) / 4, 36745 * transform.width / transform.height) : 0
+        const adj3 = Math.max(1000, Math.min(maximumAdj3, presetAdjustments.adj3 ?? 11760))
+        presetAdjustments.adj1 = adj1
+        presetAdjustments.adj3 = adj3
+        presetAdjustments.adj2 = Math.max(0, Math.min(73490 - 4 * adj3 - adj1, presetAdjustments.adj2 ?? 5880))
+    }
+    if (geometry === 'mathNotEqual') {
+        const adj1 = Math.max(0, Math.min(50000, presetAdjustments.adj1 ?? 23520))
+        presetAdjustments.adj1 = adj1
+        presetAdjustments.adj2 = Math.max(4200000, Math.min(6600000, presetAdjustments.adj2 ?? 6600000))
+        presetAdjustments.adj3 = Math.max(0, Math.min(100000 - 2 * adj1, presetAdjustments.adj3 ?? 11760))
+    }
+    if (geometry === 'leftRightArrow') {
+        const maximumArrowWidth = shortSide > 0 ? 50000 * transform.width / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(100000, presetAdjustments.adj1 ?? 50000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(maximumArrowWidth, presetAdjustments.adj2 ?? 50000))
+    }
+    if (geometry === 'upDownArrow') {
+        const maximumArrowHeight = shortSide > 0 ? 50000 * transform.height / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(100000, presetAdjustments.adj1 ?? 50000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(maximumArrowHeight, presetAdjustments.adj2 ?? 50000))
+    }
+    if (geometry === 'upArrow' || geometry === 'downArrow') {
+        const maximumArrowDepth = shortSide > 0 ? 100000 * transform.height / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(100000, presetAdjustments.adj1 ?? 50000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(maximumArrowDepth, presetAdjustments.adj2 ?? 50000))
+    }
+    if (geometry === 'bentUpArrow') {
+        presetAdjustments.adj1 = Math.max(0, Math.min(50000, presetAdjustments.adj1 ?? 25000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(50000, presetAdjustments.adj2 ?? 25000))
+        presetAdjustments.adj3 = Math.max(0, Math.min(50000, presetAdjustments.adj3 ?? 25000))
+    }
+    if (geometry === 'quadArrow' || geometry === 'leftRightUpArrow') {
+        const defaultAdjustment = geometry === 'quadArrow' ? 22500 : 25000
+        presetAdjustments.adj2 = Math.max(0, Math.min(50000, presetAdjustments.adj2 ?? defaultAdjustment))
+        const maximumAdj1 = 2 * presetAdjustments.adj2
+        presetAdjustments.adj1 = Math.max(0, Math.min(maximumAdj1, presetAdjustments.adj1 ?? defaultAdjustment))
+        const maximumAdj3 = (100000 - maximumAdj1) / 2
+        presetAdjustments.adj3 = Math.max(0, Math.min(maximumAdj3, presetAdjustments.adj3 ?? defaultAdjustment))
+    }
+    if (geometry === 'rightArrow') {
+        const maximumArrowLength = shortSide > 0 ? 100000 * transform.width / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(100000, presetAdjustments.adj1 ?? 50000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(maximumArrowLength, presetAdjustments.adj2 ?? 50000))
+    }
+    if (geometry === 'leftArrow') {
+        const maximumArrowLength = shortSide > 0 ? 100000 * transform.width / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(100000, presetAdjustments.adj1 ?? 50000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(maximumArrowLength, presetAdjustments.adj2 ?? 50000))
+    }
+    if (geometry === 'notchedRightArrow') {
+        const maximumArrowLength = shortSide > 0 ? 100000 * transform.width / shortSide : 0
+        presetAdjustments.adj1 = Math.max(0, Math.min(100000, presetAdjustments.adj1 ?? 50000))
+        presetAdjustments.adj2 = Math.max(0, Math.min(maximumArrowLength, presetAdjustments.adj2 ?? 50000))
+    }
+    const customPaths = customGeometry ? parseCustomGeometry(customGeometry, warnings) : presetDefinition ? parseCustomGeometry(presetDefinition, warnings) : undefined
+    const linePath = isLineGeometry ? connectorGeometryPath(geometry, presetAdjustments) : undefined
+    const chevronCut = shortSide * (presetAdjustment ?? 0.5)
+    const chevronTextRect = transform.width > 2 * chevronCut
+        ? {left: chevronCut / transform.width, top: 0, right: 1 - chevronCut / transform.width, bottom: 1} : undefined
+    const hexagonMaximum = transform.width > 0 && shortSide > 0 ? 50000 * transform.width / shortSide : 0
+    const hexagonBaseline = -hexagonMaximum / 2
+    const hexagonOffset = (presetAdjustment ?? 0.25) * 100000
+    const hexagonDelta = hexagonOffset + hexagonBaseline
+    const hexagonScale = hexagonDelta > 0 ? 4 : 2
+    const hexagonDenominator = hexagonDelta > 0 ? 3 : 2
+    const hexagonStep = hexagonDelta > 0 ? hexagonBaseline : 0
+    const hexagonRectInset = hexagonBaseline !== 0 ? (hexagonScale - (hexagonOffset + hexagonStep) / hexagonBaseline * hexagonDenominator / -1) / 24 : 0
+    const hexagonTextRect = hexagonRectInset >= 0 && hexagonRectInset < 0.5
+        ? {left: hexagonRectInset, top: hexagonRectInset, right: 1 - hexagonRectInset, bottom: 1 - hexagonRectInset} : undefined
+    const trapezoidTextInset = transform.width > 0 && shortSide > 0 ? (presetAdjustment ?? 0.25) * shortSide / transform.width * 2 / 3 : 0
+    const octagonTextInset = shortSide * (presetAdjustment ?? 0.29289) / 2
+    const octagonTextRect = transform.width > 0 && transform.height > 0
+        ? {left: octagonTextInset / transform.width, top: octagonTextInset / transform.height, right: 1 - octagonTextInset / transform.width, bottom: 1 - octagonTextInset / transform.height} : undefined
+    const pentagonHorizontalFactor = presetAdjustments.hf ?? 105146
+    const pentagonVerticalFactor = presetAdjustments.vf ?? 110557
+    const pentagonHalfWidth = transform.width * pentagonHorizontalFactor / 200000
+    const pentagonHalfHeight = transform.height * pentagonVerticalFactor / 200000
+    const pentagonDx1 = pentagonHalfWidth * Math.cos(Math.PI / 10)
+    const pentagonDx2 = pentagonHalfWidth * Math.cos(17 * Math.PI / 10)
+    const pentagonDy1 = pentagonHalfHeight * Math.sin(Math.PI / 10)
+    const pentagonDy2 = pentagonHalfHeight * Math.sin(17 * Math.PI / 10)
+    const pentagonX2 = transform.width / 2 - pentagonDx2
+    const pentagonX3 = transform.width / 2 + pentagonDx2
+    const pentagonY1 = transform.height * pentagonVerticalFactor / 200000 - pentagonDy1
+    const pentagonY2 = transform.height * pentagonVerticalFactor / 200000 - pentagonDy2
+    const pentagonTextTop = pentagonDx1 !== 0 ? pentagonY1 * pentagonDx2 / pentagonDx1 : 0
+    const pentagonTextRect = transform.width > 0 && transform.height > 0 && pentagonDx1 !== 0
+        ? {left: pentagonX2 / transform.width, top: pentagonTextTop / transform.height, right: pentagonX3 / transform.width, bottom: pentagonY2 / transform.height} : undefined
+    const star5Adjustment = (presetAdjustment ?? 0.19098) * 2
+    const star5HalfWidth = transform.width / 2 * pentagonHorizontalFactor / 100000
+    const star5HalfHeight = transform.height / 2 * pentagonVerticalFactor / 100000
+    const star5CenterY = transform.height / 2 * pentagonVerticalFactor / 100000
+    const star5InnerHalfWidth = star5HalfWidth * star5Adjustment
+    const star5InnerHalfHeight = star5HalfHeight * star5Adjustment
+    const star5Sdx1 = star5InnerHalfWidth * Math.cos(19 * Math.PI / 10)
+    const star5Sdy1 = star5InnerHalfHeight * Math.sin(3 * Math.PI / 10)
+    const star5TextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - star5Sdx1) / transform.width, top: (star5CenterY - star5Sdy1) / transform.height, right: (transform.width / 2 + star5Sdx1) / transform.width, bottom: (star5CenterY + star5InnerHalfHeight) / transform.height} : undefined
+    const star6Adjustment = (presetAdjustment ?? 0.28868) * 2
+    const star6HalfWidth = transform.width / 2 * (presetAdjustments.hf ?? 115470) / 100000
+    const star6InnerHalfWidth = star6HalfWidth * star6Adjustment
+    const star6InnerHalfHeight = transform.height / 2 * star6Adjustment
+    const star6TextInsetY = star6InnerHalfHeight * Math.sin(Math.PI / 3)
+    const star6TextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - star6InnerHalfWidth) / transform.width, top: (transform.height / 2 - star6TextInsetY) / transform.height, right: (transform.width / 2 + star6InnerHalfWidth) / transform.width, bottom: (transform.height / 2 + star6TextInsetY) / transform.height} : undefined
+    const star8Adjustment = (presetAdjustment ?? 0.375) * 2
+    const star8InnerHalfWidth = transform.width / 2 * star8Adjustment
+    const star8InnerHalfHeight = transform.height / 2 * star8Adjustment
+    const star8TextInsetX = star8InnerHalfWidth * 0.92388
+    const star8TextInsetY = star8InnerHalfHeight * 0.92388
+    const star8TextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - star8TextInsetX) / transform.width, top: (transform.height / 2 - star8TextInsetY) / transform.height, right: (transform.width / 2 + star8TextInsetX) / transform.width, bottom: (transform.height / 2 + star8TextInsetY) / transform.height} : undefined
+    const star4Adjustment = (presetAdjustment ?? 0.125) * 2
+    const star4HalfWidth = transform.width / 2 * star4Adjustment
+    const star4HalfHeight = transform.height / 2 * star4Adjustment
+    const star4TextInsetX = star4HalfWidth * Math.cos(Math.PI / 4)
+    const star4TextInsetY = star4HalfHeight * Math.sin(Math.PI / 4)
+    const star4TextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - star4TextInsetX) / transform.width, top: (transform.height / 2 - star4TextInsetY) / transform.height, right: (transform.width / 2 + star4TextInsetX) / transform.width, bottom: (transform.height / 2 + star4TextInsetY) / transform.height} : undefined
+    const star7InnerScale = (presetAdjustment ?? 0.34601) * 2
+    const star7HorizontalFactor = presetAdjustments.hf ?? 102572
+    const star7VerticalFactor = presetAdjustments.vf ?? 105210
+    const star7OuterHalfWidth = transform.width / 2 * star7HorizontalFactor / 100000
+    const star7InnerHalfWidth = star7OuterHalfWidth * star7InnerScale
+    const star7InnerHalfHeight = transform.height / 2 * star7VerticalFactor / 100000 * star7InnerScale
+    const star7CenterY = transform.height / 2 * star7VerticalFactor / 100000
+    const star7TextInsetX = star7InnerHalfWidth * 0.78183
+    const star7TextInsetTop = star7InnerHalfHeight * 0.90097
+    const star7TextInsetBottom = star7InnerHalfHeight * 0.62349
+    const star7TextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - star7TextInsetX) / transform.width, top: (star7CenterY - star7TextInsetTop) / transform.height, right: (transform.width / 2 + star7TextInsetX) / transform.width, bottom: (star7CenterY + star7TextInsetBottom) / transform.height} : undefined
+    // ECMA-376 Part 1 defines the star10/star12 preset points and text rectangles with these guides.
+    const star10InnerScale = (presetAdjustment ?? 0.42533) * 2
+    const star10OuterHalfWidth = transform.width / 2 * (presetAdjustments.hf ?? 105146) / 100000
+    const star10InnerHalfWidth = star10OuterHalfWidth * star10InnerScale
+    const star10InnerHalfHeight = transform.height / 2 * star10InnerScale
+    const star10TextInsetX = star10InnerHalfWidth * 0.80902
+    const star10TextInsetY = star10InnerHalfHeight * 0.58779
+    const star10TextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - star10TextInsetX) / transform.width, top: (transform.height / 2 - star10TextInsetY) / transform.height, right: (transform.width / 2 + star10TextInsetX) / transform.width, bottom: (transform.height / 2 + star10TextInsetY) / transform.height} : undefined
+    const star12InnerScale = (presetAdjustment ?? 0.375) * 2
+    const star12InnerHalfWidth = transform.width / 2 * star12InnerScale
+    const star12InnerHalfHeight = transform.height / 2 * star12InnerScale
+    const star12TextInsetX = star12InnerHalfWidth * Math.cos(Math.PI / 4)
+    const star12TextInsetY = star12InnerHalfHeight * Math.cos(Math.PI / 4)
+    const star12TextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - star12TextInsetX) / transform.width, top: (transform.height / 2 - star12TextInsetY) / transform.height, right: (transform.width / 2 + star12TextInsetX) / transform.width, bottom: (transform.height / 2 + star12TextInsetY) / transform.height} : undefined
+    // ECMA-376 Part 1 star16/star24/star32 definitions share a 45-degree inset text rectangle.
+    const highPointStarInnerScale = (presetAdjustment ?? 0.375) * 2
+    const highPointStarInnerHalfWidth = transform.width / 2 * highPointStarInnerScale
+    const highPointStarInnerHalfHeight = transform.height / 2 * highPointStarInnerScale
+    const highPointStarTextInsetX = highPointStarInnerHalfWidth * Math.SQRT1_2
+    const highPointStarTextInsetY = highPointStarInnerHalfHeight * Math.SQRT1_2
+    const highPointStarTextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - highPointStarTextInsetX) / transform.width, top: (transform.height / 2 - highPointStarTextInsetY) / transform.height, right: (transform.width / 2 + highPointStarTextInsetX) / transform.width, bottom: (transform.height / 2 + highPointStarTextInsetY) / transform.height} : undefined
+    const plusInset = shortSide * (presetAdjustment ?? 0.25)
+    const plusTextRect = transform.width > 0 && transform.height > 0
+        ? transform.width > transform.height
+            ? {left: 0, top: plusInset / transform.height, right: 1, bottom: 1 - plusInset / transform.height}
+            : {left: plusInset / transform.width, top: 0, right: 1 - plusInset / transform.width, bottom: 1}
+        : undefined
+    const mathHalfBarWidth = transform.width * 73490 / 200000
+    const mathMinusAdj1 = Math.max(0, Math.min(100000, presetAdjustments.adj1 ?? 23520))
+    const mathMinusHalfBarHeight = transform.height * mathMinusAdj1 / 200000
+    const mathMinusTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0.5 - mathHalfBarWidth / transform.width, top: 0.5 - mathMinusHalfBarHeight / transform.height, right: 0.5 + mathHalfBarWidth / transform.width, bottom: 0.5 + mathMinusHalfBarHeight / transform.height}
+        : undefined
+    const mathEqualAdj1 = Math.max(0, Math.min(36745, presetAdjustments.adj1 ?? 23520))
+    const mathEqualAdj2 = Math.max(0, Math.min(100000 - 2 * mathEqualAdj1, presetAdjustments.adj2 ?? 11760))
+    const mathEqualTextInsetY = mathEqualAdj1 / 100000 + mathEqualAdj2 / 200000
+    const mathEqualTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0.5 - mathHalfBarWidth / transform.width, top: 0.5 - mathEqualTextInsetY, right: 0.5 + mathHalfBarWidth / transform.width, bottom: 0.5 + mathEqualTextInsetY}
+        : undefined
+    const mathPlusAdj1 = Math.max(0, Math.min(73490, presetAdjustments.adj1 ?? 23520))
+    const mathPlusCrossHalfArm = shortSide * mathPlusAdj1 / 200000
+    const mathPlusTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0.5 - mathHalfBarWidth / transform.width, top: 0.5 - mathPlusCrossHalfArm / transform.height, right: 0.5 + mathHalfBarWidth / transform.width, bottom: 0.5 + mathPlusCrossHalfArm / transform.height}
+        : undefined
+    const mathDivideAdj1 = presetAdjustments.adj1 ?? 23520
+    const mathDivideTextHalfHeight = transform.height * mathDivideAdj1 / 200000
+    const mathDivideTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0.5 - mathHalfBarWidth / transform.width, top: 0.5 - mathDivideTextHalfHeight / transform.height, right: 0.5 + mathHalfBarWidth / transform.width, bottom: 0.5 + mathDivideTextHalfHeight / transform.height}
+        : undefined
+    const mathMultiplyDimensionsValid = transform.width > 0 && transform.height > 0
+    const mathMultiplyAngle = mathMultiplyDimensionsValid ? Math.atan2(transform.height, transform.width) : 0
+    const mathMultiplyLength = mathMultiplyDimensionsValid ? Math.hypot(transform.width, transform.height) * (1 - 0.51965) : 0
+    const mathMultiplyX = Math.cos(mathMultiplyAngle) * mathMultiplyLength / 2
+    const mathMultiplyY = Math.sin(mathMultiplyAngle) * mathMultiplyLength / 2
+    const mathMultiplyThickness = shortSide * (presetAdjustments.adj1 ?? 23520) / 100000
+    const mathMultiplyDx = Math.sin(mathMultiplyAngle) * mathMultiplyThickness / 2
+    const mathMultiplyDy = Math.cos(mathMultiplyAngle) * mathMultiplyThickness / 2
+    const mathMultiplyXA = mathMultiplyX - mathMultiplyDx
+    const mathMultiplyYB = mathMultiplyY - mathMultiplyDy
+    const mathMultiplyTextRect = mathMultiplyDimensionsValid
+        ? {left: mathMultiplyXA / transform.width, top: mathMultiplyYB / transform.height, right: (transform.width - mathMultiplyXA) / transform.width, bottom: (transform.height - mathMultiplyYB) / transform.height}
+        : undefined
+    const mathNotEqualAdj1 = presetAdjustments.adj1 ?? 23520
+    const mathNotEqualAdj3 = presetAdjustments.adj3 ?? 11760
+    const mathNotEqualTextInset = transform.height * (mathNotEqualAdj1 / 100000 + mathNotEqualAdj3 / 200000)
+    const mathNotEqualTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0.13255, top: 0.5 - mathNotEqualTextInset / transform.height, right: 0.86745, bottom: 0.5 + mathNotEqualTextInset / transform.height}
+        : undefined
+    const snip1Inset = shortSide * (presetAdjustment ?? 0.16667)
+    const snip1RectTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0, top: snip1Inset / 2 / transform.height, right: 1 - snip1Inset / 2 / transform.width, bottom: 1}
+        : undefined
+    const snip2DiagInset = Math.max(shortSide * (presetAdjustments.adj1 ?? 0) / 100000, shortSide * (presetAdjustments.adj2 ?? 16667) / 100000) / 2
+    const snip2DiagRectTextRect = transform.width > 0 && transform.height > 0
+        ? {left: snip2DiagInset / transform.width, top: snip2DiagInset / transform.height, right: 1 - snip2DiagInset / transform.width, bottom: 1 - snip2DiagInset / transform.height}
+        : undefined
+    const snip2SameTopInset = shortSide * (presetAdjustments.adj1 ?? 16667) / 100000
+    const snip2SameBottomInset = shortSide * (presetAdjustments.adj2 ?? 0) / 100000
+    const snip2SameTextSideInset = Math.max(snip2SameTopInset, snip2SameBottomInset) / 2
+    const snip2SameRectTextRect = transform.width > 0 && transform.height > 0
+        ? {left: snip2SameTextSideInset / transform.width, top: snip2SameTopInset / 2 / transform.height, right: 1 - snip2SameTextSideInset / transform.width, bottom: 1 - snip2SameBottomInset / 2 / transform.height}
+        : undefined
+    const arrowX2 = shortSide * (presetAdjustments.adj2 ?? 50000) / 100000
+    const arrowY1 = transform.height / 2 - transform.height * (presetAdjustments.adj1 ?? 50000) / 200000
+    const arrowDx1 = transform.height > 0 ? arrowY1 * arrowX2 / (transform.height / 2) : 0
+    const leftRightArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: (arrowX2 - arrowDx1) / transform.width, top: arrowY1 / transform.height, right: (transform.width - arrowX2 + arrowDx1) / transform.width, bottom: (transform.height - arrowY1) / transform.height}
+        : undefined
+    const upDownArrowX1 = transform.width / 2 - transform.width * (presetAdjustments.adj1 ?? 50000) / 200000
+    const upDownArrowY2 = shortSide * (presetAdjustments.adj2 ?? 50000) / 100000
+    const upDownArrowDy1 = transform.width > 0 ? upDownArrowX1 * upDownArrowY2 / (transform.width / 2) : 0
+    const upDownArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: upDownArrowX1 / transform.width, top: (upDownArrowY2 - upDownArrowDy1) / transform.height, right: (transform.width - upDownArrowX1) / transform.width, bottom: (transform.height - upDownArrowY2 + upDownArrowDy1) / transform.height}
+        : undefined
+    const verticalArrowX1 = transform.width / 2 - transform.width * (presetAdjustments.adj1 ?? 50000) / 200000
+    const verticalArrowX2 = transform.width - verticalArrowX1
+    const verticalArrowDepth = shortSide * (presetAdjustments.adj2 ?? 50000) / 100000
+    const upArrowY2 = verticalArrowDepth
+    const upArrowDy1 = transform.width > 0 ? verticalArrowX1 * upArrowY2 / (transform.width / 2) : 0
+    const upArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: verticalArrowX1 / transform.width, top: (upArrowY2 - upArrowDy1) / transform.height, right: verticalArrowX2 / transform.width, bottom: 1}
+        : undefined
+    const downArrowY1 = transform.height - verticalArrowDepth
+    const downArrowDy2 = transform.width > 0 ? verticalArrowX1 * verticalArrowDepth / (transform.width / 2) : 0
+    const downArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: verticalArrowX1 / transform.width, top: 0, right: verticalArrowX2 / transform.width, bottom: (downArrowY1 + downArrowDy2) / transform.height}
+        : undefined
+    const bentUpArrowA1 = presetAdjustments.adj1 ?? 25000
+    const bentUpArrowA2 = presetAdjustments.adj2 ?? 25000
+    const bentUpArrowA3 = presetAdjustments.adj3 ?? 25000
+    const bentUpArrowDx2 = shortSide * bentUpArrowA1 / 200000
+    const bentUpArrowX3 = transform.width - shortSide * bentUpArrowA1 / 100000
+    const bentUpArrowX4 = bentUpArrowX3 + bentUpArrowDx2
+    const bentUpArrowY2 = transform.height - shortSide * bentUpArrowA1 / 100000
+    const bentUpArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0, top: bentUpArrowY2 / transform.height, right: bentUpArrowX4 / transform.width, bottom: 1}
+        : undefined
+    const quadArrowA1 = presetAdjustments.adj1 ?? 22500
+    const quadArrowA2 = presetAdjustments.adj2 ?? 22500
+    const quadArrowA3 = presetAdjustments.adj3 ?? 22500
+    const quadArrowX1 = shortSide * quadArrowA3 / 100000
+    const quadArrowDx2 = shortSide * quadArrowA2 / 100000
+    const quadArrowDx3 = shortSide * quadArrowA1 / 200000
+    const quadArrowInset = quadArrowDx2 > 0 ? quadArrowDx3 * quadArrowX1 / quadArrowDx2 : 0
+    const quadArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: quadArrowInset / transform.width, top: (transform.height / 2 - quadArrowDx3) / transform.height, right: (transform.width - quadArrowInset) / transform.width, bottom: (transform.height / 2 + quadArrowDx3) / transform.height}
+        : undefined
+    const leftRightUpArrowA1 = presetAdjustments.adj1 ?? 25000
+    const leftRightUpArrowA2 = presetAdjustments.adj2 ?? 25000
+    const leftRightUpArrowA3 = presetAdjustments.adj3 ?? 25000
+    const leftRightUpArrowX1 = shortSide * leftRightUpArrowA3 / 100000
+    const leftRightUpArrowDx2 = shortSide * leftRightUpArrowA2 / 100000
+    const leftRightUpArrowDx3 = shortSide * leftRightUpArrowA1 / 200000
+    const leftRightUpArrowInset = leftRightUpArrowDx2 > 0 ? leftRightUpArrowDx3 * leftRightUpArrowX1 / leftRightUpArrowDx2 : 0
+    const leftRightUpArrowY3 = transform.height - leftRightUpArrowDx2 - leftRightUpArrowDx3
+    const leftRightUpArrowY5 = transform.height - leftRightUpArrowDx2 + leftRightUpArrowDx3
+    const leftRightUpArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: leftRightUpArrowInset / transform.width, top: leftRightUpArrowY3 / transform.height, right: (transform.width - leftRightUpArrowInset) / transform.width, bottom: leftRightUpArrowY5 / transform.height}
+        : undefined
+    const rightArrowLength = shortSide * (presetAdjustments.adj2 ?? 50000) / 100000
+    const rightArrowX1 = transform.width - rightArrowLength
+    const rightArrowY1 = transform.height / 2 - transform.height * (presetAdjustments.adj1 ?? 50000) / 200000
+    const rightArrowDx2 = transform.height > 0 ? rightArrowY1 * rightArrowLength / (transform.height / 2) : 0
+    const rightArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0, top: rightArrowY1 / transform.height, right: (rightArrowX1 + rightArrowDx2) / transform.width, bottom: (transform.height - rightArrowY1) / transform.height}
+        : undefined
+    const leftArrowLength = shortSide * (presetAdjustments.adj2 ?? 50000) / 100000
+    const leftArrowY1 = transform.height / 2 - transform.height * (presetAdjustments.adj1 ?? 50000) / 200000
+    const leftArrowDx1 = transform.height > 0 ? leftArrowY1 * leftArrowLength / (transform.height / 2) : 0
+    const leftArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: (leftArrowLength - leftArrowDx1) / transform.width, top: leftArrowY1 / transform.height, right: 1, bottom: (transform.height - leftArrowY1) / transform.height}
+        : undefined
+    const notchedRightArrowLength = shortSide * (presetAdjustments.adj2 ?? 50000) / 100000
+    const notchedRightArrowX2 = transform.width - notchedRightArrowLength
+    const notchedRightArrowHalfHeight = transform.height * (presetAdjustments.adj1 ?? 50000) / 200000
+    const notchedRightArrowY1 = transform.height / 2 - notchedRightArrowHalfHeight
+    const notchedRightArrowX1 = transform.height > 0 ? notchedRightArrowHalfHeight * notchedRightArrowLength / (transform.height / 2) : 0
+    const notchedRightArrowTextRect = transform.width > 0 && transform.height > 0
+        ? {left: notchedRightArrowX1 / transform.width, top: notchedRightArrowY1 / transform.height, right: (transform.width - notchedRightArrowX1) / transform.width, bottom: (transform.height - notchedRightArrowY1) / transform.height}
+        : undefined
+    const dodecagonTextInset = 2894 / 21600
+    const magneticTapeTextInset = (1 - Math.SQRT1_2) / 2
+    const homePlateCut = shortSide * (presetAdjustment ?? 0.5)
+    const homePlateTextRect = transform.width > 0 ? {left: 0, top: 0, right: (transform.width - homePlateCut / 2) / transform.width, bottom: 1} : undefined
+    const cubeInset = shortSide * (presetAdjustment ?? 0.25)
+    const cubeTextRect = transform.width > 0 && transform.height > 0
+        ? {left: 0, top: cubeInset / transform.height, right: (transform.width - cubeInset) / transform.width, bottom: 1}
+        : undefined
+    const plaqueRadius = shortSide * (presetAdjustment ?? 0.16667)
+    const plaqueInset = plaqueRadius * 0.70711
+    const plaqueTextRect = transform.width > 0 && transform.height > 0
+        ? {left: plaqueInset / transform.width, top: plaqueInset / transform.height, right: 1 - plaqueInset / transform.width, bottom: 1 - plaqueInset / transform.height}
+        : undefined
+    const frameInset = shortSide * (presetAdjustments.adj1 ?? 12500) / 100000
+    const frameTextRect = transform.width > 0 && transform.height > 0
+        ? {left: frameInset / transform.width, top: frameInset / transform.height, right: 1 - frameInset / transform.width, bottom: 1 - frameInset / transform.height}
+        : undefined
+    const tabInset = Math.hypot(transform.width, transform.height) / 20
+    const tabTextRect = transform.width > 0 && transform.height > 0
+        ? {left: tabInset / transform.width, top: tabInset / transform.height, right: 1 - tabInset / transform.width, bottom: 1 - tabInset / transform.height}
+        : undefined
+    const round1RectRadius = shortSide * (presetAdjustment ?? 0.16667)
+    const donutTextInset = (1 - Math.SQRT1_2) / 2
+    const donutTextRect = {left: donutTextInset, top: donutTextInset, right: 1 - donutTextInset, bottom: 1 - donutTextInset}
+    const pieWedgeTextInset = 1 - Math.SQRT1_2
+    const pieWedgeTextRect = {left: pieWedgeTextInset, top: pieWedgeTextInset, right: 1, bottom: 1}
+    const angleArcTextRect = (() => {
+        if (!['arc', 'blockArc'].includes(geometry) || !(transform.width > 0) || !(transform.height > 0)) return undefined
+        const fullTurn = 21_600_000
+        const startAngle = presetAdjustments.adj1 ?? (geometry === 'blockArc' ? 10_800_000 : 16_200_000)
+        const endAngle = presetAdjustments.adj2 ?? 0
+        let sweepAngle = endAngle - startAngle
+        if (sweepAngle <= 0) sweepAngle += fullTurn
+        const [startX, startY] = presetEllipsePoint(transform.width, transform.height, startAngle)
+        const [endX, endY] = presetEllipsePoint(transform.width, transform.height, endAngle)
+        let left = Math.min(startX, endX) / 1000, right = Math.max(startX, endX) / 1000
+        let top = Math.min(startY, endY) / 1000, bottom = Math.max(startY, endY) / 1000
+        const includesAngle = (angle: number) => sweepAngle === fullTurn || sweepAngle > (angle - startAngle + fullTurn) % fullTurn
+        if (includesAngle(0)) right = 1
+        if (includesAngle(9_000_000)) bottom = 1
+        if (includesAngle(10_800_000)) left = 0
+        if (includesAngle(16_200_000)) top = 0
+        return {left, top, right, bottom}
+    })()
+    const round1RectTextRect = transform.width > 0
+        ? {left: 0, top: 0, right: 1 - round1RectRadius * 0.29289 / transform.width, bottom: 1}
+        : undefined
+    const round2DiagRectRadius1 = shortSide * (presetAdjustments.adj1 ?? 16667) / 100000
+    const round2DiagRectRadius2 = shortSide * (presetAdjustments.adj2 ?? 0) / 100000
+    const round2DiagRectInset = Math.max(round2DiagRectRadius1, round2DiagRectRadius2) * 0.29289
+    const round2DiagRectTextRect = transform.width > 0 && transform.height > 0
+        ? {left: round2DiagRectInset / transform.width, top: round2DiagRectInset / transform.height, right: 1 - round2DiagRectInset / transform.width, bottom: 1 - round2DiagRectInset / transform.height}
+        : undefined
+    const round2SameRectRadius1 = shortSide * (presetAdjustments.adj1 ?? 16667) / 100000
+    const round2SameRectRadius2 = shortSide * (presetAdjustments.adj2 ?? 0) / 100000
+    const round2SameRectInsetTop = round2SameRectRadius1 * 0.29289
+    const round2SameRectInsetBottom = round2SameRectRadius2 * 0.29289
+    const round2SameRectInsetSide = Math.max(round2SameRectInsetTop, round2SameRectInsetBottom)
+    const round2SameRectTextRect = transform.width > 0 && transform.height > 0
+        ? {left: round2SameRectInsetSide / transform.width, top: round2SameRectInsetTop / transform.height, right: 1 - round2SameRectInsetSide / transform.width, bottom: 1 - round2SameRectInsetBottom / transform.height}
+        : undefined
+    const snipRoundRectRadius = shortSide * (presetAdjustments.adj1 ?? 16667) / 100000
+    const snipRoundRectCut = shortSide * (presetAdjustments.adj2 ?? 16667) / 100000
+    const snipRoundRectInset = snipRoundRectRadius * 0.29289
+    const snipRoundRectTextRect = transform.width > 0 && transform.height > 0
+        ? {left: snipRoundRectInset / transform.width, top: snipRoundRectInset / transform.height, right: (transform.width - snipRoundRectCut / 2) / transform.width, bottom: 1}
+        : undefined
+    const nonIsoscelesTrapezoidMax = shortSide > 0 ? 50000 * transform.width / shortSide : 0
+    const nonIsoscelesTrapezoidAdj1 = presetAdjustments.adj1 ?? 25000
+    const nonIsoscelesTrapezoidAdj2 = presetAdjustments.adj2 ?? 25000
+    const nonIsoscelesTrapezoidTextRect = transform.width > 0 && transform.height > 0 && nonIsoscelesTrapezoidMax > 0
+        ? {left: (transform.width / 3 * nonIsoscelesTrapezoidAdj1 / nonIsoscelesTrapezoidMax) / transform.width, top: (transform.height / 3 * Math.max(nonIsoscelesTrapezoidAdj1, nonIsoscelesTrapezoidAdj2) / nonIsoscelesTrapezoidMax) / transform.height, right: (transform.width - transform.width / 3 * nonIsoscelesTrapezoidAdj2 / nonIsoscelesTrapezoidMax) / transform.width, bottom: 1}
+        : undefined
+    const heptagonHalfWidth = transform.width / 2 * (presetAdjustments.hf ?? 102572) / 100000
+    const heptagonHalfHeight = transform.height / 2 * (presetAdjustments.vf ?? 105210) / 100000
+    const heptagonY1 = heptagonHalfHeight - heptagonHalfHeight * 62349 / 100000
+    const heptagonX2 = transform.width / 2 - heptagonHalfWidth * 78183 / 100000
+    const heptagonTextRect = transform.width > 0 && transform.height > 0
+        ? {left: heptagonX2 / transform.width, top: heptagonY1 / transform.height, right: (transform.width - heptagonX2) / transform.width, bottom: (transform.height - heptagonY1) / transform.height}
+        : undefined
+    const decagonHalfHeight = transform.height / 2 * (presetAdjustments.vf ?? 105146) / 100000
+    const decagonXInset = transform.width / 2 * Math.cos(Math.PI / 5)
+    const decagonYInset = decagonHalfHeight * Math.sin(Math.PI / 5)
+    const decagonTextRect = transform.width > 0 && transform.height > 0
+        ? {left: (transform.width / 2 - decagonXInset) / transform.width, top: (transform.height / 2 - decagonYInset) / transform.height, right: (transform.width / 2 + decagonXInset) / transform.width, bottom: (transform.height / 2 + decagonYInset) / transform.height}
+        : undefined
+    const bracketTextRect = ['leftBracket', 'rightBracket'].includes(geometry) && transform.width > 0 && transform.height > 0 && shortSide > 0
+        ? (() => {
+            const y1 = shortSide * (presetAdjustments.adj ?? 8_333) / 100_000 / transform.height
+            const inset = Math.SQRT1_2
+            return {
+                left: geometry === 'leftBracket' ? 1 - inset : 0,
+                top: y1 * (1 - inset),
+                right: geometry === 'leftBracket' ? 1 : inset,
+                bottom: 1 - y1 * (1 + inset)
+            }
+        })()
+        : undefined
+    const bracketPairTextRect = geometry === 'bracketPair' && transform.width > 0 && transform.height > 0 && shortSide > 0
+        ? (() => {
+            const inset = shortSide * (presetAdjustments.adj ?? 16_667) / 100_000 * 29_289 / 100_000
+            return {left: inset / transform.width, top: inset / transform.height, right: 1 - inset / transform.width, bottom: 1 - inset / transform.height}
+        })()
+        : undefined
+    const bracePairTextRect = geometry === 'bracePair' && transform.width > 0 && transform.height > 0 && shortSide > 0
+        ? (() => {
+            const radius = shortSide * (presetAdjustments.adj ?? 8_333) / 100_000
+            const topInset = radius * 29_289 / 100_000
+            const sideInset = radius + topInset
+            return {left: sideInset / transform.width, top: sideInset / transform.height, right: 1 - sideInset / transform.width, bottom: 1 - topInset / transform.height}
+        })()
+        : undefined
+    const singleBraceTextRect = (geometry === 'leftBrace' || geometry === 'rightBrace') && transform.width > 0 && transform.height > 0 && shortSide > 0
+        ? (() => {
+            const radius = shortSide * (presetAdjustments.adj1 ?? 8_333) / 100_000
+            const horizontalInset = transform.width / 2 * Math.SQRT1_2
+            const verticalInset = radius * (1 - Math.SQRT1_2)
+            return {
+                left: geometry === 'leftBrace' ? 1 - horizontalInset / transform.width : 0,
+                top: verticalInset / transform.height,
+                right: geometry === 'leftBrace' ? 1 : horizontalInset / transform.width,
+                bottom: 1 - verticalInset / transform.height
+            }
+        })()
+        : undefined
+    // ECMA-376 presetShapeDefinitions.xml defines ellipse text bounds with center ± cos/sin(45°).
+    const customTextRect = customGeometry ? parseCustomGeometryTextRect(customGeometry, warnings)
+        : presetDefinition ? parseCustomGeometryTextRect(presetDefinition, warnings)
+        : geometry === 'ellipse' ? {left: (1 - Math.SQRT1_2) / 2, top: (1 - Math.SQRT1_2) / 2, right: (1 + Math.SQRT1_2) / 2, bottom: (1 + Math.SQRT1_2) / 2}
+        : geometry === 'heart' ? {left: 1 / 6, top: 1 / 4, right: 5 / 6, bottom: 2 / 3}
+        : geometry === 'lightningBolt' ? {left: 8757 / 21600, top: 7437 / 21600, right: 13917 / 21600, bottom: 14277 / 21600}
+        : ['leftBracket', 'rightBracket'].includes(geometry) ? bracketTextRect
+        : geometry === 'bracketPair' ? bracketPairTextRect
+        : geometry === 'bracePair' ? bracePairTextRect
+        : geometry === 'leftBrace' || geometry === 'rightBrace' ? singleBraceTextRect
+        : geometry === 'triangle' ? {left: (presetAdjustment ?? 0.5) / 2, top: 0.5, right: (presetAdjustment ?? 0.5) / 2 + 0.5, bottom: 1}
+        : ['diamond', 'flowChartDecision', 'flowChartSort', 'flowChartCollate'].includes(geometry) ? {left: 0.25, top: 0.25, right: 0.75, bottom: 0.75}
+        : geometry === 'flowChartOffpageConnector' ? {left: 0, top: 0, right: 1, bottom: 0.8}
+        : geometry === 'flowChartDocument' ? {left: 0, top: 0, right: 1, bottom: 17322 / 21600}
+        : ['flowChartManualInput', 'flowChartPunchedCard'].includes(geometry) ? {left: 0, top: 0.2, right: 1, bottom: 1}
+        : geometry === 'flowChartManualOperation' ? {left: 0.2, top: 0, right: 0.8, bottom: 1}
+        : geometry === 'flowChartInputOutput' ? {left: 0.2, top: 0, right: 0.8, bottom: 1}
+        : geometry === 'flowChartPreparation' ? {left: 0.2, top: 0, right: 0.8, bottom: 1}
+        : geometry === 'flowChartTerminator' ? {left: 1018 / 21600, top: 3163 / 21600, right: 20582 / 21600, bottom: 18437 / 21600}
+        : geometry === 'flowChartPredefinedProcess' ? {left: 1 / 8, top: 0, right: 7 / 8, bottom: 1}
+        : geometry === 'flowChartExtract' ? {left: 0.25, top: 0.5, right: 0.75, bottom: 1}
+        : geometry === 'flowChartMerge' ? {left: 0.25, top: 0, right: 0.75, bottom: 0.5}
+        : ['flowChartConnector', 'flowChartSummingJunction', 'flowChartOr'].includes(geometry) ? {left: (1 - Math.SQRT1_2) / 2, top: (1 - Math.SQRT1_2) / 2, right: (1 + Math.SQRT1_2) / 2, bottom: (1 + Math.SQRT1_2) / 2}
+        : geometry === 'flowChartDelay' ? {left: 0, top: (1 - Math.SQRT1_2) / 2, right: (1 + Math.SQRT1_2) / 2, bottom: (1 + Math.SQRT1_2) / 2}
+        : geometry === 'flowChartDisplay' ? {left: 1 / 6, top: 0, right: 5 / 6, bottom: 1}
+        : geometry === 'flowChartOfflineStorage' ? {left: 0.25, top: 0, right: 0.75, bottom: 0.5}
+        : geometry === 'flowChartOnlineStorage' ? {left: 1 / 6, top: 0, right: 5 / 6, bottom: 1}
+        : geometry === 'flowChartPunchedTape' ? {left: 0, top: 1 / 5, right: 1, bottom: 4 / 5}
+        : geometry === 'flowChartMagneticDisk' ? {left: 0, top: 1 / 3, right: 1, bottom: 5 / 6}
+        : geometry === 'flowChartMagneticDrum' ? {left: 1 / 6, top: 0, right: 5 / 6, bottom: 1}
+        : geometry === 'flowChartMagneticTape' ? {left: magneticTapeTextInset, top: magneticTapeTextInset, right: 1 - magneticTapeTextInset, bottom: 1 - magneticTapeTextInset}
+        : geometry === 'flowChartMultidocument' ? {left: 0, top: 3675 / 21600, right: 18595 / 21600, bottom: 20782 / 21600}
+        : geometry === 'flowChartInternalStorage' ? {left: 1 / 8, top: 1 / 8, right: 1, bottom: 1}
+        : ['roundRect', 'flowChartAlternateProcess'].includes(geometry) ? {left: Math.min(transform.width, transform.height) * (presetAdjustment ?? 0.16667) * 0.29289 / transform.width, top: Math.min(transform.width, transform.height) * (presetAdjustment ?? 0.16667) * 0.29289 / transform.height, right: 1 - Math.min(transform.width, transform.height) * (presetAdjustment ?? 0.16667) * 0.29289 / transform.width, bottom: 1 - Math.min(transform.width, transform.height) * (presetAdjustment ?? 0.16667) * 0.29289 / transform.height}
+        : geometry === 'rtTriangle' ? {left: 1 / 12, top: 7 / 12, right: 7 / 12, bottom: 11 / 12}
+        : geometry === 'parallelogram' ? {left: 1 / 12 + (presetAdjustment ?? 0.25) * 5 * shortSide / transform.width / 12, top: 1 / 12 + (presetAdjustment ?? 0.25) * 5 * shortSide / transform.width / 12, right: 11 / 12 - (presetAdjustment ?? 0.25) * 5 * shortSide / transform.width / 12, bottom: 11 / 12 - (presetAdjustment ?? 0.25) * shortSide / transform.width / 12 * 5}
+        : geometry === 'hexagon' ? hexagonTextRect : geometry === 'chevron' ? chevronTextRect
+        : geometry === 'trapezoid' ? {left: trapezoidTextInset, top: trapezoidTextInset, right: 1 - trapezoidTextInset, bottom: 1}
+        : geometry === 'octagon' ? octagonTextRect
+        : geometry === 'pentagon' ? pentagonTextRect
+        : geometry === 'star5' ? star5TextRect
+        : geometry === 'star6' ? star6TextRect
+        : geometry === 'star8' ? star8TextRect
+        : geometry === 'star4' ? star4TextRect
+        : geometry === 'star7' ? star7TextRect
+        : geometry === 'star10' ? star10TextRect
+        : geometry === 'star12' ? star12TextRect
+        : ['star16', 'star24', 'star32'].includes(geometry) ? highPointStarTextRect
+        : geometry === 'dodecagon' ? {left: dodecagonTextInset, top: dodecagonTextInset, right: 1 - dodecagonTextInset, bottom: 1 - dodecagonTextInset}
+        : geometry === 'mathMinus' ? mathMinusTextRect
+        : geometry === 'mathEqual' ? mathEqualTextRect
+        : geometry === 'mathPlus' ? mathPlusTextRect
+        : geometry === 'mathDivide' ? mathDivideTextRect
+        : geometry === 'mathMultiply' ? mathMultiplyTextRect
+        : geometry === 'mathNotEqual' ? mathNotEqualTextRect
+        : geometry === 'round1Rect' ? round1RectTextRect
+        : geometry === 'round2DiagRect' ? round2DiagRectTextRect
+        : geometry === 'round2SameRect' ? round2SameRectTextRect
+        : geometry === 'snipRoundRect' ? snipRoundRectTextRect
+        : geometry === 'snip1Rect' ? snip1RectTextRect
+        : geometry === 'snip2DiagRect' ? snip2DiagRectTextRect
+        : geometry === 'snip2SameRect' ? snip2SameRectTextRect
+        : geometry === 'homePlate' ? homePlateTextRect
+        : geometry === 'cube' ? cubeTextRect
+        : geometry === 'plaque' ? plaqueTextRect
+        : geometry === 'donut' ? donutTextRect
+        : ['pie', 'chord'].includes(geometry) ? donutTextRect
+        : geometry === 'pieWedge' ? pieWedgeTextRect
+        : ['arc', 'blockArc'].includes(geometry) ? angleArcTextRect
+        : geometry === 'frame' ? frameTextRect
+        : ['cornerTabs', 'plaqueTabs', 'squareTabs'].includes(geometry) ? tabTextRect
+        : geometry === 'nonIsoscelesTrapezoid' ? nonIsoscelesTrapezoidTextRect
+        : geometry === 'heptagon' ? heptagonTextRect
+        : geometry === 'decagon' ? decagonTextRect
+        : geometry === 'plus' ? plusTextRect
+        : geometry === 'leftRightArrow' ? leftRightArrowTextRect
+        : geometry === 'upDownArrow' ? upDownArrowTextRect
+        : geometry === 'upArrow' ? upArrowTextRect
+        : geometry === 'downArrow' ? downArrowTextRect
+        : geometry === 'bentUpArrow' ? bentUpArrowTextRect
+        : geometry === 'quadArrow' ? quadArrowTextRect
+        : geometry === 'leftRightUpArrow' ? leftRightUpArrowTextRect
+        : geometry === 'rightArrow' ? rightArrowTextRect
+        : geometry === 'leftArrow' ? leftArrowTextRect
+        : geometry === 'notchedRightArrow' ? notchedRightArrowTextRect : undefined
+    const supportedGeometry = PRESET_GEOMETRIES_WITH_HANDWRITTEN_RENDERERS
+    if (!supportedGeometry.has(geometry) && !LINE_GEOMETRIES.has(geometry) && !customPaths?.length) warnings.add(`The ${geometry} shape is simplified to a rectangle.`)
     if (geometry === 'custom' && !customPaths) warnings.add('An unsupported custom geometry was rendered as a rectangle.')
     const placeholder = parsePlaceholderIdentity(shape)
     if (placeholder && warnPlaceholder) warnings.add('Placeholder properties are only partially inherited from the layout or master.')
-    const transform = shapeTransform(properties)
-    const tx = parseText(shape, theme, warnings, inheritedStyle, inheritedParagraphStyles, rels)
+    const tx = parseText(shape, theme, warnings, inheritedStyle, inheritedParagraphStyles, rels, groupFill)
     const nonVisual = firstDescendant(shape, 'cNvPr')
-    const line = child(properties, 'ln')
-    let fill = fillColor(properties, theme, warnings)
-    let stroke = fillColor(line, theme, warnings)
+    const resolvedLine = referencedShapeLine(shape, theme, warnings, fillStyles)
+    const line = resolvedLine.line
+    let fill = children(properties).some(node => ['solidFill', 'noFill', 'gradFill', 'pattFill', 'blipFill', 'grpFill'].includes(node.localName))
+        ? fillColor(properties, theme, warnings, groupFill, true) : referencedShapeFill(shape, theme, warnings, fillStyles, true)
+    let stroke = fillColor(line, resolvedLine.theme, warnings, groupFill)
     const strokeDash = lineDashStyle(line, warnings)
     const strokeCap = lineCapStyle(line, warnings)
-    if (Array.isArray(strokeDash) && !customGeometry && geometry !== 'line') warnings.add('Custom dash ratios on preset shape outlines are approximated with CSS dashes.')
+    const usesSvgPresetStroke = ['leftBracket', 'rightBracket', 'bracketPair', 'leftBrace', 'rightBrace', 'bracePair', 'mathDivide', 'mathMultiply', 'mathNotEqual', 'round1Rect', 'round2DiagRect', 'round2SameRect', 'snipRoundRect', 'cube', 'plaque', 'frame', 'halfFrame', 'cornerTabs', 'plaqueTabs', 'squareTabs', 'donut', 'pie', 'chord', 'arc', 'blockArc', 'pieWedge', 'cloud'].includes(geometry)
+    if (line && numberAttr(line, 'w') === 0 && stroke !== 'transparent' && !isLineGeometry && !customGeometry && !customPaths && !usesSvgPresetStroke && !['line', 'rect', 'ellipse', 'roundRect', 'flowChartProcess', 'flowChartAlternateProcess', 'flowChartDelay', 'flowChartDisplay', 'flowChartOfflineStorage', 'flowChartOnlineStorage', 'flowChartPunchedTape', 'flowChartMagneticDisk', 'flowChartMagneticDrum', 'flowChartMagneticTape', 'flowChartMultidocument', 'flowChartInternalStorage', 'flowChartSummingJunction', 'flowChartOr', 'plus', 'mathMinus', 'mathEqual', 'mathPlus', 'snip1Rect', 'snip2DiagRect', 'snip2SameRect', 'homePlate', 'nonIsoscelesTrapezoid', 'heptagon', 'decagon', 'leftRightArrow', 'upDownArrow', 'upArrow', 'downArrow', 'bentUpArrow', 'quadArrow', 'leftRightUpArrow', 'rightArrow', 'leftArrow', 'notchedRightArrow', 'heart', 'lightningBolt', 'triangle', 'rtTriangle', 'diamond', 'flowChartConnector', 'flowChartDecision', 'flowChartSort', 'flowChartCollate', 'flowChartPunchedCard', 'flowChartOffpageConnector', 'flowChartDocument', 'flowChartManualInput', 'flowChartManualOperation', 'flowChartInputOutput', 'flowChartPreparation', 'flowChartTerminator', 'flowChartPredefinedProcess', 'flowChartExtract', 'flowChartMerge', 'parallelogram', 'trapezoid', 'hexagon', 'octagon', 'pentagon', 'star4', 'star5', 'star6', 'star7', 'star8', 'star10', 'star12', 'star16', 'star24', 'star32', 'dodecagon', 'chevron'].includes(geometry)) {
+        warnings.add('Zero-width preset shape outlines use CSS borders, whose device-pixel thickness may be rounded by the browser.')
+    }
+    if (Array.isArray(strokeDash) && !isLineGeometry && !customGeometry && !customPaths && !usesSvgPresetStroke && !['line', 'rect', 'ellipse', 'roundRect', 'flowChartProcess', 'flowChartAlternateProcess', 'flowChartDelay', 'flowChartDisplay', 'flowChartOfflineStorage', 'flowChartOnlineStorage', 'flowChartPunchedTape', 'flowChartMagneticDisk', 'flowChartMagneticDrum', 'flowChartMagneticTape', 'flowChartMultidocument', 'flowChartInternalStorage', 'flowChartSummingJunction', 'flowChartOr', 'plus', 'mathMinus', 'mathEqual', 'mathPlus', 'snip1Rect', 'snip2DiagRect', 'snip2SameRect', 'homePlate', 'nonIsoscelesTrapezoid', 'heptagon', 'decagon', 'leftRightArrow', 'upDownArrow', 'upArrow', 'downArrow', 'bentUpArrow', 'quadArrow', 'leftRightUpArrow', 'rightArrow', 'leftArrow', 'notchedRightArrow', 'triangle', 'rtTriangle', 'diamond', 'flowChartConnector', 'flowChartDecision', 'flowChartSort', 'flowChartCollate', 'flowChartPunchedCard', 'flowChartOffpageConnector', 'flowChartDocument', 'flowChartManualInput', 'flowChartManualOperation', 'flowChartInputOutput', 'flowChartPreparation', 'flowChartTerminator', 'flowChartPredefinedProcess', 'flowChartExtract', 'flowChartMerge'].includes(geometry)) warnings.add('Custom dash ratios on preset shape outlines are approximated with CSS dashes.')
     // DrawingML head/tail end sizes are relative to the line width.
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.lineendpropertiestype?view=openxml-3.0.1
     const parseLineEnd = (side: 'headEnd' | 'tailEnd'): PptxLineEnd | undefined => {
@@ -1774,12 +2672,16 @@ function parseShape(shape: Element, theme: Record<string, string>, warnings: Set
         }
         return {type: type as PptxLineEnd['type'], width: size('w'), length: size('len')}
     }
+    const shapeEffects = referencedShapeEffects(shape, theme, warnings, fillStyles)
     return {
         id: nonVisual?.getAttribute('id') || crypto.randomUUID(),
         name: nonVisual?.getAttribute('name') || 'Shape',
         hyperlink: parseHyperlink(child(nonVisual, 'hlinkClick'), rels, warnings),
-        kind: geometry === 'line' ? 'line' : 'shape',
+        kind: isLineGeometry ? 'line' : 'shape',
         geometry,
+        linePath,
+        presetAdjustment,
+        presetAdjustments: Object.keys(presetAdjustments).length ? presetAdjustments : undefined,
         customPaths,
         customTextRect,
         ...transform,
@@ -1790,7 +2692,7 @@ function parseShape(shape: Element, theme: Record<string, string>, warnings: Set
         strokeCap,
         lineHeadEnd: parseLineEnd('headEnd'),
         lineTailEnd: parseLineEnd('tailEnd'),
-        shadow: outerShadow(properties, theme),
+        ...shapeEffects,
         ...tx,
         placeholder
     }
@@ -1820,7 +2722,7 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
                 textFontScale: text.textFontScale,
                 textLineSpacingReduction: text.textLineSpacingReduction,
                 textAutoFitDynamic: text.textAutoFitDynamic,
-                fill: fillColor(properties, theme, warnings),
+                fill: fillColor(properties, theme, warnings, undefined, true),
                 margins: {
                     left: numberAttr(properties, 'marL', 91_440),
                     right: numberAttr(properties, 'marR', 91_440),
@@ -1860,7 +2762,7 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
     }
 }
 
-async function parseSmartArtCachedDrawing(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, animationTargetIds: Set<string>, parentTransform?: Matrix2D): Promise<PptxElement[] | undefined> {
+async function parseSmartArtCachedDrawing(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, animationTargetIds: Set<string>, parentTransform: Matrix2D | undefined, sourceTheme: Record<string, string>, fillStyles?: ParsedTheme): Promise<PptxElement[] | undefined> {
     const graphicData = firstDescendant(frame, 'graphicData')
     if (!graphicData?.getAttribute('uri')?.endsWith('/diagram')) return undefined
     const frameId = firstDescendant(frame, 'cNvPr')?.getAttribute('id') || ''
@@ -1915,7 +2817,7 @@ async function parseSmartArtCachedDrawing(frame: Element, rels: Map<string, Pptx
         const drawingRels = await loadRelationships(zip, relationshipPath(drawingRelation.target))
         const elements: PptxElement[] = []
         for (const node of children(tree)) {
-            elements.push(...(await parseSceneElements(node, drawingRels, zip, theme, warnings, urls, imageUrlCache, drawingTransform, animationTargetIds)))
+            elements.push(...(await parseSceneElements(node, drawingRels, zip, theme, warnings, urls, imageUrlCache, drawingTransform, animationTargetIds, sourceTheme, fillStyles)))
         }
         if (!elements.length) return undefined
         warnings.add('SmartArt uses its last saved diagram drawing; its data-driven layout is not regenerated in the browser.')
@@ -2040,7 +2942,7 @@ async function parseSmartArtTextFallback(frame: Element, rels: Map<string, PptxR
     }
 }
 
-async function parseOlePreview(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>): Promise<PptxElement | undefined> {
+async function parseOlePreview(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, fillStyles?: ParsedTheme): Promise<PptxElement | undefined> {
     const graphicData = firstDescendant(frame, 'graphicData')
     const ole = child(graphicData, 'oleObj')
     if (!ole && graphicData?.getAttribute('uri') !== OLE_GRAPHIC_DATA_URI) return undefined
@@ -2049,7 +2951,7 @@ async function parseOlePreview(frame: Element, rels: Map<string, PptxRelationshi
     const previewBlip = preview && firstDescendant(preview, 'blip')
     const previewRelation = rels.get(namespacedAttr(previewBlip, 'embed') || '')
     if (preview && previewRelation && !previewRelation.external && zip.file(previewRelation.target)) {
-        const picture = await parsePicture(preview, rels, zip, theme, warnings, urls, imageUrlCache)
+        const picture = await parsePicture(preview, rels, zip, theme, warnings, urls, imageUrlCache, fillStyles)
         if (picture.imageUrl) {
             warnings.add('An OLE object is displayed from its embedded preview image; its embedded or linked content is not opened.')
             const nonVisual = firstDescendant(frame, 'cNvPr')
@@ -2134,6 +3036,63 @@ function chartDataLabelFlagOverrides(dataLabels: Element | undefined, name: stri
     return overrides
 }
 
+function chartDataLabelTextStyle(dataLabels: Element | undefined, theme: Record<string, string>, warnings: Set<string>): PptxChartDataLabelStyle | undefined {
+    const textProperties = child(dataLabels, 'txPr')
+    if (!textProperties) return undefined
+    const runProperties = firstDescendant(textProperties, 'defRPr') || firstDescendant(textProperties, 'endParaRPr') || firstDescendant(textProperties, 'rPr')
+    if (!runProperties) {
+        warnings.add('Chart data label paragraph text styles are not rendered.')
+        return undefined
+    }
+    const parsed = resolveTextFonts(textStyle(runProperties, theme, warnings), '', theme, warnings)
+    if (
+        (parsed.underline && parsed.lineThrough && (
+            parsed.underlineStyle !== parsed.lineThroughStyle || parsed.underlineColor !== undefined || parsed.underlineThicknessEmu !== undefined
+        )) ||
+        parsed.fillPattern || (parsed.outlineWidth !== undefined && parsed.outlineWidth > 0) || parsed.shadow || parsed.shadows?.length || parsed.glow || parsed.glows?.length
+    ) warnings.add('Advanced chart data label decorations, outlines, and effects are simplified.')
+    if (parsed.fontFamilyEastAsia || parsed.fontFamilyComplexScript) warnings.add('East Asian and complex-script chart label fonts use browser fallback.')
+    const paragraphProperties = firstDescendant(textProperties, 'pPr')
+    const bodyProperties = firstDescendant(textProperties, 'bodyPr')
+    if (
+        (paragraphProperties && (paragraphProperties.attributes.length > 0 || children(paragraphProperties).some(node => node.localName !== 'defRPr'))) ||
+        (bodyProperties && (bodyProperties.attributes.length > 0 || children(bodyProperties).length > 0))
+    ) warnings.add('Chart data label paragraph layout and text orientation are simplified.')
+    const style: PptxChartDataLabelStyle = {}
+    if (parsed.fontFamily !== undefined) style.fontFamily = parsed.fontFamily
+    if (parsed.fontSizePt !== undefined) style.fontSizePt = parsed.fontSizePt
+    if (parsed.color !== undefined) style.color = parsed.color
+    if (parsed.bold !== undefined) style.bold = parsed.bold
+    if (parsed.italic !== undefined) style.italic = parsed.italic
+    if (parsed.letterSpacingPt !== undefined) style.letterSpacingPt = parsed.letterSpacingPt
+    if (parsed.baselineOffsetEm !== undefined) style.baselineOffsetEm = parsed.baselineOffsetEm
+    if (parsed.underline !== undefined) style.underline = parsed.underline
+    if (parsed.underlineStyle !== undefined) style.underlineStyle = parsed.underlineStyle
+    if (parsed.underlineColor !== undefined) style.underlineColor = parsed.underlineColor
+    if (parsed.underlineThicknessEmu !== undefined) style.underlineThicknessEmu = parsed.underlineThicknessEmu
+    if (parsed.lineThrough !== undefined) style.lineThrough = parsed.lineThrough
+    if (parsed.lineThroughStyle !== undefined) style.lineThroughStyle = parsed.lineThroughStyle
+    return Object.keys(style).length ? style : undefined
+}
+
+function chartDataLabelTextStyleOverrides(dataLabels: Element | undefined, theme: Record<string, string>, warnings: Set<string>): Record<number, PptxChartDataLabelStyle> {
+    const overrides: Record<number, PptxChartDataLabelStyle> = {}
+    for (const label of children(dataLabels, 'dLbl')) {
+        const index = numberAttr(child(label, 'idx'), 'val', -1)
+        const style = chartDataLabelTextStyle(label, theme, warnings)
+        if (index >= 0 && style) overrides[index] = style
+    }
+    return overrides
+}
+
+function mergeChartDataLabelTextStyleOverrides(...sources: Array<Record<number, PptxChartDataLabelStyle>>): Record<number, PptxChartDataLabelStyle> {
+    const result: Record<number, PptxChartDataLabelStyle> = {}
+    for (const source of sources) {
+        for (const [index, style] of Object.entries(source)) result[Number(index)] = {...result[Number(index)], ...style}
+    }
+    return result
+}
+
 const chartDataLabelPositions: PptxChartDataLabelPosition[] = ['bestFit', 'b', 'ctr', 'inBase', 'inEnd', 'l', 'outEnd', 'r', 't']
 
 function chartDataLabelPosition(dataLabels: Element | undefined): PptxChartDataLabelPosition | undefined {
@@ -2166,6 +3125,34 @@ function chartDataLabelSeparatorOverrides(dataLabels: Element | undefined): Reco
     return overrides
 }
 
+const chartMarkerSymbols = new Set<PptxChartMarkerSymbol>(['auto', 'circle', 'dash', 'diamond', 'dot', 'none', 'picture', 'plus', 'square', 'star', 'triangle', 'x'])
+
+function chartMarkerSymbol(marker: Element | undefined, warnings: Set<string>): PptxChartMarkerSymbol | undefined {
+    const symbolNode = child(marker, 'symbol')
+    if (!symbolNode) return undefined
+    const value = symbolNode.getAttribute('val')?.trim() || 'auto'
+    if (!chartMarkerSymbols.has(value as PptxChartMarkerSymbol)) {
+        warnings.add(`Unsupported chart marker symbol "${value}" is rendered as a circle.`)
+        return 'circle'
+    }
+    if (value === 'picture') {
+        warnings.add('Picture chart markers are rendered as circles.')
+        return 'circle'
+    }
+    return value as PptxChartMarkerSymbol
+}
+
+function chartMarkerSize(marker: Element | undefined, warnings: Set<string>): number | undefined {
+    const sizeNode = child(marker, 'size')
+    if (!sizeNode) return undefined
+    const value = Number(sizeNode.getAttribute('val'))
+    if (!Number.isInteger(value) || value < 2 || value > 72) {
+        warnings.add('An invalid chart marker size uses the default size.')
+        return undefined
+    }
+    return value
+}
+
 function chartNumberFormat(dataLabels: Element | undefined): string | undefined {
     const numberFormat = child(dataLabels, 'numFmt')
     if (!numberFormat || !['0', 'false'].includes((numberFormat.getAttribute('sourceLinked') || '1').toLowerCase())) return undefined
@@ -2190,14 +3177,26 @@ function chartAxisPosition(axis: Element | undefined, axisName: string, warnings
     return undefined
 }
 
-function chartMajorTickMark(axis: Element | undefined, axisName: string, warnings: Set<string>): PptxChartTickMark | undefined {
-    const node = child(axis, 'majorTickMark')
+function chartAxisTickMark(axis: Element | undefined, axisName: string, kind: 'major' | 'minor', warnings: Set<string>): PptxChartTickMark | undefined {
+    const node = child(axis, `${kind}TickMark`)
     if (!node) return undefined
     const value = node.getAttribute('val')
     const tickMark = value === null ? 'cross' : value
     if (['cross', 'in', 'none', 'out'].includes(tickMark)) return tickMark as PptxChartTickMark
-    warnings.add(`Unsupported chart ${axisName} major tick mark is ignored.`)
+    warnings.add(`Unsupported chart ${axisName} ${kind} tick mark is ignored.`)
     return undefined
+}
+
+function chartAxisSkip(axis: Element | undefined, name: 'tickLblSkip' | 'tickMarkSkip', warnings: Set<string>): number | undefined {
+    const node = child(axis, name)
+    if (!node) return undefined
+    const rawValue = node.getAttribute('val')?.trim() || ''
+    const value = Number(rawValue)
+    if (!/^\d+$/.test(rawValue) || !Number.isSafeInteger(value) || value < 1) {
+        warnings.add(`Invalid chart category-axis ${name} value is ignored.`)
+        return undefined
+    }
+    return value
 }
 
 function chartTickLabelPosition(axis: Element | undefined, axisName: string, warnings: Set<string>): PptxChartTickLabelPosition | undefined {
@@ -2246,10 +3245,11 @@ function chartValueAxis(axis: Element | undefined, warnings: Set<string>, axisNa
     if (!axis) return undefined
     const deleted = chartAxisDeleted(axis, axisName, warnings)
     const scaling = child(axis, 'scaling')
-    if (child(scaling, 'logBase')) {
-        warnings.add('Logarithmic chart axes are rendered with linear SVG scales.')
-        return deleted ? {deleted: true} : undefined
-    }
+    const logBaseNode = child(scaling, 'logBase')
+    const parsedLogBase = logBaseNode?.getAttribute('val')?.trim() || ''
+    const logBaseValue = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(parsedLogBase) ? Number(parsedLogBase) : NaN
+    const logBase = Number.isFinite(logBaseValue) && logBaseValue >= 2 && logBaseValue <= 1000 ? logBaseValue : undefined
+    if (logBaseNode && logBase === undefined) warnings.add(`Invalid chart ${axisName}-axis logarithmic base is ignored; c:logBase must be between 2 and 1000.`)
     const readBound = (name: 'min' | 'max') => {
         const node = child(scaling, name)
         if (!node) return undefined
@@ -2271,12 +3271,19 @@ function chartValueAxis(axis: Element | undefined, warnings: Set<string>, axisNa
     const majorUnitNode = child(axis, 'majorUnit')
     const majorUnit = majorUnitNode ? Number(majorUnitNode.getAttribute('val')) : undefined
     if (majorUnitNode && (!Number.isFinite(majorUnit) || majorUnit! <= 0)) warnings.add(`Invalid chart ${axisName}-axis major units are ignored.`)
+    const minorUnitNode = child(axis, 'minorUnit')
+    const minorUnit = minorUnitNode ? Number(minorUnitNode.getAttribute('val')) : undefined
+    if (minorUnitNode && (!Number.isFinite(minorUnit) || minorUnit! <= 0)) warnings.add(`Invalid chart ${axisName}-axis minor units are ignored.`)
     const numberFormatNode = child(axis, 'numFmt')
     const sourceLinked = (numberFormatNode?.getAttribute('sourceLinked') || '1').toLowerCase()
     const formatCode = numberFormatNode?.getAttribute('formatCode')?.trim()
     const position = chartAxisPosition(axis, axisName, warnings)
     const crossing = chartAxisCrossing(axis, axisName, warnings)
-    const majorTickMark = chartMajorTickMark(axis, axisName, warnings)
+    const majorTickMark = chartAxisTickMark(axis, axisName, 'major', warnings)
+    const minorTickMark = chartAxisTickMark(axis, axisName, 'minor', warnings)
+    if (minorTickMark && minorTickMark !== 'none' && !(Number.isFinite(minorUnit) && minorUnit! > 0)) warnings.add(logBase !== undefined
+        ? `Automatic chart ${axisName}-axis logarithmic minor intervals use base subdivisions.`
+        : `Automatic chart ${axisName}-axis minor intervals use four subdivisions per major interval.`)
     const tickLabelPosition = chartTickLabelPosition(axis, axisName, warnings)
     let numberFormat: string | undefined
     if (formatCode && ['0', 'false'].includes(sourceLinked)) {
@@ -2288,19 +3295,22 @@ function chartValueAxis(axis: Element | undefined, warnings: Set<string>, axisNa
     return {
         ...(min !== undefined ? {min} : {}),
         ...(max !== undefined ? {max} : {}),
+        ...(logBase !== undefined ? {logBase} : {}),
         ...(Number.isFinite(majorUnit) && majorUnit! > 0 ? {majorUnit} : {}),
+        ...(Number.isFinite(minorUnit) && minorUnit! > 0 ? {minorUnit} : {}),
         ...(numberFormat ? {numberFormat} : {}),
         ...(child(scaling, 'orientation')?.getAttribute('val') === 'maxMin' ? {reverse: true} : {}),
         ...(deleted ? {deleted: true} : {}),
         ...(child(axis, 'majorGridlines') ? {majorGridlines: true} : {}),
         ...(position ? {position} : {}),
         ...(majorTickMark ? {majorTickMark} : {}),
+        ...(minorTickMark ? {minorTickMark} : {}),
         ...(tickLabelPosition ? {tickLabelPosition} : {}),
         ...crossing
     }
 }
 
-async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>): Promise<PptxElement | undefined> {
+async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, sourceTheme: Record<string, string>): Promise<PptxElement | undefined> {
     const reference = firstDescendant(frame, 'chart')
     const relation = rels.get(namespacedAttr(reference, 'id') || '')
     if (!reference || !relation || relation.external) {
@@ -2313,6 +3323,11 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
         return undefined
     }
     const xml = parseXml(await part.async('string'), relation.target)
+    const chartDate1904 = chartBoolean(child(xml.documentElement, 'date1904')) ?? false
+    // Chart clrMapOvr carries CT_ColorMapping attributes directly on the element.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.charts.colormapoverride
+    const colorMap = child(xml.documentElement, 'clrMapOvr')
+    if (colorMap) theme = mappedThemeColors(sourceTheme, readColorMap(colorMap, {}, warnings), theme)
     const chart = firstDescendant(xml.documentElement, 'chart')
     const plotArea = firstDescendant(chart, 'plotArea')
     const supported = ['barChart', 'lineChart', 'areaChart', 'pieChart', 'doughnutChart', 'scatterChart', 'bubbleChart', 'radarChart', 'stockChart']
@@ -2382,7 +3397,7 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     if (!['standard', 'clustered', 'stacked', 'percentStacked'].includes(groupingValue) || (!['bar', 'line', 'area'].includes(type) && stackedGrouping)) {
         warnings.add('Unsupported chart grouping is rendered as grouped series.')
     }
-    if (!isPieLike && children(plotArea).some(item => ['catAx', 'dateAx', 'serAx'].includes(item.localName))) warnings.add('Chart date and series axes, category-axis number formatting, minor tick marks, and advanced styling are simplified.')
+    if (!isPieLike && children(plotArea).some(item => ['catAx', 'dateAx', 'serAx'].includes(item.localName))) warnings.add('Chart date and series axes, minor tick marks, and advanced styling are simplified.')
     const legendNode = child(chart, 'legend')
     const legendPositionValue = child(legendNode, 'legendPos')?.getAttribute('val') || 'r'
     const legendPosition = legendPositionValue === 'b' ? 'bottom' : legendPositionValue === 't' ? 'top' : legendPositionValue === 'l' ? 'left' : legendPositionValue === 'r' ? 'right' : legendPositionValue === 'tr' ? 'topRight' : undefined
@@ -2450,6 +3465,7 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
         return Number.isFinite(number) ? number : null
     })
     const chartDataLabels = child(typeNode, 'dLbls')
+    const chartShowLegendKey = chartDataLabelFlag(chartDataLabels, 'showLegendKey') ?? false
     const chartShowValueLabels = chartDataLabelFlag(chartDataLabels, 'showVal') ?? false
     const chartShowPercentLabels = chartDataLabelFlag(chartDataLabels, 'showPercent') ?? false
     const chartShowCategoryNameLabels = chartDataLabelFlag(chartDataLabels, 'showCatName') ?? false
@@ -2468,7 +3484,7 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     if (numberFormatNodes.some(item => ['0', 'false'].includes((item.getAttribute('sourceLinked') || '1').toLowerCase()) && item.getAttribute('formatCode') && !isSupportedChartNumberFormat(item.getAttribute('formatCode')!.trim()))) {
         warnings.add('Unsupported chart number formats are rendered as raw values.')
     }
-    if (allDataLabelSettings.some(item => chartBoolean(child(item, 'showLegendKey')) === true)) warnings.add('Chart legend-key data labels are not rendered.')
+    if (allDataLabelSettings.some(item => chartBoolean(child(item, 'showLegendKey')) === true)) warnings.add('Chart data-label legend keys use simplified square glyphs.')
     if (!isPieLike && allDataLabelSettings.some(item => chartBoolean(child(item, 'showPercent')) === true)) {
         warnings.add('Percentage data labels are rendered only for pie and doughnut charts.')
     }
@@ -2480,7 +3496,7 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
         })
     )
         warnings.add('Unsupported chart data label positions use the default placement.')
-    if (allDataLabelSettings.some(item => ['txPr', 'spPr'].some(name => !!child(item, name)))) warnings.add('Chart data label styling is simplified.')
+    if (allDataLabelSettings.some(item => !!child(item, 'spPr'))) warnings.add('Chart data label backgrounds, outlines, and shape effects are not rendered.')
     if (seriesNodes.length > 12) warnings.add('Chart series beyond 12 are omitted.')
     if (isBubble && seriesNodes.some(item => chartBoolean(child(item, 'bubble3D')) === true)) warnings.add('Three-dimensional bubbles are approximated as flat circles.')
     if (isBubble) warnings.add('Bubble radii preserve relative area or width and c:bubbleScale, with the Office default pixel size approximated.')
@@ -2501,14 +3517,15 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
                 }
             }
             const marker = child(item, 'marker')
-            const markerSymbol = child(marker, 'symbol')?.getAttribute('val')
+            const markerSymbol = chartMarkerSymbol(marker, warnings)
+            const markerSize = chartMarkerSize(marker, warnings)
             const groupDataLabels = child(descriptor.groupNode, 'dLbls')
+            const groupLabelStyle = chartDataLabelTextStyle(groupDataLabels, theme, warnings)
+            const groupLabelStyleOverrides = chartDataLabelTextStyleOverrides(groupDataLabels, theme, warnings)
             const groupShowMarkers = chartBoolean(child(descriptor.groupNode, 'marker')) ?? true
-            if (isScatter && markerSymbol && !['auto', 'circle', 'none'].includes(markerSymbol)) warnings.add('Scatter marker symbols other than circles are approximated as circles.')
-            if (isRadar && markerSymbol && !['auto', 'circle', 'none'].includes(markerSymbol)) warnings.add('Radar marker symbols other than circles are approximated as circles.')
-            const radarMarkerSizeValue = child(marker, 'size')?.getAttribute('val')
-            const radarMarkerSize = radarMarkerSizeValue == null ? undefined : Number(radarMarkerSizeValue)
-            if (isRadar && radarMarkerSizeValue != null && (!Number.isInteger(radarMarkerSize) || radarMarkerSize! < 2 || radarMarkerSize! > 72)) warnings.add('An invalid radar marker size uses the default size.')
+            const radarMarkerSize = markerSize
+            const markerSymbolOverrides: Record<number, PptxChartMarkerSymbol> = {}
+            const markerSizeOverrides: Record<number, number> = {}
             const lineSettings = child(child(item, 'spPr'), 'ln')
             const seriesFillColor = chartFillColor(child(item, 'spPr'), theme, warnings, palette[index % palette.length]!)
             const seriesColor = (isRadar || descriptor.chartType === 'line') && lineSettings ? chartFillColor(lineSettings, theme, warnings, seriesFillColor) : seriesFillColor
@@ -2517,7 +3534,14 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
             const pointColors: Record<number, string> = {}
             for (const point of children(item, 'dPt')) {
                 const pointIndex = numberAttr(child(point, 'idx'), 'val', -1)
-                if (pointIndex >= 0 && pointIndex < 128) pointColors[pointIndex] = chartFillColor(child(point, 'spPr'), theme, warnings, palette[pointIndex % palette.length]!)
+                if (pointIndex < 0 || pointIndex >= 128) continue
+                const pointProperties = child(point, 'spPr')
+                if (pointProperties) pointColors[pointIndex] = chartFillColor(pointProperties, theme, warnings, palette[pointIndex % palette.length]!)
+                const pointMarker = child(point, 'marker')
+                const pointMarkerSymbol = chartMarkerSymbol(pointMarker, warnings)
+                const pointMarkerSize = chartMarkerSize(pointMarker, warnings)
+                if (pointMarkerSymbol !== undefined) markerSymbolOverrides[pointIndex] = pointMarkerSymbol
+                if (pointMarkerSize !== undefined) markerSizeOverrides[pointIndex] = pointMarkerSize
             }
             const tx = child(item, 'tx')
             const name =
@@ -2527,6 +3551,9 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
                 firstDescendant(tx, 'v')?.textContent ||
                 `Series ${index + 1}`
             const dataLabels = child(item, 'dLbls')
+            const seriesLabelStyle = chartDataLabelTextStyle(dataLabels, theme, warnings)
+            const seriesLabelStyleOverrides = chartDataLabelTextStyleOverrides(dataLabels, theme, warnings)
+            const groupShowLegendKey = chartDataLabelFlag(groupDataLabels, 'showLegendKey') ?? (comboMode ? false : chartShowLegendKey)
             const groupShowValueLabels = chartDataLabelFlag(groupDataLabels, 'showVal') ?? (comboMode ? false : chartShowValueLabels)
             const groupShowPercentLabels = chartDataLabelFlag(groupDataLabels, 'showPercent') ?? (comboMode ? false : chartShowPercentLabels)
             const groupShowBubbleSizeLabels = chartDataLabelFlag(groupDataLabels, 'showBubbleSize') ?? (comboMode ? false : chartShowBubbleSizeLabels)
@@ -2561,12 +3588,20 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
                     radarShowMarker: markerSymbol ? markerSymbol !== 'none' : radarStyle === 'marker',
                     ...(radarMarkerSize !== undefined && Number.isInteger(radarMarkerSize) && radarMarkerSize >= 2 && radarMarkerSize <= 72 ? {radarMarkerSize} : {})
                 } : {}),
+                ...(markerSymbol !== undefined ? {markerSymbol} : {}),
+                ...(markerSize !== undefined ? {markerSize} : {}),
+                ...(Object.keys(markerSymbolOverrides).length ? {markerSymbolOverrides} : {}),
+                ...(Object.keys(markerSizeOverrides).length ? {markerSizeOverrides} : {}),
                 color: seriesColor,
                 pointColors,
+                showLegendKey: chartDataLabelFlag(dataLabels, 'showLegendKey') ?? groupShowLegendKey,
+                legendKeyOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showLegendKey'), ...chartDataLabelFlagOverrides(dataLabels, 'showLegendKey')},
                 showValueLabels: chartDataLabelFlag(dataLabels, 'showVal') ?? groupShowValueLabels,
                 valueLabelOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showVal'), ...chartDataLabelFlagOverrides(dataLabels, 'showVal')},
                 dataLabelPosition: chartDataLabelPosition(dataLabels) ?? groupLabelPosition,
                 dataLabelPositionOverrides: {...chartDataLabelPositionOverrides(groupDataLabels), ...chartDataLabelPositionOverrides(dataLabels)},
+                ...((groupLabelStyle || seriesLabelStyle) ? {dataLabelStyle: {...groupLabelStyle, ...seriesLabelStyle}} : {}),
+                dataLabelStyleOverrides: mergeChartDataLabelTextStyleOverrides(groupLabelStyleOverrides, seriesLabelStyleOverrides),
                 showPercentLabels: chartDataLabelFlag(dataLabels, 'showPercent') ?? groupShowPercentLabels,
                 percentLabelOverrides: {...chartDataLabelFlagOverrides(groupDataLabels, 'showPercent'), ...chartDataLabelFlagOverrides(dataLabels, 'showPercent')},
                 showBubbleSizeLabels: chartDataLabelFlag(dataLabels, 'showBubbleSize') ?? groupShowBubbleSizeLabels,
@@ -2667,10 +3702,66 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     const parsedValueAxis = isPieLike ? undefined : chartValueAxis(isXYChart ? scatterYAxisNode : primaryValueAxisNode, warnings)
     const categoryAxisNodes = isPieLike || isXYChart ? [] : children(plotArea, 'catAx')
     const categoryAxis = categoryAxisNodes.find(axis => child(axis, 'axId')?.getAttribute('val') === primaryGroupAxisIds[0]) || categoryAxisNodes[0]
-    let categoryAxisPosition = isPieLike || isXYChart ? undefined : chartAxisPosition(categoryAxis, 'category', warnings)
-    const categoryAxisMajorTickMark = isPieLike || isXYChart ? undefined : chartMajorTickMark(categoryAxis, 'category', warnings)
-    const categoryAxisTickLabelPosition = isPieLike || isXYChart ? undefined : chartTickLabelPosition(categoryAxis, 'category', warnings)
-    const categoryAxisDeleted = !isPieLike && !isXYChart && chartAxisDeleted(categoryAxis, 'category', warnings)
+    const dateAxisNodes = isPieLike || isXYChart ? [] : children(plotArea, 'dateAx')
+    const dateAxis = dateAxisNodes[0]
+    const dateAxisScaling = child(dateAxis, 'scaling')
+    const dateAxisBound = (name: 'min' | 'max') => {
+        const raw = child(dateAxisScaling, name)?.getAttribute('val')
+        const value = raw === null || raw === undefined ? NaN : Number(raw)
+        return Number.isFinite(value) ? value : undefined
+    }
+    const dateAxisMinimum = dateAxisBound('min')
+    const dateAxisMaximum = dateAxisBound('max')
+    const dateAxisReverse = child(dateAxisScaling, 'orientation')?.getAttribute('val') === 'maxMin'
+    const dateAxisMajorUnitNode = child(dateAxis, 'majorUnit')
+    const dateAxisMajorUnitRaw = dateAxisMajorUnitNode?.getAttribute('val')
+    const dateAxisMajorUnitValue = dateAxisMajorUnitRaw === null || dateAxisMajorUnitRaw === undefined ? NaN : Number(dateAxisMajorUnitRaw)
+    const dateAxisMajorUnit = Number.isFinite(dateAxisMajorUnitValue) && dateAxisMajorUnitValue > 0 ? dateAxisMajorUnitValue : undefined
+    const dateAxisMajorTimeUnitNode = child(dateAxis, 'majorTimeUnit')
+    const dateAxisMajorTimeUnitValue = dateAxisMajorTimeUnitNode?.getAttribute('val')
+    const dateAxisMajorTimeUnit = dateAxisMajorTimeUnitValue === 'days' || dateAxisMajorTimeUnitValue === 'months' || dateAxisMajorTimeUnitValue === 'years'
+        ? dateAxisMajorTimeUnitValue
+        : undefined
+    const dateAxisMinorUnitNode = child(dateAxis, 'minorUnit')
+    const dateAxisMinorUnitValue = dateAxisMinorUnitNode?.getAttribute('val')
+    const parsedDateAxisMinorUnit = dateAxisMinorUnitValue === null || dateAxisMinorUnitValue === undefined ? NaN : Number(dateAxisMinorUnitValue)
+    const dateAxisMinorUnit = Number.isFinite(parsedDateAxisMinorUnit) && parsedDateAxisMinorUnit > 0 ? parsedDateAxisMinorUnit : undefined
+    const dateAxisMinorTimeUnitValue = child(dateAxis, 'minorTimeUnit')?.getAttribute('val')
+    const dateAxisMinorTimeUnit = dateAxisMinorTimeUnitValue === 'days' || dateAxisMinorTimeUnitValue === 'months' || dateAxisMinorTimeUnitValue === 'years'
+        ? dateAxisMinorTimeUnitValue
+        : undefined
+    const categoryScaleAxis = categoryAxis || dateAxis
+    const categoryAxisNumberFormatNode = child(categoryAxis || dateAxis, 'numFmt')
+    const categoryAxisFormatCode = categoryAxisNumberFormatNode?.getAttribute('formatCode')?.trim()
+    const categoryAxisSourceLinked = (categoryAxisNumberFormatNode?.getAttribute('sourceLinked') || '1').toLowerCase()
+    let categoryAxisNumberFormat: string | undefined
+    if (categoryAxisFormatCode && ['0', 'false'].includes(categoryAxisSourceLinked)) {
+        if (isSupportedChartNumberFormat(categoryAxisFormatCode)) categoryAxisNumberFormat = categoryAxisFormatCode
+        else warnings.add('Unsupported chart number formats are rendered as raw values.')
+    } else if (categoryAxisFormatCode) {
+        warnings.add('Source-linked chart number formats use raw cached values; embedded workbook number styles are not resolved.')
+    }
+    if (dateAxis && (dateAxisMajorUnitNode || dateAxisMajorTimeUnitNode)) {
+        if (!dateAxisMajorUnit) warnings.add('A date-axis c:majorUnit must be a positive number; cached category labels are used.')
+        if (!dateAxisMajorTimeUnit) warnings.add('A date-axis c:majorTimeUnit must be days, months, or years; cached category labels are used.')
+        if (!dateAxisMajorUnit || !dateAxisMajorTimeUnit) warnings.add('Explicit date-axis major ticks require both a valid c:majorUnit and c:majorTimeUnit.')
+    } else if (dateAxis) {
+        warnings.add('Automatic date-axis major intervals are approximated; cached category labels are used.')
+    }
+    if (dateAxis && (dateAxisMinorUnitNode || child(dateAxis, 'minorTimeUnit')) && (!dateAxisMinorUnit || !dateAxisMinorTimeUnit || (dateAxisMinorTimeUnit !== 'days' && !Number.isSafeInteger(dateAxisMinorUnit)))) {
+        warnings.add('Date-axis minor ticks require a supported positive c:minorUnit and c:minorTimeUnit; automatic subdivisions are used.')
+    }
+    if (dateAxisNodes.length > 1) warnings.add('Secondary chart date axes are omitted.')
+    let categoryAxisPosition = isPieLike || isXYChart ? undefined : chartAxisPosition(categoryScaleAxis, 'category', warnings)
+    const categoryAxisMajorTickMark = isPieLike || isXYChart ? undefined : chartAxisTickMark(categoryScaleAxis, 'category', 'major', warnings)
+    const categoryAxisMinorTickMark = isPieLike || isXYChart ? undefined : chartAxisTickMark(categoryScaleAxis, 'category', 'minor', warnings)
+    const categoryAxisTickLabelSkip = categoryAxis ? chartAxisSkip(categoryAxis, 'tickLblSkip', warnings) : undefined
+    const categoryAxisTickMarkSkip = categoryAxis ? chartAxisSkip(categoryAxis, 'tickMarkSkip', warnings) : undefined
+    if (dateAxis && categoryAxisMinorTickMark && categoryAxisMinorTickMark !== 'none' && (!dateAxisMinorUnit || !dateAxisMinorTimeUnit)) {
+        warnings.add('Automatic date-axis minor intervals use four subdivisions per major interval.')
+    }
+    const categoryAxisTickLabelPosition = isPieLike || isXYChart ? undefined : chartTickLabelPosition(categoryScaleAxis, 'category', warnings)
+    const categoryAxisDeleted = !isPieLike && !isXYChart && chartAxisDeleted(categoryScaleAxis, 'category', warnings)
     let xAxisPosition = isXYChart ? chartAxisPosition(scatterXAxisNode, 'x', warnings) : undefined
     if (isXYChart && xAxisPosition && !['b', 't'].includes(xAxisPosition)) {
         warnings.add('An XY chart x-axis must be positioned on the top or bottom; its default side is used.')
@@ -2696,19 +3787,51 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
     })) : []
     const resolveAxis = (axis: ReturnType<typeof chartValueAxis>, values: number[], axisName: 'value' | 'x', includeZero: boolean): PptxChartAxis | undefined => {
         if (!axis) return undefined
-        const dataMin = values.length ? Math.min(...values) : 0
-        const dataMax = values.length ? Math.max(...values) : 0
-        let min = axis.min ?? (includeZero ? Math.min(0, dataMin) : dataMin)
-        let max = axis.max ?? (includeZero ? Math.max(0, dataMax) : dataMax)
+        let logBase = axis.logBase
+        let rangeValues = values
+        if (logBase !== undefined) {
+            const positiveValues = values.filter(value => value > 0)
+            if (axis.min !== undefined && axis.min <= 0) {
+                warnings.add(`A logarithmic chart ${axisName}-axis requires a positive minimum; the automatic minimum is used.`)
+                delete axis.min
+            }
+            if (axis.max !== undefined && axis.max <= 0) {
+                warnings.add(`A logarithmic chart ${axisName}-axis requires a positive maximum; the automatic maximum is used.`)
+                delete axis.max
+            }
+            if (!positiveValues.length && (axis.min === undefined || axis.max === undefined)) {
+                warnings.add(`A logarithmic chart ${axisName}-axis without positive cached values and two explicit positive bounds is rendered linearly.`)
+                delete axis.logBase
+                logBase = undefined
+            } else {
+                rangeValues = positiveValues
+            }
+        }
+        const dataMin = rangeValues.length ? Math.min(...rangeValues) : 0
+        const dataMax = rangeValues.length ? Math.max(...rangeValues) : 0
+        const roundToLogPower = (value: number, direction: 'floor' | 'ceil') => {
+            if (!(value > 0)) return undefined
+            const exponent = Math.log(value) / Math.log(logBase!)
+            const rounded = Math.pow(logBase!, direction === 'floor' ? Math.floor(exponent + 1e-12) : Math.ceil(exponent - 1e-12))
+            return Number.isFinite(rounded) && rounded > 0 ? rounded : value
+        }
+        const automaticLogMinimum = logBase !== undefined && dataMin > 0 ? roundToLogPower(dataMin, 'floor')! : 1
+        const automaticLogMaximum = logBase !== undefined && dataMax > 0 ? roundToLogPower(dataMax, 'ceil')! : automaticLogMinimum * (logBase ?? 10)
+        let min = axis.min ?? (logBase !== undefined ? automaticLogMinimum : includeZero ? Math.min(0, dataMin) : dataMin)
+        let max = axis.max ?? (logBase !== undefined ? automaticLogMaximum : includeZero ? Math.max(0, dataMax) : dataMax)
         if (min >= max) {
             warnings.add(`Chart ${axisName}-axis bounds conflict with the data range; data-driven bounds are used.`)
-            min = includeZero ? Math.min(0, dataMin) : dataMin
-            max = includeZero ? Math.max(0, dataMax) : dataMax
+            min = logBase !== undefined ? automaticLogMinimum : includeZero ? Math.min(0, dataMin) : dataMin
+            max = logBase !== undefined ? automaticLogMaximum : includeZero ? Math.max(0, dataMax) : dataMax
             delete axis.min
             delete axis.max
         }
         if (min === max) {
-            if (includeZero) max = min + 1
+            if (logBase !== undefined) {
+                const expanded = min * logBase
+                if (Number.isFinite(expanded) && expanded > min) max = expanded
+                else min /= logBase
+            } else if (includeZero) max = min + 1
             else {
                 const padding = Math.abs(min) * 0.05 || 0.5
                 min -= padding
@@ -2716,9 +3839,14 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
             }
         }
         if (axis.crossesAt !== undefined && (axis.crossesAt < min || axis.crossesAt > max)) warnings.add(`A chart ${axisName}-axis crossing value is outside the displayed range and is clamped to the nearest bound.`)
-        if (axis.majorUnit && Math.floor((max - min) / axis.majorUnit + 1e-9) > 100) {
+        const intervalRange = logBase !== undefined ? Math.log(max / min) / Math.log(logBase) : max - min
+        if (axis.majorUnit && Math.floor(intervalRange / axis.majorUnit + 1e-9) > 100) {
             warnings.add(`Chart ${axisName}-axis major units produce too many ticks and are ignored.`)
             delete axis.majorUnit
+        }
+        if (axis.minorUnit && axis.minorTickMark !== 'none' && Math.floor(intervalRange / axis.minorUnit + 1e-9) > 512) {
+            warnings.add(`Chart ${axisName}-axis minor units produce too many ticks and are ignored.`)
+            delete axis.minorUnit
         }
         return {...axis, min, max}
     }
@@ -2763,9 +3891,51 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
         valueAxis = resolveAxis(parsedValueAxis, axisValues, 'value', !isXYChart)
     }
     const xAxis = resolveAxis(parsedXAxis, xyPoints.map(point => point.x), 'x', false)
+    let omittedLogAxisValues = false
+    for (const item of series) {
+        const itemValueAxis = valueAxes?.find(axis => axis.id === item.valueAxisId)?.axis || valueAxis
+        if (itemValueAxis?.logBase) {
+            item.values = item.values.map(value => {
+                if (value !== null && value <= 0) {
+                    omittedLogAxisValues = true
+                    return null
+                }
+                return value
+            })
+        }
+        if (xAxis?.logBase && item.xValues) {
+            item.xValues = item.xValues.map(value => {
+                if (value !== null && value <= 0) {
+                    omittedLogAxisValues = true
+                    return null
+                }
+                return value
+            })
+        }
+    }
+    if (omittedLogAxisValues) warnings.add('Non-positive cached values on logarithmic chart axes are omitted because log scales require positive values.')
     const categories = isXYChart ? [] : chartCache(child(seriesNodes[0], 'cat'), warnings)
     const pointCount = isXYChart ? 0 : Math.min(128, Math.max(categories.length, ...series.map(item => item.values.length), 0))
     const labels = Array.from({length: pointCount}, (_, index) => categories[index] || String(index + 1))
+    const dateAxisValues = dateAxis && categories.length > 0 && categories.length === pointCount
+        && categories.every(category => category !== null && category.trim() !== '' && Number.isFinite(Number(category)))
+        ? categories.map(category => Number(category))
+        : undefined
+    if (dateAxis && !dateAxisValues) warnings.add('Date-axis categories without complete numeric cached dates use evenly spaced positions.')
+    if (dateAxis && dateAxisValues && dateAxisMajorUnit !== undefined && dateAxisMajorTimeUnit) {
+        const minimum = dateAxisMinimum ?? Math.min(...dateAxisValues)
+        const maximum = dateAxisMaximum ?? Math.max(...dateAxisValues)
+        if (!(maximum > minimum) || !getChartDateAxisMajorTicks(minimum, maximum, dateAxisMajorUnit, dateAxisMajorTimeUnit, chartDate1904)) {
+            warnings.add('Date-axis major interval is outside the supported calendar range or exceeds 101 ticks; cached category labels are used.')
+        }
+    }
+    if (dateAxis && dateAxisValues && dateAxisMinorUnit !== undefined && dateAxisMinorTimeUnit) {
+        const minimum = dateAxisMinimum ?? Math.min(...dateAxisValues)
+        const maximum = dateAxisMaximum ?? Math.max(...dateAxisValues)
+        if (!(maximum > minimum) || !getChartDateAxisMajorTicks(minimum, maximum, dateAxisMinorUnit, dateAxisMinorTimeUnit, chartDate1904)) {
+            warnings.add('Date-axis minor interval is outside the supported calendar range or exceeds 101 ticks; automatic subdivisions are used.')
+        }
+    }
     if (isRadar && series.some(item => labels.some((_label, index) => item.values[index] == null))) warnings.add('Radar chart gaps are left open; filled radar areas require every category value.')
     if (isRadar && labels.length < 3) warnings.add('Radar charts with fewer than three categories have limited geometry.')
     if (stock && labels.some((_label, index) => [stock.highIndex, stock.lowIndex, stock.closeIndex, stock.openIndex].some(seriesIndex => seriesIndex !== undefined && series[seriesIndex]?.values[index] == null))) warnings.add('Stock chart categories with missing price values are omitted.')
@@ -2808,14 +3978,28 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
             series,
             ...(chartLabelSeparator !== undefined ? {labelSeparator: chartLabelSeparator} : {}),
             ...(chartValueFormat ? {numberFormat: chartValueFormat} : {}),
+            ...(chartDate1904 ? {date1904: true} : {}),
+            ...(dateAxisValues ? {dateAxis: {
+                values: dateAxisValues,
+                ...(dateAxisMinimum !== undefined ? {min: dateAxisMinimum} : {}),
+                ...(dateAxisMaximum !== undefined ? {max: dateAxisMaximum} : {}),
+                ...(dateAxisReverse ? {reverse: true} : {}),
+                ...(dateAxisMajorUnit !== undefined ? {majorUnit: dateAxisMajorUnit} : {}),
+                ...(dateAxisMajorTimeUnit ? {majorTimeUnit: dateAxisMajorTimeUnit} : {}),
+                ...(dateAxisMinorUnit && dateAxisMinorTimeUnit && getChartDateAxisMajorTicks(dateAxisMinimum ?? Math.min(...dateAxisValues), dateAxisMaximum ?? Math.max(...dateAxisValues), dateAxisMinorUnit, dateAxisMinorTimeUnit, chartDate1904) ? {minorUnit: dateAxisMinorUnit, minorTimeUnit: dateAxisMinorTimeUnit} : {}),
+            }} : {}),
             ...(valueAxis ? {valueAxis} : {}),
             ...(xAxis ? {xAxis: {...xAxis, ...(xAxisPosition ? {position: xAxisPosition} : {})}} : {}),
             ...(valueAxes ? {valueAxes} : {}),
+            ...(categoryAxisNumberFormat ? {categoryAxisNumberFormat} : {}),
             ...(categoryAxisPosition ? {categoryAxisPosition} : {}),
             ...(categoryAxisDeleted ? {categoryAxisDeleted: true} : {}),
-            ...(categoryAxis && child(categoryAxis, 'majorGridlines') ? {categoryAxisMajorGridlines: true} : {}),
+            ...(categoryScaleAxis && child(categoryScaleAxis, 'majorGridlines') ? {categoryAxisMajorGridlines: true} : {}),
             ...(categoryAxisMajorTickMark ? {categoryAxisMajorTickMark} : {}),
+            ...(categoryAxisMinorTickMark ? {categoryAxisMinorTickMark} : {}),
             ...(categoryAxisTickLabelPosition ? {categoryAxisTickLabelPosition} : {}),
+            ...(categoryAxisTickLabelSkip ? {categoryAxisTickLabelSkip} : {}),
+            ...(categoryAxisTickMarkSkip ? {categoryAxisTickMarkSkip} : {}),
             ...(categoryAxisCrossing.crosses ? {categoryAxisCrosses: categoryAxisCrossing.crosses} : {}),
             ...(categoryAxisCrossing.crossesAt !== undefined ? {categoryAxisCrossesAt: categoryAxisCrossing.crossesAt} : {}),
             ...(legendNode
@@ -2836,7 +4020,47 @@ async function parseChart(frame: Element, rels: Map<string, PptxRelationship>, z
 type ParsedTheme = {
     colors: Record<string, string>
     fillStyles: Element[]
+    lineStyles: Element[]
+    effectStyles: Element[]
     backgroundFillStyles: Element[]
+}
+
+const DEFAULT_COLOR_MAP: Record<string, string> = {
+    bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2',
+    accent1: 'accent1', accent2: 'accent2', accent3: 'accent3',
+    accent4: 'accent4', accent5: 'accent5', accent6: 'accent6',
+    hlink: 'hlink', folHlink: 'folHlink'
+}
+
+function resolveColorMap(root: Element | undefined, inherited: Record<string, string>, master: Record<string, string>, warnings: Set<string>): Record<string, string> {
+    // An explicit masterClrMapping selects the master, even when the layout has an override.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.colormapoverride
+    const override = child(root, 'clrMapOvr')
+    const mapping = child(root, 'clrMap') || child(override, 'overrideClrMapping')
+    if (!mapping) {
+        if (child(override, 'masterClrMapping')) return master
+        if (override) warnings.add('An empty or unsupported color-map override inherited its parent mapping.')
+        return inherited
+    }
+    return readColorMap(mapping, inherited, warnings)
+}
+
+function readColorMap(mapping: Element, inherited: Record<string, string>, warnings: Set<string>): Record<string, string> {
+    const result = {...inherited}
+    for (const slot of Object.keys(DEFAULT_COLOR_MAP)) {
+        const target = mapping.getAttribute(slot)
+        if (target === null) warnings.add('An incomplete color map inherited its unspecified entries.')
+        else if (!Object.hasOwn(DEFAULT_THEME, target)) warnings.add(`The invalid color-map target "${target}" for ${slot} inherited its parent entry.`)
+        else result[slot] = target
+    }
+    return result
+}
+
+function mappedThemeColors(colors: Record<string, string>, mapping: Record<string, string>, inherited: Record<string, string> = colors): Record<string, string> {
+    const result = {...inherited}
+    // Read every target from the original theme so accent swaps are simultaneous, not recursive.
+    for (const [slot, target] of Object.entries(mapping)) result[slot] = colors[target] || DEFAULT_THEME[target] || '#000000'
+    return result
 }
 
 function parseTheme(xml: XMLDocument | undefined): ParsedTheme {
@@ -2845,8 +4069,8 @@ function parseTheme(xml: XMLDocument | undefined): ParsedTheme {
     for (const slot of children(scheme)) {
         const color = children(slot)[0]
         if (!color) continue
-        const value = color.getAttribute(color.localName === 'sysClr' ? 'lastClr' : 'val')
-        if (value) result[slot.localName] = value.startsWith('#') ? value : `#${value}`
+        const value = readColor(color, result)
+        if (value) result[slot.localName] = value
     }
     const fonts = xml && firstDescendant(xml.documentElement, 'fontScheme')
     for (const role of ['major', 'minor']) {
@@ -2855,11 +4079,18 @@ function parseTheme(xml: XMLDocument | undefined): ParsedTheme {
             const typeface = child(fontSet, script)?.getAttribute('typeface')?.trim()
             if (typeface) result[`font-${role}-${script}`] = typeface
         }
+        for (const font of children(fontSet, 'font')) {
+            const script = font.getAttribute('script')?.trim()
+            const typeface = font.getAttribute('typeface')?.trim()
+            if (script && /^[A-Za-z]{4}$/.test(script) && typeface) result[`font-${role}-script-${script[0]!.toUpperCase()}${script.slice(1).toLowerCase()}`] = typeface
+        }
     }
     const formatScheme = firstDescendant(xml?.documentElement, 'fmtScheme')
     return {
         colors: result,
         fillStyles: children(child(formatScheme, 'fillStyleLst')),
+        lineStyles: children(child(formatScheme, 'lnStyleLst')),
+        effectStyles: children(child(formatScheme, 'effectStyleLst')),
         backgroundFillStyles: children(child(formatScheme, 'bgFillStyleLst'))
     }
 }
@@ -2882,7 +4113,7 @@ async function imageUrlFor(target: string | undefined, zip: JSZip, urls: string[
     return url
 }
 
-async function resolvePictureBullets(elements: PptxElement[], zip: JSZip, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>): Promise<void> {
+async function resolvePictureBullets(elements: Pick<PptxElement, 'paragraphs' | 'table'>[], zip: JSZip, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>): Promise<void> {
     for (const element of elements) {
         const paragraphs = [...element.paragraphs, ...(element.table?.rows.flatMap(row => row.cells.flatMap(cell => cell.paragraphs)) || [])]
         for (const paragraph of paragraphs) {
@@ -3058,6 +4289,8 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
     const vortexDirections = ['l', 'r', 'u', 'd']
     const leftRightDirections = ['l', 'r']
     const rippleDirections = ['center', 'lu', 'ru', 'ld', 'rd']
+    // ECMA-376 CT_SplitTransition defaults to dir=out and orient=horz.
+    // https://ecma-international.org/publications-and-standards/standards/ecma-376/
     // MS-PPTX CT_GlitterTransition uses side direction and diamond/hexagon pattern.
     // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-pptx/93a73ee5-6799-478f-8c1f-3db23726e10e
     const glitterPatterns = ['diamond', 'hexagon']
@@ -3066,6 +4299,10 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
             ? stripsDirections.includes(rawDirection || 'ld')
                 ? rawDirection || 'ld'
                 : 'ld'
+            : effect === 'split'
+              ? ['in', 'out'].includes(rawDirection || 'out')
+                  ? rawDirection || 'out'
+                  : 'out'
             : effect === 'shred'
               ? ['in', 'out'].includes(rawDirection || 'in')
                   ? rawDirection || 'in'
@@ -3094,7 +4331,7 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
                           ? rippleDirections.includes(rawDirection || 'center')
                               ? rawDirection || 'center'
                               : 'center'
-                          : rawDirection || (effect === 'zoom' || effect === 'split' ? 'in' : 'l')
+                          : rawDirection || (effect === 'zoom' ? 'in' : 'l')
     if (effect === 'strips' && rawDirection && !stripsDirections.includes(rawDirection)) warnings.add(`The strips transition direction "${rawDirection}" was normalized to ld.`)
     if (effect === 'shred' && rawDirection && !['in', 'out'].includes(rawDirection)) warnings.add(`The shred transition direction "${rawDirection}" was normalized to in.`)
     if (effect === 'flythrough' && rawDirection && !['in', 'out'].includes(rawDirection)) warnings.add(`The flythrough transition direction "${rawDirection}" was normalized to in.`)
@@ -3104,6 +4341,7 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
     if (effect === 'glitter' && rawDirection && !sideDirections.includes(rawDirection)) warnings.add(`The glitter transition direction "${rawDirection}" was normalized to l.`)
     if (['flip', 'switch', 'reveal', 'ferris', 'gallery', 'conveyor'].includes(effect) && rawDirection && !leftRightDirections.includes(rawDirection)) warnings.add(`The ${effect} transition direction "${rawDirection}" was normalized to l.`)
     if (effect === 'ripple' && rawDirection && !rippleDirections.includes(rawDirection)) warnings.add(`The ripple transition direction "${rawDirection}" was normalized to center.`)
+    if (effect === 'split' && rawDirection !== null && !['in', 'out'].includes(rawDirection)) warnings.add(`The split transition direction "${rawDirection}" was normalized to out.`)
     const rawPattern = effect === 'glitter' ? effectNode.getAttribute('pattern') : null
     const pattern = effect === 'glitter' ? (rawPattern === 'hexagon' ? 'hexagon' : 'diamond') : undefined
     if (effect === 'glitter' && rawPattern && !glitterPatterns.includes(rawPattern)) warnings.add(`The glitter transition pattern "${rawPattern}" was normalized to diamond.`)
@@ -3114,7 +4352,9 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
     const hasBounce = effect === 'flythrough' ? rawHasBounce === '1' || rawHasBounce === 'true' : undefined
     if (effect === 'flythrough' && rawHasBounce !== null && !['0', '1', 'false', 'true'].includes(rawHasBounce)) warnings.add('The flythrough hasBounce value is invalid; false was used.')
     // p14 doors/window use CT_OrientationTransition; the Microsoft samples serialize the orientation in dir.
-    const orientation = effect === 'split' ? (effectNode?.getAttribute('orient') as 'horz' | 'vert') || 'vert' : ['blinds', 'checker', 'comb', 'doors', 'window'].includes(effect) ? (rawDirection === 'vert' ? 'vert' : 'horz') : undefined
+    const rawOrientation = effect === 'split' ? effectNode?.getAttribute('orient') : null
+    const orientation = effect === 'split' ? (rawOrientation === 'vert' ? 'vert' : 'horz') : ['blinds', 'checker', 'comb', 'doors', 'window'].includes(effect) ? (rawDirection === 'vert' ? 'vert' : 'horz') : undefined
+    if (effect === 'split' && rawOrientation !== null && rawOrientation !== 'horz' && rawOrientation !== 'vert') warnings.add(`The split transition orientation "${rawOrientation}" was normalized to horz.`)
     if (['blinds', 'checker', 'comb', 'doors', 'window'].includes(effect) && rawDirection && !['horz', 'vert'].includes(rawDirection)) warnings.add(`The ${effect} transition orientation "${rawDirection}" was normalized to horz.`)
     const prismBoolean = (attribute: 'isInverted' | 'isContent') => {
         const value = effect === 'prism' ? effectNode.getAttribute(attribute)?.toLowerCase() : null
@@ -3142,7 +4382,6 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
     if (effect === 'morph' && rawMorphOption !== 'byObject' && rawMorphOption !== 'byWord' && rawMorphOption !== 'byChar') {
         warnings.add('The morph option is missing or invalid; byObject was used.')
     }
-    if (effect === 'morph' && morphOption !== 'byObject') warnings.add(`Morph ${morphOption} matching is not rendered yet; the slide uses a crossfade.`)
     // The renderer rotates the full slide plane; Office's isContent=true separates background and content.
     if (isContent) warnings.add('The prism isContent flag requests separate background and content planes; this player rotates them together.')
     return {
@@ -3282,14 +4521,16 @@ function evaluateMotionFormula(formula: string, variables: Record<string, number
 function sampleNumericAnimationFormula(
     keyframes: Array<{offset: number; value: number; formula?: string}>,
     durationMs: number,
-    property: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity' | 'style.fontSize' | 'style.fontWeight' | 'stroke.weight',
+    property: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity' | 'style.fontSize' | 'style.fontWeight' | 'stroke.weight' | 'ppt_x' | 'ppt_y',
     element: PptxElement,
     slideWidth: number,
-    slideHeight: number
+    slideHeight: number,
+    keyframeMode: 'lin' | 'discrete' = 'lin'
 ): Array<{offset: number; value: number}> | undefined {
     const sampleCount = Math.min(900, Math.max(60, Math.ceil(durationMs / 1000 * 60)))
-    const minimum = property === 'style.fontWeight' ? 1 : property === 'style.fontSize' ? Number.MIN_VALUE : 0
-    const maximum = property === 'style.fontWeight' ? 1000 : property === 'style.fontSize' ? 100 : property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : 1
+    const isPosition = property === 'ppt_x' || property === 'ppt_y'
+    const minimum = property === 'style.fontWeight' ? 1 : property === 'style.fontSize' ? Number.MIN_VALUE : isPosition ? -100 : 0
+    const maximum = property === 'style.fontWeight' ? 1000 : property === 'style.fontSize' ? 100 : property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : isPosition ? 100 : 1
     const samples: Array<{offset: number; value: number}> = []
     for (let index = 0; index <= sampleCount; index++) {
         const progress = index / sampleCount
@@ -3300,7 +4541,7 @@ function sampleNumericAnimationFormula(
         const right = rightIndex < 0 ? left : keyframes[rightIndex]!
         const formula = keyframes.filter(frame => frame.offset <= progress && frame.formula !== undefined).at(-1)?.formula
         const ratio = right.offset === left.offset ? 0 : (progress - left.offset) / (right.offset - left.offset)
-        const baseValue = left.value + (right.value - left.value) * Math.max(0, Math.min(1, ratio))
+        const baseValue = keyframeMode === 'discrete' ? left.value : left.value + (right.value - left.value) * Math.max(0, Math.min(1, ratio))
         const value = formula
             ? evaluateMotionFormula(formula, {
                   ppt_x: element.x / slideWidth,
@@ -3317,16 +4558,73 @@ function sampleNumericAnimationFormula(
     return samples
 }
 
+function supportsStrokeOpacity(element: PptxElement): boolean {
+    if (element.kind === 'shape' && ['cube', 'plaque', 'frame', 'halfFrame', 'cornerTabs', 'plaqueTabs', 'squareTabs', 'donut', 'pie', 'chord', 'arc', 'blockArc', 'pieWedge'].includes(element.geometry)) return true
+    return ['shape', 'line'].includes(element.kind) && (!/gradient\(/i.test(element.stroke)
+        || element.kind === 'shape' && (['mathDivide', 'mathMultiply', 'mathNotEqual', 'round1Rect', 'round2DiagRect', 'round2SameRect', 'snipRoundRect'].includes(element.geometry) || ['rect', 'ellipse', 'roundRect', 'flowChartProcess', 'flowChartAlternateProcess', 'flowChartDelay', 'flowChartDisplay', 'flowChartOfflineStorage', 'flowChartOnlineStorage', 'flowChartPunchedTape', 'flowChartMagneticDisk', 'flowChartMagneticDrum', 'flowChartMagneticTape', 'flowChartMultidocument', 'flowChartInternalStorage', 'flowChartSummingJunction', 'flowChartOr', 'plus', 'mathMinus', 'mathEqual', 'mathPlus', 'snip1Rect', 'snip2DiagRect', 'snip2SameRect', 'homePlate', 'nonIsoscelesTrapezoid', 'heptagon', 'decagon', 'leftRightArrow', 'upDownArrow', 'upArrow', 'downArrow', 'bentUpArrow', 'quadArrow', 'leftRightUpArrow', 'rightArrow', 'leftArrow', 'notchedRightArrow', 'heart', 'lightningBolt', 'triangle', 'rtTriangle', 'diamond', 'flowChartConnector', 'flowChartDecision', 'flowChartSort', 'flowChartCollate', 'flowChartPunchedCard', 'flowChartOffpageConnector', 'flowChartDocument', 'flowChartManualInput', 'flowChartManualOperation', 'flowChartInputOutput', 'flowChartPreparation', 'flowChartTerminator', 'flowChartPredefinedProcess', 'flowChartExtract', 'flowChartMerge', 'star4', 'star5', 'star6', 'star7', 'star8', 'star10', 'star12', 'star16', 'star24', 'star32'].includes(element.geometry || '') || element.geometry === 'custom' && Boolean(element.customPaths?.length)))
+}
+
+function hasOnOffBaseline(element: PptxElement, property: AnimationOnOffProperty): boolean {
+    if (property === 'fill.on') return element.kind === 'shape' && element.fill !== 'transparent'
+    if (property === 'stroke.on') return ['shape', 'line'].includes(element.kind) && element.stroke !== 'transparent' && supportsStrokeOpacity(element)
+    return hasShadow(element)
+}
+
+function hasShadow(element: PptxElement): boolean {
+    return Boolean(element.shadow || element.shadows?.length || element.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow || run.shadows?.length)))
+}
+
+function parseOnOffValue(value: string | null): boolean | undefined {
+    const normalized = value?.trim().toLowerCase()
+    return normalized === 'true' || normalized === 't' ? true : normalized === 'false' || normalized === 'f' ? false : undefined
+}
+
+function parseStrokeDashStyle(value: string | null): AnimatedStrokeDashStyle | undefined {
+    const styles: Record<string, AnimatedStrokeDashStyle> = {
+        solid: 'solid',
+        dot: 'dot',
+        dash: 'dash',
+        dashdot: 'dashDot',
+        longdash: 'lgDash',
+        longdashdot: 'lgDashDot',
+        longdashdotdot: 'lgDashDotDot'
+    }
+    return value ? styles[value.trim().toLowerCase()] : undefined
+}
+
+function parseLineArrow(value: string | null): AnimatedLineArrow | undefined {
+    const normalized = value?.trim().toLowerCase()
+    return normalized === 'none' || normalized === 'block' || normalized === 'classic' || normalized === 'diamond' || normalized === 'oval' || normalized === 'open' || normalized === 'chevron' || normalized === 'doublechevron'
+        ? normalized
+        : undefined
+}
+
+function parseLineArrowSize(property: AnimatedLineArrowSizeProperty, value: string | null): AnimatedLineArrowSize | undefined {
+    const normalized = value?.trim().toLowerCase()
+    // MS-OE376 defines width and length as discrete string presets, with separate values for each attribute.
+    // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
+    const allowed = property.endsWith('Width') ? ['narrow', 'medium', 'wide'] : ['short', 'medium', 'long']
+    return normalized && allowed.includes(normalized) ? normalized as AnimatedLineArrowSize : undefined
+}
+
 function parseAnimations(slideRoot: Element, theme: Record<string, string>, warnings: Set<string>, elements: PptxElement[], slideWidth: number, slideHeight: number): Pick<PptxSlide, 'automaticAnimations' | 'animationSteps' | 'animationSequence' | 'triggeredAnimations'> {
-    const timing = firstDescendant(slideRoot, 'timing')
+    // p:timing is a direct p:sld child; ignore same-named nodes embedded in extension payloads.
+    // Source: https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-presentation-slides
+    const timing = child(slideRoot, 'timing')
     if (!timing) return {}
+    const MAX_TL_TIME_MS = 2_147_483_625
     // OOXML timing node kinds and delay semantics:
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timenodevalues
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.condition
-    const milliseconds = (value: string | null | undefined, fallback = 0) => {
+    const timelineTime = (value: string | null | undefined, fallback = 0) => {
         if (!value || value === 'indefinite') return fallback
         const parsed = Number(value)
-        return Number.isFinite(parsed) && parsed >= 0 ? Math.min(parsed, 30_000) : fallback
+        if (!Number.isFinite(parsed) || parsed < 0) return fallback
+        if (parsed > MAX_TL_TIME_MS) {
+            warnings.add(`A timing value exceeds the PowerPoint ST_TLTime maximum and was capped at ${MAX_TL_TIME_MS}.`)
+            return MAX_TL_TIME_MS
+        }
+        return parsed
     }
     const animationTiming = (timeNode: Element | undefined, effect: string): Pick<PptxAnimation, 'fillMode' | 'repeatCount' | 'repeatDurationMs' | 'autoReverse' | 'acceleration' | 'deceleration' | 'playbackSpeed' | 'reversePlayback'> | undefined => {
         const fill = timeNode?.getAttribute('fill') || 'hold'
@@ -3337,13 +4635,13 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         }
         const countValue = timeNode?.getAttribute('repeatCount')
         const durationValue = timeNode?.getAttribute('repeatDur')
-        const count = countValue === null || countValue === undefined ? (durationValue === null || durationValue === undefined ? undefined : Infinity) : countValue === 'indefinite' ? Infinity : Number(countValue) / 1000
+        const count = countValue === null || countValue === undefined ? (durationValue === null || durationValue === undefined ? undefined : Infinity) : countValue === 'indefinite' ? Infinity : timelineTime(countValue, Number.NaN) / 1000
         const rawSpeed = timeNode?.getAttribute('spd')
         const speed = rawSpeed === null || rawSpeed === undefined ? 1 : Number(rawSpeed) / 100_000
         const playbackSpeed = Number.isFinite(speed) && speed !== 0 ? speed : 1
         if (playbackSpeed !== speed) warnings.add(`${effect} animations with zero or invalid speed are played at normal speed.`)
         const playbackRate = Math.abs(playbackSpeed)
-        const repeatDurationMs = durationValue === null || durationValue === undefined ? undefined : durationValue === 'indefinite' ? Infinity : Number(durationValue) / playbackRate
+        const repeatDurationMs = durationValue === null || durationValue === undefined ? undefined : durationValue === 'indefinite' ? Infinity : timelineTime(durationValue, Number.NaN) / playbackRate
         if ((count !== undefined && !(count > 0)) || (repeatDurationMs !== undefined && (Number.isNaN(repeatDurationMs) || repeatDurationMs < 0))) {
             warnings.add(`${effect} animations with invalid repeat timing are not rendered yet.`)
             return undefined
@@ -3373,23 +4671,19 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         }
     }
     const animationDurationMs = (timeNode: Element | undefined, timing: Pick<PptxAnimation, 'playbackSpeed'>, fallback = 500) => {
-        const duration = milliseconds(timeNode?.getAttribute('dur'), fallback) / Math.abs(timing.playbackSpeed || 1)
-        if (duration > 30_000) {
-            warnings.add('An animation slowed beyond 30 seconds was capped at 30 seconds.')
-            return 30_000
-        }
-        return duration
+        return timelineTime(timeNode?.getAttribute('dur'), fallback) / Math.abs(timing.playbackSpeed || 1)
     }
     const playbackDuration = (action: PptxAnimation) =>
         action.timingWarp
             ? Math.max(0, action.timingWarp.groupEndDelayMs - action.delayMs)
             : (action.effect === 'media' ? (action.mediaDurationMs ?? 0) : action.durationMs === 0 ? 0 : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity)) +
               (action.iteration ? action.iteration.intervalMs * (action.iteration.ranges.length - 1) : 0)
-    const startDelay = (timeNode: Element | undefined) => milliseconds(child(child(timeNode, 'stCondLst'), 'cond')?.getAttribute('delay'))
+    const startDelay = (timeNode: Element | undefined) => timelineTime(child(child(timeNode, 'stCondLst'), 'cond')?.getAttribute('delay'))
     const parseTextStyleValue = (property: TextStyleAnimationProperty, raw: string | null): TextStyleAnimationValue | undefined => {
         const rawValue = raw?.trim()
         if (property === 'fontFamily') return rawValue && rawValue.length <= 128 && /^[\p{L}\p{N} ._-]+$/u.test(rawValue) ? rawValue : undefined
         const value = rawValue?.toLowerCase()
+        if (property === 'fontWeight') return value === 'none' || value === 'normal' || value === 'bold' ? value : undefined
         if (property === 'fontStyle') return value === 'italic' ? true : value === 'normal' || value === 'none' ? false : undefined
         if (property === 'underline' || property === 'lineThrough' || property === 'outline') return value === 'true' ? true : value === 'false' ? false : undefined
         if (property === 'textShadow') return value === 'none' || value === 'normal' || value === 'auto' ? value : undefined
@@ -3402,7 +4696,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
     }
     const hasCompleteTextShadow = (element: PptxElement) => {
         const runs = element.paragraphs.flatMap(paragraph => paragraph.runs).filter(run => run.text.length > 0)
-        return runs.length > 0 && runs.every(run => Boolean(run.shadow))
+        return runs.length > 0 && runs.every(run => Boolean(run.shadow || run.shadows?.length))
     }
     const handledEffects = new Set<Element>()
     const handledScales = new Set<Element>()
@@ -3413,14 +4707,17 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
     const handledMediaActions = new Set<Element>()
     // OOXML also defines withGroup/afterGroup as group-level relatives of withEffect/afterEffect.
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timenodevalues?view=openxml-3.0.1
-    const supportedGroupTypes = new Set(['clickEffect', 'withEffect', 'afterEffect', 'withGroup', 'afterGroup'])
+    const supportedGroupTypes = new Set(['clickEffect', 'clickPar', 'withEffect', 'afterEffect', 'withGroup', 'afterGroup'])
+    const startsOnClick = (type: string | null | undefined) => type === 'clickEffect' || type === 'clickPar'
     const followsPreviousGroup = (type: string | null | undefined) => type === 'afterEffect' || type === 'afterGroup'
     // presetClass is a p:cTn attribute; discover nested preset nodes independently of a fixed timing-tree path.
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode.presetclass?view=openxml-3.0.1
     const hasPresetClass = (timeNode: Element) => Boolean(timeNode.getAttribute('presetClass')?.trim())
     const groupType = (timeNode: Element) => timeNode.getAttribute('nodeType') || (hasPresetClass(timeNode) ? 'clickEffect' : '')
     const sceneTree = firstDescendant(slideRoot, 'spTree')
-    const renderedElementIds = new Set(elements.map(element => element.id))
+    const elementsById = new Map<string, PptxElement>()
+    for (const element of elements) if (!elementsById.has(element.id)) elementsById.set(element.id, element)
+    const renderedElementIds = new Set(elementsById.keys())
     const groupTargets = new Map<string, string[]>()
     const sceneChildren = (node: Element) => children(node).filter(item => ['sp', 'pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(item.localName))
     const identityContainers: Record<string, string> = {grpSp: 'nvGrpSpPr', sp: 'nvSpPr', pic: 'nvPicPr', graphicFrame: 'nvGraphicFramePr', cxnSp: 'nvCxnSpPr'}
@@ -3467,7 +4764,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             if (timing) {
                 const groupSpeed = Math.abs(timing.playbackSpeed ?? 1)
                 const rawDuration = owner?.getAttribute('dur')
-                const durationMs = rawDuration === null || rawDuration === undefined ? Number.NaN : Number(rawDuration)
+                const durationMs = timelineTime(rawDuration, Number.NaN)
                 if (!Number.isFinite(durationMs) || durationMs <= 0) {
                     warnings.add('A time-container timing curve or repeat without a finite positive duration is not applied.')
                 } else {
@@ -3476,8 +4773,6 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     const playbackDurationMs = Math.min(cycleDurationMs * repeatCount, timing.repeatDurationMs ?? Infinity)
                     if (Number.isNaN(playbackDurationMs) || playbackDurationMs <= 0) {
                         warnings.add('An indefinite or empty parent time-container repeat is not applied yet.')
-                    } else if (durationMs > 30_000 || (Number.isFinite(playbackDurationMs) && playbackDurationMs > 30_000)) {
-                        warnings.add('A time-container timing curve or repeat beyond 30 seconds is not applied yet.')
                     } else {
                         groupTiming = {
                             durationMs,
@@ -3501,7 +4796,16 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }
             return false
         }
-        const ownedDescendants = (name: string) => descendants(group, name).filter(belongsToOwner)
+        const ownedDescendants = (name: string) => {
+            const nodes = descendants(group, name).filter(belongsToOwner)
+            for (const node of nodes) {
+                const accumulate = child(node, 'cBhvr')?.getAttribute('accumulate')
+                if (accumulate === null || accumulate === undefined || accumulate === 'none') continue
+                if (accumulate !== 'always') warnings.add('An animation behavior has an invalid cBhvr@accumulate value; it is ignored.')
+                else if (name !== 'animRot') warnings.add('Only rotation animations currently accumulate repeated values; this animation repeats without accumulation.')
+            }
+            return nodes
+        }
         // p:charRg uses an end-exclusive range; PowerPoint requires end > st and end <= text length.
         // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/d0b4598c-f4e1-47ff-91b0-8fb5abb708f3
         // p:txEl/p:pRg is the OOXML paragraph index range:
@@ -3546,7 +4850,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const intervalNode = intervalNodes[0]
             const rawInterval = intervalNode?.getAttribute('val')
             const intervalValue = rawInterval !== null && rawInterval !== undefined && /^\d+(?:\.\d+)?$/.test(rawInterval) ? Number(rawInterval) : NaN
-            const intervalMs = intervalNode?.localName === 'tmAbs' ? (intervalValue <= 30_000 ? intervalValue / Math.abs(action.playbackSpeed || 1) : NaN) : intervalNode?.localName === 'tmPct' ? (action.durationMs * intervalValue) / 100_000 : NaN
+            const intervalMs = intervalNode?.localName === 'tmAbs' ? (intervalValue <= MAX_TL_TIME_MS ? intervalValue / Math.abs(action.playbackSpeed || 1) : NaN) : intervalNode?.localName === 'tmPct' ? (action.durationMs * intervalValue) / 100_000 : NaN
             const backwardsValue = iterate.getAttribute('backwards')
             const backwards = backwardsValue === '1' || backwardsValue === 'true'
             if (intervalNodes.length !== 1 || !Number.isFinite(intervalValue) || intervalValue < 0 || (intervalNode?.localName === 'tmPct' && intervalValue > 100_000) || !Number.isFinite(intervalMs) || (elementIteration ? intervalMs < 0 : intervalMs <= 0)) {
@@ -3564,14 +4868,16 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const type = iterate.getAttribute('type')
             if (type === 'el') return undefined
             const interval = iterationTiming(action)
-            const element = elements.find(item => item.id === action.targetId)
+            const element = elementsById.get(action.targetId)
             if (!['lt', 'wd'].includes(type || '') || !interval || !element?.paragraphs.some(paragraph => paragraph.runs.length)) {
                 if (!['lt', 'wd'].includes(type || '')) warnings.add('A text iteration with an unsupported type was rendered as a single animation.')
                 else if (!element?.paragraphs.some(paragraph => paragraph.runs.length)) warnings.add('A text iteration target has no text and was rendered as a single animation.')
                 return undefined
             }
             const {intervalMs, backwards} = interval
-            if (!['appear', 'fade', 'fontSize', 'fontWeight', 'textStyle', 'opacity'].includes(action.effect) && !(action.effect === 'color' && action.colorProperty === 'style.color')) {
+            // p:iterate applies child animation behavior to each letter or word.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.iterate.type?view=openxml-3.0.1
+            if (!['appear', 'fade', 'wipe', 'slide', 'strips', 'scale', 'rotation', 'motion', 'fontSize', 'fontWeight', 'textStyle', 'opacity', 'visibility'].includes(action.effect) && !(action.effect === 'color' && action.colorProperty === 'style.color')) {
                 warnings.add(`Text iteration for ${action.effect} animation is not rendered yet.`)
                 return undefined
             }
@@ -3624,8 +4930,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }))
         }
         const addMediaAction = (node: Element, targetId: string, mediaCommand: NonNullable<PptxAnimation['mediaCommand']>, options: Pick<PptxAnimation, 'mediaStartSeconds' | 'mediaVolume' | 'mediaMuted' | 'mediaDurationMs' | 'mediaSlideCount' | 'mediaWaitForEnd'> = {}) => {
-            const element = elements.find(item => item.id === targetId)
-            if (!element || !['audio', 'video'].includes(element.kind)) {
+            const element = elementsById.get(targetId)
+            if (mediaCommand !== 'stopAudio' && (!element || !['audio', 'video'].includes(element.kind))) {
                 warnings.add('A media timeline action without an embedded audio or video target was skipped.')
                 handledMediaActions.add(node)
                 return
@@ -3647,7 +4953,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 mediaCommand,
                 ...options,
                 durationMs: 0,
-                delayMs: delayMs + milliseconds(delay)
+                delayMs: delayMs + timelineTime(delay)
             })
             handledMediaActions.add(node)
         }
@@ -3674,19 +4980,20 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             if (volumeValue !== null && (!Number.isFinite(volume) || volume! < 0 || volume! > 1)) warnings.add('An invalid media timeline volume was ignored.')
             if (muteValue !== undefined && !['0', '1', 'false', 'true'].includes(muteValue)) warnings.add('An invalid media timeline mute value was ignored.')
             if (slideCountValue !== null && mediaSlideCount === undefined) warnings.add('An invalid media timeline numSld value was ignored.')
-            if (mediaSlideCount && mediaSlideCount > 1 && elements.find(element => element.id === animationTarget.targetId)?.kind === 'video') warnings.add('Cross-slide video playback is not supported; the video stops when leaving its slide.')
+            const mediaTargetElement = elementsById.get(animationTarget.targetId)
+            if (mediaSlideCount && mediaSlideCount > 1 && mediaTargetElement?.kind === 'video' && (mediaTargetElement.mediaTrim || mediaTargetElement.mediaFade)) warnings.add('Cross-slide video playback ignores video trim and fades, as documented for PowerPoint 2010/2013.')
             const mediaTimeNode = firstDescendant(media, 'cTn')
             const mediaDurationValue = mediaTimeNode?.getAttribute('dur')
             const endConditions = children(child(mediaTimeNode, 'endCondLst'), 'cond')
             const hasSupportedEndCondition =
-                elements.find(element => element.id === animationTarget.targetId)?.kind === 'audio' &&
+                elementsById.get(animationTarget.targetId)?.kind === 'audio' &&
                 endConditions.every(condition => {
                     const delay = condition.getAttribute('delay')
                     return condition.getAttribute('evt') === 'onStopAudio' && Boolean(firstDescendant(condition, 'sldTgt')) && (delay === null || (/^\d+$/.test(delay) && Number(delay) === 0))
                 })
             const indefiniteDuration = mediaDurationValue === 'indefinite'
             const parsedMediaDuration = mediaDurationValue === null || mediaDurationValue === undefined ? 0 : /^\d+$/.test(mediaDurationValue) ? Number(mediaDurationValue) : undefined
-            const mediaDurationMs = parsedMediaDuration !== undefined && Number.isFinite(parsedMediaDuration) && parsedMediaDuration <= 2_147_483_625 ? parsedMediaDuration : undefined
+            const mediaDurationMs = parsedMediaDuration !== undefined && Number.isFinite(parsedMediaDuration) && parsedMediaDuration <= MAX_TL_TIME_MS ? parsedMediaDuration : undefined
             if (parsedMediaDuration !== undefined && mediaDurationMs === undefined) warnings.add('A media timeline duration beyond the supported ST_TLTime range was skipped.')
             if (mediaDurationValue !== null && mediaDurationValue !== undefined && !indefiniteDuration && parsedMediaDuration === undefined) warnings.add('An invalid media timeline duration was skipped.')
             if (endConditions.length && !hasSupportedEndCondition) warnings.add('A media timeline end condition other than slide-targeted onStopAudio is not synchronized yet.')
@@ -3704,6 +5011,17 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const source = command.getAttribute('cmd')?.trim() || ''
             const playFrom = /^PlayFrom\(\s*(\d+(?:\.\d+)?)\s*\)$/i.exec(source)
             const normalizedCommand = source.toLowerCase()
+            // MS-OE376 §4.6.28: type="evt" cmd="onstopaudio" stops all audio.
+            // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/b2f15f11-5b40-4f67-ae95-5a510c3bea06
+            if (commandType === 'evt' && normalizedCommand === 'onstopaudio') {
+                if (!firstDescendant(command, 'sldTgt') || animationTarget.hasUnsupportedTextRange || animationTarget.paragraphRange || animationTarget.characterRange) {
+                    warnings.add('A stop-all-audio event without a slide target was skipped.')
+                    handledMediaActions.add(command)
+                    continue
+                }
+                addMediaAction(command, '', 'stopAudio')
+                continue
+            }
             const mediaCommand = playFrom ? 'play' : normalizedCommand === 'togglepause' ? 'togglePause' : normalizedCommand === 'pause' ? 'pause' : normalizedCommand === 'stop' ? 'stop' : undefined
             if (!mediaCommand || commandType !== 'call' || !animationTarget.targetId || animationTarget.hasUnsupportedTextRange || animationTarget.paragraphRange || animationTarget.characterRange) {
                 warnings.add('An unsupported media or object command in the slide timeline was skipped.')
@@ -3718,9 +5036,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }
             addMediaAction(command, animationTarget.targetId, mediaCommand, {mediaStartSeconds: startSeconds})
         }
-        for (const effect of ownedDescendants('animEffect')) {
+        for (const [effectIndex, effect] of ownedDescendants('animEffect').entries()) {
             const animationTarget = target(effect)
-            const textElement = elements.find(item => item.id === animationTarget.targetId)
+            const textElement = elementsById.get(animationTarget.targetId)
             const transition = effect.getAttribute('transition')
             const filter = effect.getAttribute('filter')
             const wipe = /^wipe\((right|left|up|down)\)$/.exec(filter || '')
@@ -3753,6 +5071,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
             const wheel = /^wheel\(([1-4]|8)\)$/.exec(filter || '')
             const wedge = filter === 'wedge'
+            const supportedFilter = ['fade', 'none', 'cut'].includes(filter || '') || Boolean(wipe || blinds || checker || randomBar || strips || barn || slide || dissolve || shapeFilter || wheel || wedge)
+            const fadeFallback = ['in', 'out'].includes(transition || '') && !supportedFilter
             if (!animationTarget.targetId) {
                 warnings.add('An object animation has no shape target and was skipped.')
                 continue
@@ -3765,10 +5085,13 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add('A character-range animation exceeds the target text length and was skipped.')
                 continue
             }
-            if (['in', 'out'].includes(transition || '') && (['fade', 'none', 'cut'].includes(filter || '') || wipe || blinds || checker || randomBar || strips || barn || slide || dissolve || shapeFilter || wheel || wedge)) {
+            // MS-OE376 names the supported object filters; unknown or missing filters still honor in/out as a warned fade.
+            if (['in', 'out'].includes(transition || '')) {
+                if (fadeFallback) warnings.add('An unsupported object-effect filter was approximated as a fade.')
                 const paragraphWipe = Boolean(wipe && animationTarget.paragraphRange && !animationTarget.characterRange)
                 const characterWipe = Boolean(wipe && animationTarget.characterRange && !animationTarget.paragraphRange)
-                const textRangeMask = Boolean(animationTarget.paragraphRange) !== Boolean(animationTarget.characterRange)
+                const iteratedText = ['lt', 'wd'].includes(iterate?.getAttribute('type') || '') && Boolean(textElement?.paragraphs.some(paragraph => paragraph.runs.length))
+                const textRangeMask = Boolean(animationTarget.paragraphRange) !== Boolean(animationTarget.characterRange) || iteratedText
                 const textRandomBars = Boolean(randomBar && textRangeMask)
                 const textStrips = Boolean(strips && textRangeMask)
                 const textBarn = Boolean(barn && textRangeMask)
@@ -3788,12 +5111,27 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     handledEffects.add(effect)
                     continue
                 }
-                const key = `${animationTarget.targetId}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+                const effectProgressNode = child(effect, 'progress')
+                const effectProgressValues = effectProgressNode ? children(effectProgressNode) : []
+                const effectProgressRaw = effectProgressValues.length === 1 && effectProgressValues[0]?.localName === 'fltVal'
+                    ? effectProgressValues[0].getAttribute('val')?.trim()
+                    : undefined
+                const parsedEffectProgress = effectProgressRaw ? Number(effectProgressRaw) : Number.NaN
+                const effectProgress = effectProgressNode
+                    ? Number.isFinite(parsedEffectProgress) && parsedEffectProgress >= 0 && parsedEffectProgress <= 1
+                        ? parsedEffectProgress
+                        : undefined
+                    : undefined
+                if (effectProgressNode && effectProgress === undefined) {
+                    warnings.add('An object-effect progress override must be a single float from 0 to 1; the timed progress was used instead.')
+                }
+                const key = `${animationTarget.targetId}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:effect:${effectIndex}`
                 actions.set(key, {
                     targetId: animationTarget.targetId,
                     paragraphRange: animationTarget.paragraphRange,
                     characterRange: animationTarget.characterRange,
-                    effect: wheel || wedge ? 'wheel' : slide ? 'slide' : strips ? 'strips' : barn ? 'barn' : dissolve ? 'dissolve' : shapeFilter ? 'shape' : randomBar ? 'randomBars' : checker ? 'checker' : blinds ? 'blinds' : wipe ? 'wipe' : filter === 'fade' ? 'fade' : 'appear',
+                    effectProgress,
+                    effect: fadeFallback ? 'fade' : wheel || wedge ? 'wheel' : slide ? 'slide' : strips ? 'strips' : barn ? 'barn' : dissolve ? 'dissolve' : shapeFilter ? 'shape' : randomBar ? 'randomBars' : checker ? 'checker' : blinds ? 'blinds' : wipe ? 'wipe' : filter === 'fade' ? 'fade' : 'appear',
                     direction: transition as 'in' | 'out',
                     durationMs: animationDurationMs(timeNode, timing),
                     delayMs: delayMs + startDelay(timeNode),
@@ -3818,7 +5156,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         for (const animation of ownedDescendants('animScale')) {
             const animationTarget = target(animation)
             const timeNode = firstDescendant(animation, 'cTn')
-            const element = elements.find(item => item.id === animationTarget.targetId)
+            const element = elementsById.get(animationTarget.targetId)
             if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element)) {
                 warnings.add('A scale animation with an unsupported target or text range was skipped.')
                 continue
@@ -3859,13 +5197,15 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         for (const animation of ownedDescendants('animRot')) {
             const behavior = child(animation, 'cBhvr')
             const animationTarget = target(behavior || animation)
-            const element = elements.find(item => item.id === animationTarget.targetId)
+            const element = elementsById.get(animationTarget.targetId)
             const names = descendants(child(behavior, 'attrNameLst'), 'attrName')
             const property = names[0]?.textContent?.trim()
             if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element) || !['r', 'ppt_r', 'style.rotation'].includes(property || '')) {
                 warnings.add('A rotation animation with an unsupported target or property was skipped.')
                 continue
             }
+            // DrawingML ST_Angle values are measured in 60,000ths of a degree.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.animaterotation?view=openxml-3.0.1
             const rawFrom = animation.getAttribute('from')
             const rawTo = animation.getAttribute('to')
             const rawBy = animation.getAttribute('by')
@@ -3896,6 +5236,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 rotationFrom,
                 rotationTo,
                 rotationRelative: from === undefined && to === undefined,
+                rotationAdditive: behavior?.getAttribute('additive') === 'sum',
+                rotationAccumulate: behavior?.getAttribute('accumulate') === 'always',
                 durationMs: animationDurationMs(timeNode, timing),
                 delayMs: delayMs + startDelay(timeNode),
                 ...timing
@@ -3907,14 +5249,13 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const animationTarget = target(behavior || animation)
             const property = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent?.trim()
             if (property === 'imageData.chromakey') {
-                // The p:attrName schema includes imageData.chromakey, but this renderer does not apply color-key transparency.
-                // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.attributename?view=openxml-3.0.1
-                // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.vml.imagedata?view=openxml-3.0.1
-                warnings.add('An imageData.chromakey color animation cannot be rendered because picture color-key transparency is not implemented yet.')
+                // PowerPoint limits p:animClr targets to style.color, fillcolor, and stroke.color.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/9636f7f3-58e3-408d-9880-d0799fb26b0f
+                warnings.add('PowerPoint does not support imageData.chromakey as a p:animClr target; the animation was skipped.')
                 handledColors.add(animation)
                 continue
             }
-            const element = elements.find(item => item.id === animationTarget.targetId)
+            const element = elementsById.get(animationTarget.targetId)
             const colorSpace = animation.getAttribute('clrSpc') || 'rgb'
             const colorDirection = animation.getAttribute('dir') || 'cw'
             const invalidTarget =
@@ -3924,7 +5265,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 !hasValidCharacterRange(animationTarget, element) ||
                 (property === 'fillcolor' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
                 (property === 'stroke.color' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))) ||
-                (property === 'shadow.color' && !element?.shadow && !element?.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))) ||
+                (property === 'shadow.color' && (!element || !hasShadow(element))) ||
                 (property === 'style.color' && (!element?.paragraphs.length || (element.kind === 'table' && animationTarget.paragraphRange)))
             if (!animationTarget.targetId || invalidTarget || !['fillcolor', 'style.color', 'stroke.color', 'shadow.color'].includes(property || '')) {
                 warnings.add('A color animation with an unsupported target or property was skipped.')
@@ -3989,13 +5330,19 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const behavior = child(animation, 'cBhvr')
             const animationTarget = target(behavior || animation)
             const property = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent?.trim()
-            const element = elements.find(item => item.id === animationTarget.targetId)
+            const element = elementsById.get(animationTarget.targetId)
             const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
             const tavList = child(animation, 'tavLst')
             const calculationMode = animation.getAttribute('calcmode') || 'lin'
-            const textStyleProperty = property === 'style.fontStyle' ? 'fontStyle' : property === 'style.fontFamily' ? 'fontFamily' : property === 'style.textDecorationUnderline' ? 'underline' : property === 'style.textDecorationLineThrough' ? 'lineThrough' : property === 'style.textTransform' ? 'textTransform' : property === 'style.textEffectOutline' ? 'outline' : property === 'style.textShadow' ? 'textShadow' : property === 'style.textEffectEmboss' ? 'emboss' : undefined
+            const textStyleProperty = property === 'style.fontWeight' && animation.getAttribute('valueType') === 'str' ? 'fontWeight' : property === 'style.fontStyle' ? 'fontStyle' : property === 'style.fontFamily' ? 'fontFamily' : property === 'style.textDecorationUnderline' ? 'underline' : property === 'style.textDecorationLineThrough' ? 'lineThrough' : property === 'style.textTransform' ? 'textTransform' : property === 'style.textEffectOutline' ? 'outline' : property === 'style.textShadow' ? 'textShadow' : property === 'style.textEffectEmboss' ? 'emboss' : undefined
             const isVisibilityProperty = property === 'style.visibility'
             const isGrayscaleProperty = property === 'imageData.grayscale'
+            const isOnOffProperty = property === 'fill.on' || property === 'stroke.on' || property === 'shadow.on'
+            const isStrokeDashProperty = property === 'stroke.dashstyle'
+            const isLineArrowTypeProperty = property === 'stroke.startArrow' || property === 'stroke.endArrow'
+            const isLineArrowSizeProperty = property === 'stroke.startArrowWidth' || property === 'stroke.endArrowWidth' || property === 'stroke.startArrowLength' || property === 'stroke.endArrowLength'
+            const isLineArrowProperty = isLineArrowTypeProperty || isLineArrowSizeProperty
+            const isCoordinateProperty = property === 'ppt_x' || property === 'ppt_y'
             const imageCropProperty = property === 'imageData.cropLeft' ? 'left'
                 : property === 'imageData.cropTop' ? 'top'
                 : property === 'imageData.cropRight' ? 'right'
@@ -4008,21 +5355,25 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const hasTextRange = Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
             if (
                 !animationTarget.targetId ||
-                !['style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline', 'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow', 'style.textEffectEmboss', 'style.visibility', 'imageData.grayscale', 'imageData.cropLeft', 'imageData.cropTop', 'imageData.cropRight', 'imageData.cropBottom', 'imageData.gain', 'imageData.blacklevel', 'imageData.blackleve', 'imageData.gamma', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'stroke.weight', 'shadow.opacity'].includes(property || '') ||
+                !['style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline', 'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow', 'style.textEffectEmboss', 'style.visibility', 'imageData.grayscale', 'fill.on', 'stroke.on', 'shadow.on', 'stroke.dashstyle', 'stroke.startArrow', 'stroke.endArrow', 'stroke.startArrowWidth', 'stroke.endArrowWidth', 'stroke.startArrowLength', 'stroke.endArrowLength', 'imageData.cropLeft', 'imageData.cropTop', 'imageData.cropRight', 'imageData.cropBottom', 'imageData.gain', 'imageData.blacklevel', 'imageData.blackleve', 'imageData.gamma', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'stroke.weight', 'shadow.opacity', 'ppt_x', 'ppt_y'].includes(property || '') ||
                 !element ||
+                (isCoordinateProperty && hasTextRange) ||
+                (isOnOffProperty && hasTextRange) ||
+                (isStrokeDashProperty && (!['shape', 'line'].includes(element.kind) || hasTextRange)) ||
+                (isLineArrowProperty && (element.kind !== 'line' || hasTextRange)) ||
                 (property === 'stroke.weight' && (!['shape', 'line'].includes(element.kind) || hasTextRange)) ||
                 (['style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline', 'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow', 'style.textEffectEmboss'].includes(property || '') && !element.paragraphs.length) ||
                 (isGrayscaleProperty && (element.kind !== 'picture' || hasTextRange)) ||
                 (imageCropProperty && (element.kind !== 'picture' || hasTextRange)) ||
                 (imageToneProperty && (element.kind !== 'picture' || hasTextRange)) ||
-                (property === 'fill.opacity' && !hasTextRange && (element.kind !== 'shape' || element.fill.includes('gradient('))) ||
-                (property === 'stroke.opacity' && !hasTextRange && (!['shape', 'line'].includes(element.kind) || element.stroke.includes('gradient('))) ||
-                (property === 'shadow.opacity' && !hasTextRange && !element.shadow && !element.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))) ||
+                (property === 'fill.opacity' && !hasTextRange && element.kind !== 'shape') ||
+                (property === 'stroke.opacity' && !hasTextRange && !supportsStrokeOpacity(element)) ||
+                (property === 'shadow.opacity' && !hasTextRange && !hasShadow(element)) ||
                 animationTarget.hasUnsupportedTextRange ||
                 !hasValidCharacterRange(animationTarget, element) ||
-                (animation.getAttribute('valueType') && animation.getAttribute('valueType') !== (textStyleProperty || isVisibilityProperty || isGrayscaleProperty ? 'str' : 'num')) ||
+                (animation.getAttribute('valueType') && animation.getAttribute('valueType') !== (textStyleProperty || isVisibilityProperty || isGrayscaleProperty || isOnOffProperty || isStrokeDashProperty || isLineArrowProperty ? 'str' : 'num')) ||
                 !['lin', 'discrete'].includes(calculationMode) ||
-                (calculationMode === 'discrete' && !tavList && !textStyleProperty && !isVisibilityProperty && !isGrayscaleProperty) ||
+                (calculationMode === 'discrete' && !tavList && !textStyleProperty && !isVisibilityProperty && !isGrayscaleProperty && !isOnOffProperty && !isStrokeDashProperty && !isLineArrowProperty && !isCoordinateProperty) ||
                 (tavList && children(tavList).some(node => node.localName !== 'tav'))
             ) {
                 warnings.add('A generic object animation with an unsupported target or interpolation was skipped.')
@@ -4064,6 +5415,282 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 ? parsedKeyframes.map(({offset, value}) => ({offset, value}))
                 : undefined
             const validKeyframes = Boolean(keyframes?.length)
+            if (isCoordinateProperty) {
+                const baseline = property === 'ppt_x' ? element.x / slideWidth : element.y / slideHeight
+                const formulaVariables = {
+                    ppt_x: element.x / slideWidth,
+                    ppt_y: element.y / slideHeight,
+                    ppt_w: element.width / slideWidth,
+                    ppt_h: element.height / slideHeight,
+                    [property]: baseline
+                }
+                const readCoordinateValue = (raw: string | null, progress: number): number | undefined => {
+                    const value = raw?.trim()
+                    if (!value || value.length > 16_384) return undefined
+                    const numeric = Number(value)
+                    if (Number.isFinite(numeric)) return numeric
+                    return evaluateMotionFormula(value, {...formulaVariables, $: progress})
+                }
+                const coordinateKeyframes = tavList && keyframeNodes.length >= 2 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map(node => {
+                          const offset = parseFixedPercentage(node.getAttribute('tm'))
+                          const valueNode = children(child(node, 'val'))[0]
+                          const rawValue = valueNode && ['fltVal', 'strVal', 'intVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
+                          const value = readCoordinateValue(rawValue, offset ?? 0)
+                          const formula = node.hasAttribute('fmla') ? node.getAttribute('fmla')?.trim() : undefined
+                          return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && value >= -100 && value <= 100 && (formula === undefined || Boolean(formula && formula.length <= 16_384))
+                              ? {offset, value, formula}
+                              : undefined
+                      }).filter((frame): frame is {offset: number; value: number; formula: string | undefined} => Boolean(frame))
+                    : undefined
+                const validCoordinateKeyframes = Boolean(coordinateKeyframes?.length === keyframeNodes.length && coordinateKeyframes.length >= 2 && coordinateKeyframes.every((frame, index) => index === 0 || frame.offset > coordinateKeyframes[index - 1]!.offset))
+                const rawFrom = animation.getAttribute('from')
+                const rawTo = animation.getAttribute('to')
+                const rawBy = animation.getAttribute('by')
+                const from = coordinateKeyframes?.[0]?.value ?? (rawFrom === null ? baseline : readCoordinateValue(rawFrom, 0))
+                const by = rawBy === null ? undefined : readCoordinateValue(rawBy, 1)
+                const to = coordinateKeyframes?.at(-1)?.value ?? (rawTo !== null ? readCoordinateValue(rawTo, 1) : by !== undefined && from !== undefined ? from + by : undefined)
+                const hasFormulaKeyframes = Boolean(coordinateKeyframes?.some(frame => frame.formula !== undefined))
+                const validCombination = (rawTo !== null) !== (rawBy !== null) && (rawFrom !== null || rawTo !== null || rawBy !== null)
+                const validValues = tavList
+                    ? validCoordinateKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : validCombination && from !== undefined && to !== undefined
+                const behavior = child(animation, 'cBhvr')
+                const additive = behavior?.getAttribute('additive')
+                const accumulate = timeNode?.getAttribute('accumulate')
+                if (additive !== null && additive !== undefined && additive !== 'base' || accumulate !== null && accumulate !== undefined && accumulate !== 'none') {
+                    warnings.add(`A ${property} animation with additive or cumulative composition was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                if (!validValues || from === undefined || to === undefined || from < -100 || from > 100 || to < -100 || to > 100) {
+                    warnings.add(`A ${property} animation with unsupported values, formulas, or interpolation was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Position')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const durationMs = animationDurationMs(timeNode, timing)
+                const samples = sampleNumericAnimationFormula(
+                    coordinateKeyframes || [{offset: 0, value: from}, {offset: 1, value: to}],
+                    durationMs,
+                    property,
+                    element,
+                    slideWidth,
+                    slideHeight,
+                    calculationMode as 'lin' | 'discrete'
+                )
+                if (!samples) {
+                    warnings.add(`A ${property} animation formula used an unsupported variable or produced an out-of-range value; animation was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = `${animationTarget.targetId}:motionCoordinate:${property}:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'motion',
+                    direction: 'in',
+                    motionCoordinateProperty: property,
+                    motionPathSamples: samples.map(frame => ({
+                        progress: frame.offset,
+                        x: property === 'ppt_x' ? (frame.value - baseline) * slideWidth : 0,
+                        y: property === 'ppt_y' ? (frame.value - baseline) * slideHeight : 0
+                    })),
+                    durationMs,
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (isOnOffProperty) {
+                const propertyName = property as AnimationOnOffProperty
+                if (!hasOnOffBaseline(element, propertyName)) {
+                    warnings.add(`A ${propertyName} animation without a supported static baseline was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const onOffKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const value = valueNode?.localName === 'strVal' ? parseOnOffValue(valueNode.getAttribute('val')) : undefined
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: boolean} => Boolean(frame))
+                    : undefined
+                const validOnOffKeyframes = Boolean(onOffKeyframes?.length === keyframeNodes.length && onOffKeyframes.every((frame, index) => index === 0 || frame.offset > onOffKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseOnOffValue(rawFrom)
+                const to = rawTo === null ? undefined : parseOnOffValue(rawTo)
+                const validValues = calculationMode === 'discrete' && (tavList
+                    ? validOnOffKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
+                if (!validValues) {
+                    warnings.add(`A ${propertyName} animation with unsupported string values or interpolation was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Style on/off')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = `${animationTarget.targetId}:onOff:${propertyName}:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'onOff',
+                    direction: 'in',
+                    onOffProperty: propertyName,
+                    onOffFrom: from,
+                    onOffTo: to,
+                    onOffKeyframes,
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (isStrokeDashProperty) {
+                if (!hasOnOffBaseline(element, 'stroke.on')) {
+                    warnings.add('A stroke.dashstyle animation without a supported static stroke baseline was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const strokeDashKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const value = valueNode?.localName === 'strVal' ? parseStrokeDashStyle(valueNode.getAttribute('val')) : undefined
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: AnimatedStrokeDashStyle} => Boolean(frame))
+                    : undefined
+                const validStrokeDashKeyframes = Boolean(strokeDashKeyframes?.length === keyframeNodes.length && strokeDashKeyframes.every((frame, index) => index === 0 || frame.offset > strokeDashKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseStrokeDashStyle(rawFrom)
+                const to = rawTo === null ? undefined : parseStrokeDashStyle(rawTo)
+                const validValues = calculationMode === 'discrete' && (tavList
+                    ? validStrokeDashKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
+                if (!validValues) {
+                    warnings.add('A stroke.dashstyle animation with unsupported string values or interpolation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Stroke dash style')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = animationTarget.targetId + ':strokeDash:' + (timeNode?.getAttribute('id') || actions.size)
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'strokeDash',
+                    direction: 'in',
+                    strokeDashFrom: from,
+                    strokeDashTo: to,
+                    strokeDashKeyframes,
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (isLineArrowTypeProperty) {
+                const lineArrowKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const value = valueNode?.localName === 'strVal' ? parseLineArrow(valueNode.getAttribute('val')) : undefined
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: AnimatedLineArrow} => Boolean(frame))
+                    : undefined
+                const validLineArrowKeyframes = Boolean(lineArrowKeyframes?.length === keyframeNodes.length && lineArrowKeyframes.every((frame, index) => index === 0 || frame.offset > lineArrowKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseLineArrow(rawFrom)
+                const to = rawTo === null ? undefined : parseLineArrow(rawTo)
+                const validValues = calculationMode === 'discrete' && (tavList
+                    ? validLineArrowKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
+                if (!validValues) {
+                    warnings.add('A line arrow animation with unsupported string values or interpolation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                if (from === 'chevron' || to === 'chevron' || lineArrowKeyframes?.some(frame => frame.value === 'chevron')) warnings.add('The stroke arrow chevron preset is approximated with the open SVG marker.')
+                const timing = animationTiming(timeNode, 'Line arrow')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const arrowProperty = property as AnimatedLineArrowProperty
+                const key = animationTarget.targetId + ':lineArrow:' + arrowProperty + ':' + (timeNode?.getAttribute('id') || actions.size)
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'lineArrow',
+                    direction: 'in',
+                    lineArrowProperty: arrowProperty,
+                    lineArrowFrom: from,
+                    lineArrowTo: to,
+                    lineArrowKeyframes,
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
+            if (isLineArrowSizeProperty) {
+                const lineArrowSizeProperty = property as AnimatedLineArrowSizeProperty
+                const lineArrowSizeKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map((node) => {
+                        const valueNode = children(child(node, 'val'))[0]
+                        const offset = parseFixedPercentage(node.getAttribute('tm'))
+                        const value = valueNode?.localName === 'strVal' ? parseLineArrowSize(lineArrowSizeProperty, valueNode.getAttribute('val')) : undefined
+                        return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && !node.hasAttribute('fmla')
+                            ? {offset, value}
+                            : undefined
+                    }).filter((frame): frame is {offset: number; value: AnimatedLineArrowSize} => Boolean(frame))
+                    : undefined
+                const validLineArrowSizeKeyframes = Boolean(lineArrowSizeKeyframes?.length === keyframeNodes.length && lineArrowSizeKeyframes.every((frame, index) => index === 0 || frame.offset > lineArrowSizeKeyframes[index - 1]!.offset))
+                const from = rawFrom === null ? undefined : parseLineArrowSize(lineArrowSizeProperty, rawFrom)
+                const to = rawTo === null ? undefined : parseLineArrowSize(lineArrowSizeProperty, rawTo)
+                const validValues = calculationMode === 'discrete' && (tavList
+                    ? validLineArrowSizeKeyframes && rawFrom === null && rawTo === null && rawBy === null
+                    : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
+                if (!validValues) {
+                    warnings.add('A line arrow size animation with unsupported string values or interpolation was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Line arrow size')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const key = animationTarget.targetId + ':lineArrowSize:' + lineArrowSizeProperty + ':' + (timeNode?.getAttribute('id') || actions.size)
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'lineArrowSize',
+                    direction: 'in',
+                    lineArrowSizeProperty,
+                    lineArrowSizeFrom: from,
+                    lineArrowSizeTo: to,
+                    lineArrowSizeKeyframes,
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
             if (textStyleProperty) {
                 const textStyleKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
                     ? keyframeNodes.map((node) => {
@@ -4078,20 +5705,19 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 const validTextStyleKeyframes = Boolean(textStyleKeyframes?.length === keyframeNodes.length && textStyleKeyframes.every((frame, index) => index === 0 || frame.offset > textStyleKeyframes[index - 1]!.offset))
                 const from = rawFrom === null ? undefined : parseTextStyleValue(textStyleProperty, rawFrom)
                 const to = rawTo === null ? undefined : parseTextStyleValue(textStyleProperty, rawTo)
-                const unsupportedOutlineRange = textStyleProperty === 'outline' && Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
                 const requestsMissingOutline = textStyleProperty === 'outline'
                     && (tavList ? textStyleKeyframes?.some(frame => frame.value === true) : from === true || to === true)
                     && !hasCompleteTextOutline(element)
-                const unsupportedTextShadow = textStyleProperty === 'textShadow' && (hasTextRange || !hasCompleteTextShadow(element))
+                const unsupportedTextShadow = textStyleProperty === 'textShadow' && !hasCompleteTextShadow(element)
                 const validValues = calculationMode === 'discrete' && (tavList
                     ? validTextStyleKeyframes && rawFrom === null && rawTo === null && rawBy === null
                     : to !== undefined && rawBy === null && (rawFrom === null || from !== undefined))
-                    && !unsupportedOutlineRange && !requestsMissingOutline && !unsupportedTextShadow
+                    && !requestsMissingOutline && !unsupportedTextShadow
                 if (!validValues) {
                     warnings.add(unsupportedTextShadow
-                        ? 'A text shadow animation without complete static shadows or with a text range was skipped.'
-                        : unsupportedOutlineRange || requestsMissingOutline
-                        ? 'A text outline animation without complete static outlines or with a text range was skipped.'
+                        ? 'A text shadow animation without complete static shadows was skipped.'
+                        : requestsMissingOutline
+                        ? 'A text outline animation without complete static outlines was skipped.'
                         : 'A generic text style animation with unsupported values, formulas, or interpolation was skipped.')
                     handledTextAnimations.add(animation)
                     continue
@@ -4537,7 +6163,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         for (const animation of ownedDescendants('animMotion')) {
             const animationTarget = target(animation)
             const timeNode = firstDescendant(animation, 'cTn')
-            const element = elements.find(item => item.id === animationTarget.targetId)
+            const element = elementsById.get(animationTarget.targetId)
             const path = animation.getAttribute('path')?.trim() || ''
             const origin = animation.getAttribute('origin') || 'parent'
             const fromNode = child(animation, 'from')
@@ -4830,7 +6456,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                             invalid = true
                             break
                         }
-                        current = action === 'm' ? [coordinates[0], coordinates[1]] : coordinates
+                        const previous: [number, number] = current || [0, 0]
+                        current = action === 'm' ? [previous[0] + coordinates[0], previous[1] + coordinates[1]] : coordinates
                         pathStart ??= [...current]
                         // M snaps to a point; disconnected subpaths add no travel distance.
                         append(current, true)
@@ -4975,7 +6602,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const value = firstDescendant(set, 'strVal')?.getAttribute('val')
             const behavior = child(set, 'cBhvr')
             const animationTarget = target(behavior || set)
-            const element = elements.find(item => item.id === animationTarget.targetId)
+            const element = elementsById.get(animationTarget.targetId)
             // Microsoft defines p:set value handling in `set` and the accepted text-style presets in `to`.
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7d6aef67-5dbc-456c-bcf5-f08011bbf5bf
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
@@ -4990,12 +6617,12 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     warnings.add(`A ${attribute} p:set animation with an unsupported value was skipped.`)
                     continue
                 }
-                if (property === 'outline' && (animationTarget.paragraphRange || animationTarget.characterRange || textStyleTo && !hasCompleteTextOutline(element))) {
-                    warnings.add('A text outline p:set without complete static outlines or with a text range was skipped.')
+                if (property === 'outline' && textStyleTo && !hasCompleteTextOutline(element)) {
+                    warnings.add('A text outline p:set without complete static outlines was skipped.')
                     continue
                 }
-                if (property === 'textShadow' && (animationTarget.paragraphRange || animationTarget.characterRange || !hasCompleteTextShadow(element))) {
-                    warnings.add('A text shadow p:set without complete static shadows or with a text range was skipped.')
+                if (property === 'textShadow' && !hasCompleteTextShadow(element)) {
+                    warnings.add('A text shadow p:set without complete static shadows was skipped.')
                     continue
                 }
                 if (property === 'emboss') warnings.add('A text emboss animation is approximated with CSS drop shadows; lighting and bevel depth may differ from Office.')
@@ -5011,6 +6638,116 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     direction: 'in',
                     textStyleProperty: property,
                     textStyleTo,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
+            if (attribute === 'fill.on' || attribute === 'stroke.on' || attribute === 'shadow.on') {
+                const property = attribute as AnimationOnOffProperty
+                if (!animationTarget.targetId || !element || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element) || !hasOnOffBaseline(element, property)) {
+                    warnings.add(`A ${attribute} p:set animation without a supported whole-object baseline was skipped.`)
+                    continue
+                }
+                const on = parseOnOffValue(child(child(set, 'to'), 'strVal')?.getAttribute('val') ?? null)
+                if (on === undefined) {
+                    warnings.add(`A ${attribute} p:set animation with an unsupported value was skipped.`)
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set style on/off')
+                if (!timing) continue
+                const key = `${animationTarget.targetId}:onOff:${property}:set:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'onOff',
+                    direction: 'in',
+                    onOffProperty: property,
+                    onOffTo: on,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
+            if (attribute === 'stroke.dashstyle') {
+                if (!animationTarget.targetId || !element || !['shape', 'line'].includes(element.kind) || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element) || !hasOnOffBaseline(element, 'stroke.on')) {
+                    warnings.add('A stroke.dashstyle p:set animation without a supported whole-object stroke baseline was skipped.')
+                    continue
+                }
+                const strokeDash = parseStrokeDashStyle(child(child(set, 'to'), 'strVal')?.getAttribute('val') ?? null)
+                if (!strokeDash) {
+                    warnings.add('A stroke.dashstyle p:set animation with an unsupported value was skipped.')
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set stroke dash style')
+                if (!timing) continue
+                const key = animationTarget.targetId + ':strokeDash:set:' + (timeNode?.getAttribute('id') || actions.size)
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'strokeDash',
+                    direction: 'in',
+                    strokeDashFrom: strokeDash,
+                    strokeDashTo: strokeDash,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
+            if (attribute === 'stroke.startArrow' || attribute === 'stroke.endArrow') {
+                if (!animationTarget.targetId || !element || element.kind !== 'line' || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                    warnings.add('A line arrow p:set animation with an unsupported target was skipped.')
+                    continue
+                }
+                const lineArrow = parseLineArrow(child(child(set, 'to'), 'strVal')?.getAttribute('val') ?? null)
+                if (!lineArrow) {
+                    warnings.add('A line arrow p:set animation with an unsupported value was skipped.')
+                    continue
+                }
+                if (lineArrow === 'chevron') warnings.add('The stroke arrow chevron preset is approximated with the open SVG marker.')
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set line arrow')
+                if (!timing) continue
+                const arrowProperty = attribute as AnimatedLineArrowProperty
+                const key = animationTarget.targetId + ':lineArrow:set:' + arrowProperty + ':' + (timeNode?.getAttribute('id') || actions.size)
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'lineArrow',
+                    direction: 'in',
+                    lineArrowProperty: arrowProperty,
+                    lineArrowFrom: lineArrow,
+                    lineArrowTo: lineArrow,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
+            if (attribute === 'stroke.startArrowWidth' || attribute === 'stroke.endArrowWidth' || attribute === 'stroke.startArrowLength' || attribute === 'stroke.endArrowLength') {
+                if (!animationTarget.targetId || !element || element.kind !== 'line' || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                    warnings.add('A line arrow size p:set animation with an unsupported target was skipped.')
+                    continue
+                }
+                const property = attribute as AnimatedLineArrowSizeProperty
+                const lineArrowSize = parseLineArrowSize(property, child(child(set, 'to'), 'strVal')?.getAttribute('val') ?? null)
+                if (!lineArrowSize) {
+                    warnings.add('A line arrow size p:set animation with an unsupported value was skipped.')
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set line arrow size')
+                if (!timing) continue
+                const key = animationTarget.targetId + ':lineArrowSize:set:' + property + ':' + (timeNode?.getAttribute('id') || actions.size)
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'lineArrowSize',
+                    direction: 'in',
+                    lineArrowSizeProperty: property,
+                    lineArrowSizeFrom: lineArrowSize,
+                    lineArrowSizeTo: lineArrowSize,
                     durationMs: animationDurationMs(timeNode, timing, 1),
                     delayMs: delayMs + startDelay(timeNode),
                     ...timing
@@ -5118,9 +6855,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     animationTarget.hasUnsupportedTextRange ||
                     ((animationTarget.paragraphRange || animationTarget.characterRange) && property !== 'style.opacity') ||
                     !hasValidCharacterRange(animationTarget, element) ||
-                    (property === 'fill.opacity' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
-                    (property === 'stroke.opacity' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))) ||
-                    (property === 'shadow.opacity' && !element?.shadow && !element?.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow)))
+                    (property === 'fill.opacity' && element?.kind !== 'shape') ||
+                    (property === 'stroke.opacity' && (!element || !supportsStrokeOpacity(element))) ||
+                    (property === 'shadow.opacity' && (!element || !hasShadow(element)))
                 if (unsupportedTarget) {
                     warnings.add(`A ${attribute} p:set animation with an unsupported target was skipped.`)
                     continue
@@ -5162,7 +6899,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     !hasValidCharacterRange(animationTarget, element) ||
                     (property === 'fillcolor' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
                     (property === 'stroke.color' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))) ||
-                    (property === 'shadow.color' && !element?.shadow && !element?.paragraphs.some(paragraph => paragraph.runs.some(run => run.shadow))) ||
+                    (property === 'shadow.color' && (!element || !hasShadow(element))) ||
                     (property === 'style.color' && !element?.paragraphs.length)
                 if (unsupportedTarget) {
                     warnings.add(`A ${attribute} p:set animation with an unsupported target was skipped.`)
@@ -5372,10 +7109,19 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
     }
     const nextAction = mainSequence?.getAttribute('nextAc') || 'none'
     const previousAction = mainSequence?.getAttribute('prevAc') || 'none'
+    const sequenceConcurrent = (sequence: Element | undefined) => {
+        const value = sequence?.getAttribute('concurrent')
+        if (value === null || value === undefined) return false
+        if (value === '1' || value === 'true') return true
+        if (value === '0' || value === 'false') return false
+        warnings.add('An animation sequence has an invalid concurrent value; sequential playback is used.')
+        return false
+    }
     if (mainSequence && !['none', 'seek'].includes(nextAction)) warnings.add(`Main animation sequence next action "${nextAction}" is not supported.`)
     if (mainSequence && !['none', 'skipTimed'].includes(previousAction)) warnings.add(`Main animation sequence previous action "${previousAction}" is not supported.`)
     const animationSequence = mainSequence
         ? {
+              concurrent: sequenceConcurrent(mainSequence),
               nextAction: (['none', 'seek'].includes(nextAction) ? nextAction : 'none') as 'none' | 'seek',
               advancesOnNext: navigationCondition('nextCondLst', 'onNext'),
               rewindsOnPrevious: navigationCondition('prevCondLst', 'onPrev')
@@ -5406,12 +7152,15 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
     const automaticAnimations: PptxAnimation[] = []
     const steps: PptxAnimation[][] = []
     const triggeredAnimations: NonNullable<PptxSlide['triggeredAnimations']> = []
+    const timeNodeSources = new Map<string, {step?: number; startDelayMs?: number; endDelayMs?: number}>()
+    const mainSequenceId = mainTimeNode?.getAttribute('id')
+    if (mainSequenceId) timeNodeSources.set(mainSequenceId, {startDelayMs: 0})
     let currentStep: PptxAnimation[] | undefined
     for (const [sequenceOrder, timeNode] of mainEvents.entries()) {
         const group = mainGroupFor(timeNode)
         if (!group) continue
         const type = groupType(timeNode)
-        if (type === 'clickEffect') {
+        if (startsOnClick(type)) {
             currentStep = []
             steps.push(currentStep)
         } else if (!['withEffect', 'afterEffect', 'withGroup', 'afterGroup'].includes(type || '')) {
@@ -5426,22 +7175,75 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             if (parent.localName === 'cTn') groupStartDelay += startDelay(parent)
             parent = parent.parentElement
         }
-        sequence.push(...parseGroup(group, precedingEnd + groupStartDelay, timeNode, 'main', sequenceOrder, followsPreviousGroup(type) ? mediaWaitForEndKeys : [], groupStartDelay))
+        const startDelayMs = precedingEnd + groupStartDelay
+        const actions = parseGroup(group, startDelayMs, timeNode, 'main', sequenceOrder, followsPreviousGroup(type) ? mediaWaitForEndKeys : [], groupStartDelay)
+        sequence.push(...actions)
+        const timeNodeId = timeNode.getAttribute('id')
+        if (timeNodeId) {
+            const waitsForMedia = actions.some(action => action.mediaWaitForEndKeys?.length)
+            const hasMedia = actions.some(action => action.effect === 'media')
+            const endDelayMs = actions.length && !waitsForMedia && !hasMedia
+                ? Math.max(startDelayMs, ...actions.map(action => action.delayMs + playbackDuration(action)))
+                : undefined
+            timeNodeSources.set(timeNodeId, {
+                step: currentStep ? steps.length - 1 : undefined,
+                startDelayMs: waitsForMedia ? undefined : startDelayMs,
+                endDelayMs
+            })
+        }
     }
     const interactiveSequences = descendants(timing, 'cTn').filter(node => node.getAttribute('nodeType') === 'interactiveSeq')
     const shapeTriggerEvents = new Set(['onClick', 'onDblClick', 'onMouseOver', 'onMouseOut'])
-    const slideTriggerEvents = new Set(['onNext', 'onPrev'])
+    // PowerPoint defaults cTn@restart to `always`; restart state is modeled for interactive sequences.
+    // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/02b2312e-9700-42e0-8a19-b2af1ba83a20
+    for (const timeNode of descendants(timing, 'cTn')) {
+        const restart = timeNode.getAttribute('restart')
+        if (!restart || restart === 'always') continue
+        if (timeNode.getAttribute('nodeType') === 'interactiveSeq' && ['whenNotActive', 'never'].includes(restart)) continue
+        warnings.add(['whenNotActive', 'never'].includes(restart)
+            ? 'A non-default p:cTn@restart outside an interactive sequence is not applied yet.'
+            : 'An invalid p:cTn@restart uses the PowerPoint default "always".')
+    }
+    // Office treats begin/onBegin and end/onEnd as time-node start/end events.
+    // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/3f514974-f6cb-465b-8af9-96f1c0b308cc
     for (const [interactiveIndex, interactive] of interactiveSequences.entries()) {
         const conditions = children(child(interactive, 'stCondLst'), 'cond')
+        const sequenceContainer = interactive.parentElement?.localName === 'seq' ? interactive.parentElement : undefined
+        const restart = interactive.getAttribute('restart')
         const triggerForCondition = (condition: Element): NonNullable<PptxSlide['triggeredAnimations']>[number]['trigger'] | undefined => {
             const event = condition.getAttribute('evt') || ''
             const shapeTarget = firstDescendant(condition, 'spTgt')
+            const bookmarkTarget = firstDescendant(condition, 'bmkTgt')
+            if (event === 'onMediaBookmark' && bookmarkTarget) {
+                const id = bookmarkTarget.getAttribute('spid') || ''
+                const bookmarkName = bookmarkTarget.getAttribute('bmkName') || ''
+                const mediaCandidate = elementsById.get(id)
+                const media = mediaCandidate && (mediaCandidate.kind === 'audio' || mediaCandidate.kind === 'video') && mediaCandidate.mediaUrl ? mediaCandidate : undefined
+                const bookmark = media?.mediaBookmarks?.find(item => item.name === bookmarkName)
+                return bookmark && id && bookmarkName ? {type: 'mediaBookmark', id, bookmarkName, timeMs: bookmark.timeMs} : undefined
+            }
             if (shapeTriggerEvents.has(event) && shapeTarget) {
                 const id = shapeTarget.getAttribute('spid') || ''
-                return id && elements.some(element => element.id === id) ? {type: 'shape', id, event: event as 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut'} : undefined
+                return id && renderedElementIds.has(id) ? {type: 'shape', id, event: event as 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut'} : undefined
             }
-            if (slideTriggerEvents.has(event) && firstDescendant(condition, 'sldTgt')) {
-                return {type: 'slide', event: event as 'onNext' | 'onPrev'}
+            if ((event === 'onNext' || event === 'onPrev' || event === 'onStopAudio') && firstDescendant(condition, 'sldTgt')) {
+                return {type: 'slide', event}
+            }
+            const timeNodeId = firstDescendant(condition, 'tn')?.getAttribute('val')
+            if (['begin', 'onBegin', 'end', 'onEnd'].includes(event) && timeNodeId) {
+                const source = timeNodeSources.get(timeNodeId)
+                const isEnd = event === 'end' || event === 'onEnd'
+                const sourceDelayMs = isEnd ? source?.endDelayMs : source?.startDelayMs
+                if (source && sourceDelayMs !== undefined && Number.isFinite(sourceDelayMs)) {
+                    return {
+                        type: 'timeNode',
+                        id: timeNodeId,
+                        event: isEnd ? 'onEnd' : 'onBegin',
+                        sourceStep: source.step,
+                        sourceDelayMs,
+                        delayMs: timelineTime(condition.getAttribute('delay'))
+                    }
+                }
             }
             return undefined
         }
@@ -5449,7 +7251,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         const triggerCondition = triggerMatch?.condition
         const trigger = triggerMatch?.trigger
         if (!triggerCondition || !trigger) {
-            warnings.add('An interactive animation without a supported shape or slide navigation trigger was skipped.')
+            warnings.add('An interactive animation without a supported shape, slide navigation, timing-node, media-bookmark, or onStopAudio trigger was skipped.')
             continue
         }
         if (conditions.some(condition => condition !== triggerCondition)) warnings.add('Only one trigger condition per interactive animation is supported.')
@@ -5476,7 +7278,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         }
         for (const [sequenceOrder, timeNode] of markers.entries()) {
             const type = groupType(timeNode)
-            if (type === 'clickEffect' || !currentStep) {
+            if (startsOnClick(type) || !currentStep) {
                 currentStep = []
                 triggerSteps.push(currentStep)
             }
@@ -5487,7 +7289,14 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const groupStartDelay = inheritedDelay(timeNode)
             currentStep.push(...parseGroup(group, precedingEnd + groupStartDelay, timeNode, `interactive:${interactiveIndex}`, sequenceOrder, followsPreviousGroup(type) ? mediaWaitForEndKeys : [], groupStartDelay))
         }
-        if (triggerSteps.some(step => step.length)) triggeredAnimations.push({trigger, steps: triggerSteps})
+        if (triggerSteps.some(step => step.length)) {
+            triggeredAnimations.push({
+                trigger,
+                steps: triggerSteps,
+                concurrent: sequenceConcurrent(sequenceContainer),
+                ...(restart === 'whenNotActive' || restart === 'never' ? {restart} : {})
+            })
+        }
     }
     if (descendants(timing, 'animEffect').some(effect => !handledEffects.has(effect))) {
         warnings.add('Interactive animation sequences are not played yet.')
@@ -5518,8 +7327,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
     }
 }
 
-async function parsePicture(shape: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>): Promise<PptxElement> {
+async function parsePicture(shape: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, fillStyles?: ParsedTheme): Promise<PptxElement> {
     const properties = child(shape, 'spPr')
+    const pictureEffects = referencedShapeEffects(shape, theme, warnings, fillStyles, 'picture')
     const transform = shapeTransform(properties)
     const blip = firstDescendant(shape, 'blip')
     const imageRelationId = namespacedAttr(blip, 'embed') || ''
@@ -5540,6 +7350,23 @@ async function parsePicture(shape: Element, rels: Map<string, PptxRelationship>,
     const mediaFade = fadeNode && fadeInMs !== undefined && fadeOutMs !== undefined && (fadeInMs > 0 || fadeOutMs > 0) ? {inMs: fadeInMs, outMs: fadeOutMs} : undefined
     if (trimNode && !mediaTrim && (trimStartMs === undefined || trimEndMs === undefined)) warnings.add('An invalid embedded media trim range was ignored; the full media is available.')
     if (fadeNode && !mediaFade && (fadeInMs === undefined || fadeOutMs === undefined)) warnings.add('An invalid embedded media fade was ignored.')
+    const bookmarkNodes = children(child(mediaNode, 'bmkLst'), 'bmk')
+    const mediaBookmarks: Array<{name: string; timeMs: number}> = []
+    const bookmarkNames = new Set<string>()
+    const bookmarkTimes = new Set<number>()
+    for (const bookmark of bookmarkNodes.slice(0, 512)) {
+        const name = bookmark.getAttribute('name') || ''
+        const rawTime = bookmark.getAttribute('time')
+        const timeMs = mediaTimeOffsetMs(rawTime)
+        if (!name || name.length > 255 || rawTime === null || timeMs === undefined || bookmarkNames.has(name) || bookmarkTimes.has(timeMs)) {
+            warnings.add('An invalid or duplicate embedded media bookmark was ignored.')
+            continue
+        }
+        bookmarkNames.add(name)
+        bookmarkTimes.add(timeMs)
+        mediaBookmarks.push({name, timeMs})
+    }
+    if (bookmarkNodes.length > 512) warnings.add('Media bookmarks beyond the 512-bookmark PowerPoint limit were skipped.')
     // MS-PPTX CT_Media gives r:link precedence when p14:media has both r:link and r:embed.
     const mediaRelationId = namespacedAttr(mediaNode, 'link') || namespacedAttr(mediaNode, 'embed') || namespacedAttr(videoFile, 'link') || namespacedAttr(audioFile, 'link')
     const mediaRelation = mediaRelationId ? rels.get(mediaRelationId) : undefined
@@ -5610,8 +7437,12 @@ async function parsePicture(shape: Element, rels: Map<string, PptxRelationship>,
         mediaFormat,
         mediaTrim,
         mediaFade,
+        mediaBookmarks: mediaBookmarks.length ? mediaBookmarks : undefined,
         imageCrop: validCrop ? imageCrop : undefined,
-        shadow: outerShadow(properties, theme),
+        shadow: pictureEffects.shadow,
+        shadows: pictureEffects.shadows,
+        glow: pictureEffects.glow,
+        glows: pictureEffects.glows,
         paragraphs: [],
         margins: {left: 0, right: 0, top: 0, bottom: 0},
         verticalAlign: 'top'
@@ -5696,7 +7527,264 @@ function applyGroupTransform(element: PptxElement, parent: Matrix2D): PptxElemen
     }
 }
 
-async function parseSceneElements(node: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, parentTransform?: Matrix2D, animationTargetIds: Set<string> = new Set()): Promise<PptxElement[]> {
+const presetConnectionGeometryCache = new Map<string, Element | null>()
+
+async function presetConnectionGeometry(name: string): Promise<Element | undefined> {
+    let cached = presetConnectionGeometryCache.get(name)
+    if (cached === undefined) {
+        const {default: definitions} = await import('./preset-connection-geometries')
+        const source = definitions[name]
+        cached = source ? parseXml(source, `The ${name} preset connection geometry`).documentElement : null
+        presetConnectionGeometryCache.set(name, cached)
+    }
+    return cached?.cloneNode(true) as Element | undefined
+}
+
+function mergePresetConnectionAdjustments(geometry: Element, preset: Element | undefined): void {
+    const defaults = child(geometry, 'avLst')
+    const instance = child(preset, 'avLst')
+    if (!defaults || !instance) return
+    for (const adjustment of children(instance, 'gd')) {
+        const name = adjustment.getAttribute('name')
+        if (!name) continue
+        const existing = children(defaults, 'gd').find(node => node.getAttribute('name') === name)
+        if (existing) defaults.replaceChild(adjustment.cloneNode(true), existing)
+        else defaults.appendChild(adjustment.cloneNode(true))
+    }
+}
+
+async function resolveConnectionSite(
+    reference: Element,
+    targetNode: Element,
+    target: PptxElement,
+    warnings: Set<string>
+): Promise<[number, number] | undefined> {
+    const rawIndex = reference.getAttribute('idx')
+    if (rawIndex === null || !/^\d+$/.test(rawIndex)) {
+        warnings.add('A connector attachment has an invalid connection-site index; its saved endpoint was retained.')
+        return undefined
+    }
+    const index = Number(rawIndex)
+    const properties = child(targetNode, 'spPr')
+    const custom = child(properties, 'custGeom')
+    let geometry: Element | undefined
+    let coordinateWidth = target.width
+    let coordinateHeight = target.height
+    if (custom) {
+        geometry = custom
+        const path = children(child(custom, 'pathLst'), 'path')[0]
+        if (path) {
+            coordinateWidth = numberAttr(path, 'w')
+            coordinateHeight = numberAttr(path, 'h')
+        }
+    } else {
+        const preset = child(properties, 'prstGeom')
+        const presetName = preset?.getAttribute('prst') || 'rect'
+        try {
+            geometry = await presetConnectionGeometry(presetName)
+        } catch {
+            warnings.add(`The ${presetName} preset connection sites could not be loaded; the saved connector endpoint was retained.`)
+            return undefined
+        }
+        if (geometry) mergePresetConnectionAdjustments(geometry, preset)
+        if (!['sp', 'cxnSp', 'pic'].includes(targetNode.localName)) {
+            warnings.add('A connector attached to a non-shape object uses rectangular connection sites.')
+            try {
+                geometry = await presetConnectionGeometry('rect')
+            } catch {
+                geometry = undefined
+            }
+        }
+    }
+    if (!(coordinateWidth > 0) || !(coordinateHeight > 0)) {
+        warnings.add('A connector target has invalid connection-site coordinates; the saved endpoint was retained.')
+        return undefined
+    }
+    const sites = children(child(geometry, 'cxnLst'), 'cxn')
+    const site = sites[index]
+    if (!site) {
+        warnings.add(`Connection-site index ${index} is unavailable on target ${target.id}; the saved connector endpoint was retained.`)
+        return undefined
+    }
+    const position = child(site, 'pos')
+    const xToken = position?.getAttribute('x')
+    const yToken = position?.getAttribute('y')
+    if (xToken === null || xToken === undefined || yToken === null || yToken === undefined) {
+        warnings.add(`Connection site ${index} on target ${target.id} has no position; the saved connector endpoint was retained.`)
+        return undefined
+    }
+    const resolveGuide = customGeometryGuideResolver(geometry, coordinateWidth, coordinateHeight, warnings)
+    const x = resolveGuide(xToken)
+    const y = resolveGuide(yToken)
+    if (x === undefined || y === undefined) {
+        warnings.add(`Connection site ${index} on target ${target.id} uses an unresolved guide; the saved connector endpoint was retained.`)
+        return undefined
+    }
+    return [x / coordinateWidth * target.width, y / coordinateHeight * target.height]
+}
+
+function localPointToSlide(element: PptxElement, [x, y]: [number, number]): [number, number] {
+    if (element.renderMatrix) {
+        const [a, b, c, d, e, f] = element.renderMatrix
+        return [element.x + a * x + c * y + e, element.y + b * x + d * y + f]
+    }
+    const localX = element.flipH ? element.width - x : x
+    const localY = element.flipV ? element.height - y : y
+    const radians = element.rotation * Math.PI / 180
+    const cosine = Math.cos(radians)
+    const sine = Math.sin(radians)
+    const dx = localX - element.width / 2
+    const dy = localY - element.height / 2
+    return [element.x + element.width / 2 + dx * cosine - dy * sine, element.y + element.height / 2 + dx * sine + dy * cosine]
+}
+
+function slidePointToLocal(element: PptxElement, [x, y]: [number, number]): [number, number] | undefined {
+    if (element.renderMatrix) {
+        const [a, b, c, d, e, f] = element.renderMatrix
+        const determinant = a * d - b * c
+        if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) return undefined
+        const dx = x - element.x - e
+        const dy = y - element.y - f
+        return [(d * dx - c * dy) / determinant, (-b * dx + a * dy) / determinant]
+    }
+    const radians = element.rotation * Math.PI / 180
+    const cosine = Math.cos(radians)
+    const sine = Math.sin(radians)
+    const dx = x - element.x - element.width / 2
+    const dy = y - element.y - element.height / 2
+    const localX = element.width / 2 + dx * cosine + dy * sine
+    const localY = element.height / 2 - dx * sine + dy * cosine
+    return [element.flipH ? element.width - localX : localX, element.flipV ? element.height - localY : localY]
+}
+
+function connectorPathEndpoints(path: string): {start: [number, number]; end: [number, number]} | undefined {
+    const numberPattern = /[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi
+    const matches = [...path.matchAll(/([MLC])([^MLC]*)/g)]
+    if (!matches.length || /[^\s,]/.test(path.replace(/[MLC]|[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi, ''))) return undefined
+    let start: [number, number] | undefined
+    let end: [number, number] | undefined
+    let moveCount = 0
+    for (const match of matches) {
+        const command = match[1]!
+        const values = [...match[2]!.matchAll(numberPattern)].map(value => Number(value[0]))
+        if (!values.length || values.some(value => !Number.isFinite(value)) || values.length % (command === 'C' ? 6 : 2) !== 0) return undefined
+        if (command === 'M') {
+            if (start) return undefined
+            start = [values[0]!, values[1]!]
+            moveCount++
+        } else if (!start) return undefined
+        end = [values.at(-2)!, values.at(-1)!]
+    }
+    return moveCount === 1 && start && end ? {start, end} : undefined
+}
+
+function alignConnectorPath(path: string, start: [number, number], end: [number, number]): string | undefined {
+    const endpoints = connectorPathEndpoints(path)
+    if (!endpoints) return undefined
+    const [x1, y1] = endpoints.start
+    const [x2, y2] = endpoints.end
+    const dx = x2 - x1
+    const dy = y2 - y1
+    const targetDx = end[0] - start[0]
+    const targetDy = end[1] - start[1]
+    let map: (x: number, y: number) => [number, number]
+    if (Math.abs(dx) > 1e-8 && Math.abs(dy) > 1e-8) {
+        const scaleX = targetDx / dx
+        const scaleY = targetDy / dy
+        map = (x, y) => [start[0] + (x - x1) * scaleX, start[1] + (y - y1) * scaleY]
+    } else {
+        const sourceLength = Math.hypot(dx, dy)
+        if (sourceLength < 1e-8) return undefined
+        const targetLength = Math.hypot(targetDx, targetDy)
+        const scale = targetLength / sourceLength
+        const cosine = targetLength === 0 ? 1 : (dx * targetDx + dy * targetDy) / (sourceLength * targetLength)
+        const sine = targetLength === 0 ? 0 : (dx * targetDy - dy * targetDx) / (sourceLength * targetLength)
+        map = (x, y) => {
+            const localX = x - x1
+            const localY = y - y1
+            return [start[0] + scale * (cosine * localX - sine * localY), start[1] + scale * (sine * localX + cosine * localY)]
+        }
+    }
+    const numberPattern = /[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi
+    const formatted = (value: number) => {
+        const rounded = Number(value.toFixed(4))
+        return Object.is(rounded, -0) ? '0' : String(rounded)
+    }
+    return [...path.matchAll(/([MLC])([^MLC]*)/g)].map(match => {
+        const command = match[1]!
+        const values = [...match[2]!.matchAll(numberPattern)].map(value => Number(value[0]))
+        const mapped: string[] = []
+        for (let index = 0; index < values.length; index += 2) {
+            const point = map(values[index]!, values[index + 1]!)
+            mapped.push(formatted(point[0]), formatted(point[1]))
+        }
+        return `${command} ${mapped.join(' ')}`
+    }).join(' ')
+}
+
+async function resolveConnectorAttachments(tree: Element | undefined, elements: PptxElement[], warnings: Set<string>): Promise<void> {
+    const elementById = new Map(elements.map(element => [element.id, element]))
+    const nodeById = new Map<string, Element>()
+    for (const identity of descendants(tree, 'cNvPr')) {
+        const id = identity.getAttribute('id')
+        let node = identity.parentElement
+        while (node && !['sp', 'cxnSp', 'pic', 'graphicFrame', 'grpSp'].includes(node.localName)) node = node.parentElement
+        if (id && node) nodeById.set(id, node)
+    }
+    for (const connectorNode of nodeById.values()) {
+        if (connectorNode.localName !== 'cxnSp') continue
+        const connectionProperties = child(child(connectorNode, 'nvCxnSpPr'), 'cNvCxnSpPr')
+        const startReference = child(connectionProperties, 'stCxn')
+        const endReference = child(connectionProperties, 'endCxn')
+        if (!startReference && !endReference) continue
+        const connectorId = firstDescendant(connectorNode, 'cNvPr')?.getAttribute('id') || ''
+        const connector = elementById.get(connectorId)
+        const route = connector?.linePath || (connector?.geometry === 'lineInv'
+            ? 'M 0 1000 L 1000 0'
+            : connector && ['line', 'straightConnector1'].includes(connector.geometry) ? 'M 0 0 L 1000 1000' : undefined)
+        if (!connector || !route || !(connector.width > 0) || !(connector.height > 0)) {
+            warnings.add(`Connector ${connectorId || '(unknown)'} has no supported route; its saved endpoint positions were retained.`)
+            continue
+        }
+        const endpoints = connectorPathEndpoints(route)
+        if (!endpoints) {
+            warnings.add(`Connector ${connectorId} uses an unsupported route; its saved endpoint positions were retained.`)
+            continue
+        }
+        const resolveEndpoint = async (reference: Element | undefined, point: [number, number]): Promise<[number, number]> => {
+            if (!reference) return point
+            const targetId = reference.getAttribute('id')
+            const target = targetId ? elementById.get(targetId) : undefined
+            const targetNode = targetId ? nodeById.get(targetId) : undefined
+            if (!target || !targetNode) {
+                warnings.add(`Connector ${connectorId} references missing target ${targetId || '(unknown)'}; its saved endpoint was retained.`)
+                return point
+            }
+            const site = await resolveConnectionSite(reference, targetNode, target, warnings)
+            if (!site) return point
+            const slidePoint = localPointToSlide(target, site)
+            const localPoint = slidePointToLocal(connector, slidePoint)
+            if (!localPoint || !localPoint.every(Number.isFinite)) {
+                warnings.add(`Connector ${connectorId} has a non-invertible transform; its saved endpoint was retained.`)
+                return point
+            }
+            return [localPoint[0] / connector.width * 1000, localPoint[1] / connector.height * 1000]
+        }
+        const start = await resolveEndpoint(startReference, endpoints.start)
+        const end = await resolveEndpoint(endReference, endpoints.end)
+        const aligned = alignConnectorPath(route, start, end)
+        if (!aligned) {
+            warnings.add(`Connector ${connectorId} could not align its route to the requested connection sites; its saved route was retained.`)
+            continue
+        }
+        connector.linePath = aligned
+        if (!['line', 'lineInv', 'straightConnector1'].includes(connector.geometry)) {
+            warnings.add(`Connector ${connectorId} retains its preset route with endpoint warping; PowerPoint automatic rerouting and connection-site angles are approximated.`)
+        }
+    }
+}
+
+async function parseSceneElements(node: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, parentTransform: Matrix2D | undefined, animationTargetIds: Set<string>, sourceTheme: Record<string, string>, fillStyles?: ParsedTheme, groupFill?: string): Promise<PptxElement[]> {
     if (node.localName === 'grpSp') {
         const localTransform = groupTransformMatrix(node)
         if (!localTransform) {
@@ -5704,31 +7792,33 @@ async function parseSceneElements(node: Element, rels: Map<string, PptxRelations
             return []
         }
         const transform = parentTransform ? multiplyMatrix(parentTransform, localTransform) : localTransform
+        const groupFillNode = children(child(node, 'grpSpPr')).find(item => FILL_KINDS.includes(item.localName))
+        const currentGroupFill = groupFillNode ? fillColor(groupFillNode, theme, warnings, groupFill, true) : undefined
         const elements: PptxElement[] = []
         for (const item of children(node)) {
             if (!['sp', 'pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(item.localName)) continue
-            elements.push(...(await parseSceneElements(item, rels, zip, theme, warnings, urls, imageUrlCache, transform, animationTargetIds)))
+            elements.push(...(await parseSceneElements(item, rels, zip, theme, warnings, urls, imageUrlCache, transform, animationTargetIds, sourceTheme, fillStyles, currentGroupFill)))
         }
         return elements
     }
 
     let element: PptxElement | undefined
-    if (node.localName === 'sp' || node.localName === 'cxnSp') element = parseShape(node, theme, warnings, {}, {}, true, rels)
-    else if (node.localName === 'pic') element = await parsePicture(node, rels, zip, theme, warnings, urls, imageUrlCache)
+    if (node.localName === 'sp' || node.localName === 'cxnSp') element = parseShape(node, theme, warnings, {}, {}, true, rels, fillStyles, groupFill)
+    else if (node.localName === 'pic') element = await parsePicture(node, rels, zip, theme, warnings, urls, imageUrlCache, fillStyles)
     else if (node.localName === 'graphicFrame') {
         element = parseTable(node, theme, warnings, rels)
-        if (!element && firstDescendant(node, 'chart')) element = await parseChart(node, rels, zip, theme, warnings)
+        if (!element && firstDescendant(node, 'chart')) element = await parseChart(node, rels, zip, theme, warnings, sourceTheme)
         else if (!element) {
-            element = await parseOlePreview(node, rels, zip, theme, warnings, urls, imageUrlCache)
+            element = await parseOlePreview(node, rels, zip, theme, warnings, urls, imageUrlCache, fillStyles)
             if (!element) {
-                const cachedDrawing = await parseSmartArtCachedDrawing(node, rels, zip, theme, warnings, urls, imageUrlCache, animationTargetIds, parentTransform)
+                const cachedDrawing = await parseSmartArtCachedDrawing(node, rels, zip, theme, warnings, urls, imageUrlCache, animationTargetIds, parentTransform, sourceTheme, fillStyles)
                 if (cachedDrawing) return cachedDrawing
                 element = await parseSmartArtTextFallback(node, rels, zip, theme, warnings)
             }
             if (!element) warnings.add('Unsupported graphic frames are not rendered yet.')
         }
     }
-    if (element && node.localName === 'cxnSp') warnings.add('Connector geometry is not fully rendered yet.')
+    if (element && node.localName === 'cxnSp' && !LINE_GEOMETRIES.has(element.geometry)) warnings.add('Connector geometry is not fully rendered yet.')
     if (!element) return []
     if (!element.hyperlink) element.hyperlink = parseHyperlink(child(firstDescendant(node, 'cNvPr'), 'hlinkClick'), rels, warnings)
     return [parentTransform ? applyGroupTransform(element, parentTransform) : element]
@@ -5756,10 +7846,10 @@ async function backgroundFill(xml: XMLDocument | undefined, rels: Map<string, Pp
                 warnings.add(`Theme slide background style ${index} could not be resolved.`)
                 return {}
             }
-            const colorReference = children(reference).find(node => ['srgbClr', 'sysClr', 'schemeClr', 'hslClr', 'prstClr'].includes(node.localName))
+            const colorReference = children(reference).find(node => ['srgbClr', 'scrgbClr', 'sysClr', 'schemeClr', 'hslClr', 'prstClr'].includes(node.localName))
             const placeholderColor = readColor(colorReference, theme.colors)
             const styleTheme = placeholderColor ? {...theme.colors, phClr: placeholderColor} : theme.colors
-            const color = fillColor(style, styleTheme, warnings)
+            const color = fillColor(style, styleTheme, warnings, undefined, true)
             return {color: color === 'transparent' ? undefined : color}
         }
         return {}
@@ -5767,7 +7857,7 @@ async function backgroundFill(xml: XMLDocument | undefined, rels: Map<string, Pp
     const imageFill = child(properties, 'blipFill')
     if (!imageFill) {
         if (child(properties, 'grpFill')) warnings.add('Group slide background fills are not rendered.')
-        const color = fillColor(properties, theme.colors, warnings)
+        const color = fillColor(properties, theme.colors, warnings, undefined, true)
         return {color: color === 'transparent' ? undefined : color}
     }
     const tile = child(imageFill, 'tile')
@@ -5830,13 +7920,11 @@ async function backgroundFill(xml: XMLDocument | undefined, rels: Map<string, Pp
         const rawFlip = tile.getAttribute('flip') || 'none'
         const flips = ['none', 'x', 'y', 'xy'] as const
         const flip = flips.includes(rawFlip as (typeof flips)[number]) ? (rawFlip as (typeof flips)[number]) : 'none'
-        const hasCrop = Object.values(crop).some(value => value !== 0)
-        if (hasCrop) warnings.add('A cropped tiled slide background uses the full image while tiling.')
         if (flip !== rawFlip) warnings.add(`Unknown slide background tile flip "${rawFlip}" was replaced with none.`)
         return {
             image: {
                 url,
-                crop: {left: 0, top: 0, right: 0, bottom: 0},
+                crop,
                 tile: {scaleX, scaleY, align, flip, offsetX: readTileOffset('tx'), offsetY: readTileOffset('ty')}
             }
         }
@@ -5844,13 +7932,13 @@ async function backgroundFill(xml: XMLDocument | undefined, rels: Map<string, Pp
     return {image: {url, crop}}
 }
 
-async function parseDecorations(path: string, xml: XMLDocument, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>): Promise<PptxElement[]> {
+async function parseDecorations(path: string, xml: XMLDocument, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, sourceTheme: Record<string, string>, fillStyles?: ParsedTheme): Promise<PptxElement[]> {
     const tree = firstDescendant(xml.documentElement, 'spTree')
     const rels = await loadRelationships(zip, relationshipPath(path))
     const elements: PptxElement[] = []
     for (const node of children(tree)) {
         if (node.localName === 'sp' && firstDescendant(node, 'ph')) continue
-        elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache)))
+        elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache, undefined, new Set(), sourceTheme, fillStyles)))
     }
     return elements.map(element => ({...element, id: `${path}:${element.id}`}))
 }
@@ -5858,13 +7946,13 @@ async function parseDecorations(path: string, xml: XMLDocument, zip: JSZip, them
 export async function parsePptx(file: File): Promise<PptxDocument> {
     if (file.size > MAX_FILE_BYTES) throw new Error('This presentation is larger than the 150 MB browser limit.')
     const signature = new Uint8Array(await file.slice(0, 8).arrayBuffer())
-    if (signature[0] === 0xd0 && signature[1] === 0xcf && signature[2] === 0x11 && signature[3] === 0xe0) {
+    if (COMPOUND_FILE_SIGNATURE.every((byte, index) => signature[index] === byte)) {
         throw new Error('This file is encrypted or uses the legacy .ppt format. Save it as an unencrypted .pptx first.')
     }
     const urls: string[] = []
     try {
         const zip = await JSZip.loadAsync(file)
-        validateArchiveSize(zip)
+        await validateArchiveSize(zip)
         const presentationPath = 'ppt/presentation.xml'
         const presentationEntry = zip.file(presentationPath)
         if (!presentationEntry) throw new Error('This file is not a valid PowerPoint presentation.')
@@ -5877,12 +7965,15 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
         const orderedSlides = children(slideIds, 'sldId')
         if (!orderedSlides.length) throw new Error('No slides were found in this presentation.')
         if (orderedSlides.length > 500) throw new Error('This presentation contains more than 500 slides.')
+        const presetShapeDefinitionsReady = loadPresetShapeDefinitions()
         const fallbackThemePath = Object.keys(zip.files).find(path => /^ppt\/theme\/theme\d+\.xml$/i.test(path))
         const warnings = new Set<string>()
+        if (!(await presetShapeDefinitionsReady)) warnings.add('The bundled ECMA-376 preset shape definitions could not be loaded; unhandled preset shapes will use rectangle fallbacks.')
         const slides: PptxSlide[] = []
         const imageUrlCache = new Map<string, string>()
         const themeCache = new Map<string, ParsedTheme>()
         const decorationCache = new Map<string, Promise<PptxElement[]>>()
+        const embeddedFonts = await parseEmbeddedFonts(presentation, presentationRels, zip, urls, warnings)
 
         const readXml = async (path: string | undefined): Promise<XMLDocument | undefined> => {
             if (!path) return undefined
@@ -5898,14 +7989,14 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             themeCache.set(themePath, theme)
             return theme
         }
-        const loadDecorations = (path: string | undefined, xml: XMLDocument | undefined, theme: Record<string, string>): Promise<PptxElement[]> => {
+        const loadDecorations = (path: string | undefined, xml: XMLDocument | undefined, theme: Record<string, string>, sourceTheme: Record<string, string>, fillStyles?: ParsedTheme): Promise<PptxElement[]> => {
             if (!path || !xml) return Promise.resolve([])
-            const cacheKey = `${path}|${Object.entries(theme)
+            const cacheKey = `${path}|${Object.entries(theme).concat(Object.entries(sourceTheme))
                 .map(([key, value]) => `${key}:${value}`)
                 .join(';')}`
             let cached = decorationCache.get(cacheKey)
             if (!cached) {
-                cached = parseDecorations(path, xml, zip, theme, warnings, urls, imageUrlCache)
+                cached = parseDecorations(path, xml, zip, theme, warnings, urls, imageUrlCache, sourceTheme, fillStyles)
                 decorationCache.set(cacheKey, cached)
             }
             return cached
@@ -5929,6 +8020,16 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             const notesXml = notesRelation && !notesRelation.external ? await readXml(notesRelation.target) : undefined
             if (notesRelation && notesRelation.external) warnings.add(`Slide ${index + 1} has an external notes relationship that was ignored.`)
             else if (notesRelation && !notesXml) warnings.add(`Slide ${index + 1} references a missing notes slide.`)
+            const notesRels = notesXml && notesRelation ? await loadRelationships(zip, relationshipPath(notesRelation.target)) : new Map<string, PptxRelationship>()
+            const notesMasterRelation = [...notesRels.values()].find(relation => relation.type.endsWith('/notesMaster'))
+            const notesMasterXml = notesMasterRelation && !notesMasterRelation.external ? await readXml(notesMasterRelation.target) : undefined
+            if (notesMasterRelation?.external) warnings.add(`Slide ${index + 1} has an external notes-master relationship that was ignored.`)
+            else if (notesMasterRelation && !notesMasterXml) warnings.add(`Slide ${index + 1} references a missing notes master.`)
+            const notesMasterRels = notesMasterXml && notesMasterRelation ? await loadRelationships(zip, relationshipPath(notesMasterRelation.target)) : new Map<string, PptxRelationship>()
+            const notesThemeData = notesXml ? await loadTheme(notesMasterRels) : undefined
+            const notesMasterMap = resolveColorMap(notesMasterXml?.documentElement, DEFAULT_COLOR_MAP, DEFAULT_COLOR_MAP, warnings)
+            const notesMap = resolveColorMap(notesXml?.documentElement, notesMasterMap, notesMasterMap, warnings)
+            const notesTheme = mappedThemeColors(notesThemeData?.colors || DEFAULT_THEME, notesMap)
             const layoutPath = [...rels.values()].find(relation => relation.type.endsWith('/slideLayout'))?.target
             const layoutXml = await readXml(layoutPath)
             if (layoutPath && !layoutXml) warnings.add(`Slide ${index + 1} references a missing layout.`)
@@ -5938,46 +8039,62 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             if (masterPath && !masterXml) warnings.add(`Slide ${index + 1} references a missing master.`)
             const masterRels = masterPath ? await loadRelationships(zip, relationshipPath(masterPath)) : new Map<string, PptxRelationship>()
             const themeData = await loadTheme(masterRels)
-            const theme = themeData.colors
+            const masterColorMap = resolveColorMap(masterXml?.documentElement, DEFAULT_COLOR_MAP, DEFAULT_COLOR_MAP, warnings)
+            const layoutColorMap = resolveColorMap(layoutXml?.documentElement, masterColorMap, masterColorMap, warnings)
+            const slideColorMap = resolveColorMap(xml.documentElement, layoutColorMap, masterColorMap, warnings)
+            const masterTheme = mappedThemeColors(themeData.colors, masterColorMap)
+            const layoutTheme = mappedThemeColors(themeData.colors, layoutColorMap)
+            const theme = mappedThemeColors(themeData.colors, slideColorMap)
             const masterTextStyles = parseMasterTextStyles(masterXml, theme, warnings, masterRels)
-            const masterPlaceholders = parsePlaceholderCandidates(masterXml, theme, warnings, masterTextStyles, [], false, masterRels)
-            const layoutPlaceholders = parsePlaceholderCandidates(layoutXml, theme, warnings, masterTextStyles, masterPlaceholders, false, layoutRels)
+            const masterPlaceholders = parsePlaceholderCandidates(masterXml, theme, warnings, masterTextStyles, [], false, masterRels, themeData)
+            const layoutPlaceholders = parsePlaceholderCandidates(layoutXml, theme, warnings, masterTextStyles, masterPlaceholders, false, layoutRels, themeData)
             const tree = firstDescendant(xml.documentElement, 'spTree')
             const animationTargetIds = new Set(descendants(xml.documentElement, 'spTgt').map(target => target.getAttribute('spid') || '').filter(Boolean))
-            const masterElements = await loadDecorations(masterPath, masterXml, theme)
-            const layoutElements = await loadDecorations(layoutPath, layoutXml, theme)
+            // p:sld and p:sldLayout showMasterSp both default to true and gate master-slide shapes.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.slide.showmastershapes?view=openxml-3.0.1
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.slidelayout.showmastershapes?view=openxml-3.0.1
+            const masterShapesVisible = [xml.documentElement, layoutXml?.documentElement].every(root => {
+                const value = root?.getAttribute('showMasterSp')
+                return value === null || value === undefined || !['0', 'false'].includes(value.trim().toLowerCase())
+            })
+            const masterElements = masterShapesVisible ? await loadDecorations(masterPath, masterXml, masterTheme, themeData.colors, themeData) : []
+            const layoutElements = await loadDecorations(layoutPath, layoutXml, layoutTheme, themeData.colors, themeData)
             const elements: PptxElement[] = [...masterElements, ...layoutElements]
+            const slideElementStart = elements.length
             for (const node of children(tree)) {
                 if (node.localName === 'sp') {
                     const identity = parsePlaceholderIdentity(node)
                     const layoutPlaceholder = matchPlaceholder(identity, layoutPlaceholders)
                     const masterPlaceholder = matchPlaceholder(identity, masterPlaceholders)
                     if (!identity) {
-                        elements.push(parseShape(node, theme, warnings, {}, {}, true, rels))
+                        elements.push(parseShape(node, theme, warnings, {}, {}, true, rels, themeData))
                         continue
                     }
                     const masterStyle = masterTextStyles[placeholderStyleCategory(identity.type)]
                     const inheritedParagraphStyles = layoutPlaceholder?.paragraphStyles || masterPlaceholder?.paragraphStyles || {}
-                    let element = parseShape(node, theme, warnings, masterStyle?.style || {}, inheritedParagraphStyles, true, rels)
+                    let element = parseShape(node, theme, warnings, masterStyle?.style || {}, inheritedParagraphStyles, true, rels, themeData)
                     element = inheritPlaceholderProperties(element, node, layoutPlaceholder || masterPlaceholder, warnings)
                     elements.push(element)
                 } else if (['pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(node.localName)) {
-                    elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache, undefined, animationTargetIds)))
+                    elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache, undefined, animationTargetIds, themeData.colors, themeData)))
                 }
             }
+            await resolveConnectorAttachments(tree, elements.slice(slideElementStart), warnings)
             await resolvePictureBullets(elements, zip, warnings, urls, imageUrlCache)
+            const notes = parseSpeakerNotes(notesXml, notesMasterXml, notesTheme, warnings, notesRels, notesMasterRels)
+            if (notes.speakerNoteParagraphs) await resolvePictureBullets([{paragraphs: notes.speakerNoteParagraphs}], zip, warnings, urls, imageUrlCache)
             const animations = parseAnimations(xml.documentElement, theme, warnings, elements, width, height)
             const slideInfo = firstDescendant(xml.documentElement, 'cSld')
-            const slideBackground = await backgroundFill(xml, rels, themeData, warnings, zip, urls, imageUrlCache)
-            const layoutBackground = await backgroundFill(layoutXml, layoutRels, themeData, warnings, zip, urls, imageUrlCache)
-            const masterBackground = await backgroundFill(masterXml, masterRels, themeData, warnings, zip, urls, imageUrlCache)
+            const slideBackground = await backgroundFill(xml, rels, {...themeData, colors: theme}, warnings, zip, urls, imageUrlCache)
+            const layoutBackground = await backgroundFill(layoutXml, layoutRels, {...themeData, colors: layoutTheme}, warnings, zip, urls, imageUrlCache)
+            const masterBackground = await backgroundFill(masterXml, masterRels, {...themeData, colors: masterTheme}, warnings, zip, urls, imageUrlCache)
             const selectedBackground = slideBackground.image || slideBackground.color ? slideBackground : layoutBackground.image || layoutBackground.color ? layoutBackground : masterBackground
             slides.push({
                 id: relId || `slide-${index + 1}`,
                 packagePath: slidePath,
                 name: child(slideInfo, 'name')?.getAttribute('val') || `Slide ${index + 1}`,
                 elements,
-                speakerNotes: parseSpeakerNotes(notesXml, theme, warnings),
+                ...notes,
                 ...animations,
                 ...parseSlideAdvance(xml.documentElement, warnings),
                 background: selectedBackground.color || '#ffffff',
@@ -5999,7 +8116,7 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
                 }
             }
         }
-        return {name: file.name, width, height, slides, warnings: [...warnings], objectUrls: urls}
+        return {name: file.name, width, height, slides, warnings: [...warnings], objectUrls: urls, embeddedFonts}
     } catch (error) {
         urls.forEach(URL.revokeObjectURL)
         const message = error instanceof Error ? error.message : 'The presentation could not be read.'

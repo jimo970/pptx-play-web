@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { PptxDocument, PptxHyperlink, PptxSlide, PptxTransitionPlayback, PptxTriggerPlayback } from '~/utils/pptx'
-import { parsePptxInWorker, stopPptxParserWorker } from '~/utils/pptx-parser-client'
+import type { PptxDocument, PptxHyperlink, PptxSlide, PptxTransitionPlayback, PptxTriggerPlayback } from '~/utils/pptx-model'
+import { disposePptxDocument, parsePptxInWorker, stopPptxParserWorker } from '~/utils/pptx-parser-client'
 import { presenterChannelName, type PresenterMessage } from '~/utils/presenter-channel'
 import { useSlideTransition } from '~/composables/useSlideTransition'
 
@@ -15,6 +15,8 @@ const isLoading = ref(false)
 const isDragging = ref(false)
 const presenterView = ref(false)
 const sorterView = ref(false)
+const readingView = ref(false)
+const readingNotesOpen = ref(false)
 const presenterElapsedSeconds = ref(0)
 const projectorConnected = ref(false)
 const projectorOpen = ref(false)
@@ -26,6 +28,8 @@ const presenterTrigger = ref<HTMLButtonElement | null>(null)
 const presenterExit = ref<HTMLButtonElement | null>(null)
 const sorterTrigger = ref<HTMLButtonElement | null>(null)
 const sorterExit = ref<HTMLButtonElement | null>(null)
+const readingTrigger = ref<HTMLButtonElement | null>(null)
+const readingExit = ref<HTMLButtonElement | null>(null)
 const draggedSlideIndex = ref<number | null>(null)
 const sorterPageStart = ref(0)
 const screenOverlay = ref<'black' | 'white' | null>(null)
@@ -56,6 +60,9 @@ const inkBySlide = ref<Record<string, InkStroke[]>>({})
 const draftStroke = ref<InkStroke | null>(null)
 const laserPoint = ref<{ x: number; y: number } | null>(null)
 const zoom = ref(1)
+const zoomPan = ref({ x: 0, y: 0 })
+let zoomBeforeReading: number | undefined
+let zoomPanBeforeReading: { x: number; y: number } | undefined
 let slideNumberTimer: ReturnType<typeof setTimeout> | undefined
 let slideAdvanceTimer: ReturnType<typeof setTimeout> | undefined
 let presenterTimer: ReturnType<typeof setInterval> | undefined
@@ -64,10 +71,12 @@ let projectorWindow: Window | null = null
 let projectorChannelId = ''
 let lastWheelAt = 0
 const touchPoints = new Map<number, { x: number; y: number }>()
-const continuingMedia = new Map<HTMLMediaElement, { endIndex: number; timer?: ReturnType<typeof setTimeout>; onEnded: () => void }>()
+const continuingMedia = new Map<HTMLMediaElement, { endIndex: number; timer?: ReturnType<typeof setTimeout>; onEnded: () => void; frame?: HTMLElement }>()
+let continuingMediaResizeObserver: ResizeObserver | undefined
 let pinchStartDistance = 0
 let pinchStartZoom = 1
 let wasPinching = false
+let panStart: { pointerId: number; x: number; y: number; offsetX: number; offsetY: number; moved: boolean } | undefined
 const currentSlide = computed(() => deck.value?.slides[currentIndex.value] || null)
 const thumbnailSlides = computed(() => deck.value?.slides.slice(thumbnailStart.value, thumbnailEnd.value).map((slide, offset) => ({ slide, index: thumbnailStart.value + offset })) || [])
 const thumbnailCount = computed(() => deck.value?.slides.length || 0)
@@ -112,6 +121,31 @@ function stopContinuingMedia(media: HTMLMediaElement, pause = true) {
   continuingMedia.delete(media)
   if (pause) media.pause()
   media.remove()
+  state?.frame?.remove()
+  if (!continuingMedia.size && continuingMediaHost.value) {
+    continuingMediaHost.value.style.width = '0px'
+    continuingMediaHost.value.style.height = '0px'
+    continuingMediaHost.value.style.translate = ''
+    continuingMediaHost.value.style.transform = ''
+  }
+}
+
+function positionContinuingMediaHost() {
+  const host = continuingMediaHost.value
+  const slide = stageSlideHost.value
+  if (!host || !slide || !continuingMedia.size) return
+  host.style.left = `${slide.offsetLeft}px`
+  host.style.top = `${slide.offsetTop}px`
+  host.style.width = `${slide.offsetWidth}px`
+  host.style.height = `${slide.offsetHeight}px`
+  host.style.translate = slide.style.translate
+  host.style.transform = slide.style.transform
+  host.style.transformOrigin = getComputedStyle(slide).transformOrigin
+}
+
+function stopAllAudio() {
+  for (const audio of document.querySelectorAll<HTMLAudioElement>('audio')) audio.pause()
+  for (const media of [...continuingMedia.keys()]) stopContinuingMedia(media, false)
 }
 
 function continueMediaAcrossSlides(nextIndex: number, previousIndex: number) {
@@ -125,25 +159,55 @@ function continueMediaAcrossSlides(nextIndex: number, previousIndex: number) {
       media.pause()
       continue
     }
-    if (!(media instanceof HTMLAudioElement) || !continuingMediaHost.value) {
+    if (!(media instanceof HTMLAudioElement || media instanceof HTMLVideoElement) || !continuingMediaHost.value) {
       media.pause()
       continue
     }
-    const continuation = new Audio(media.currentSrc || media.src)
+    const continuation = media.cloneNode(false) as HTMLMediaElement
+    continuation.src = media.currentSrc || media.src
     continuation.preload = 'auto'
     continuation.volume = media.volume
     continuation.muted = media.muted
     continuation.playbackRate = media.playbackRate
+    continuation.loop = media.loop
+    continuation.addEventListener('click', event => event.stopPropagation())
+    continuation.addEventListener('pointerdown', event => event.stopPropagation())
     continuation.dataset.mediaId = media.dataset.mediaId
     if (media.dataset.mediaActionEndAt) continuation.dataset.mediaActionEndAt = media.dataset.mediaActionEndAt
     const startAt = media.currentTime
     const onEnded = () => stopContinuingMedia(continuation, false)
-    const state: { endIndex: number; timer?: ReturnType<typeof setTimeout>; onEnded: () => void } = { endIndex: previousIndex + slideCount, onEnded }
+    let frame: HTMLElement | undefined
+    if (continuation instanceof HTMLVideoElement) {
+      const sourceFrame = media.closest<HTMLElement>('.slide-element')
+      const slideFrame = stageSlideHost.value?.querySelector<HTMLElement>('.slide-frame')
+      if (!sourceFrame || !slideFrame || !slideFrame.offsetWidth || !slideFrame.offsetHeight) {
+        media.pause()
+        continue
+      }
+      const sourceStyle = getComputedStyle(sourceFrame)
+      frame = document.createElement('div')
+      frame.className = 'continuing-video-frame'
+      Object.assign(frame.style, {
+        left: `${sourceFrame.offsetLeft / slideFrame.offsetWidth * 100}%`,
+        top: `${sourceFrame.offsetTop / slideFrame.offsetHeight * 100}%`,
+        width: `${sourceFrame.offsetWidth / slideFrame.offsetWidth * 100}%`,
+        height: `${sourceFrame.offsetHeight / slideFrame.offsetHeight * 100}%`,
+        transform: sourceStyle.transform,
+        transformOrigin: sourceStyle.transformOrigin,
+        opacity: sourceStyle.opacity,
+        clipPath: sourceStyle.clipPath,
+      })
+      frame.append(continuation)
+    }
+    const state: { endIndex: number; timer?: ReturnType<typeof setTimeout>; onEnded: () => void; frame?: HTMLElement } = { endIndex: previousIndex + slideCount, onEnded }
+    if (frame) state.frame = frame
     const endAt = Number(continuation.dataset.mediaActionEndAt)
     if (Number.isFinite(endAt)) state.timer = setTimeout(() => stopContinuingMedia(continuation), Math.max(0, endAt - performance.now()))
     continuation.addEventListener('ended', onEnded, { once: true })
     continuingMedia.set(continuation, state)
-    continuingMediaHost.value.append(continuation)
+    if (frame) continuingMediaHost.value.append(frame)
+    else continuingMediaHost.value.append(continuation)
+    positionContinuingMediaHost()
     const start = () => {
       if (!continuingMedia.has(continuation)) return
       try { continuation.currentTime = startAt } catch {}
@@ -152,10 +216,14 @@ function continueMediaAcrossSlides(nextIndex: number, previousIndex: number) {
     if (continuation.readyState >= 1) start()
     else continuation.addEventListener('loadedmetadata', start, { once: true })
   }
+  void nextTick(positionContinuingMediaHost)
 }
 
 function togglePresenterView() {
   presenterView.value = !presenterView.value
+  if (presenterView.value) {
+    leaveReadingView()
+  }
   if (presenterTimer) clearInterval(presenterTimer)
   presenterTimer = undefined
   if (!presenterView.value) {
@@ -167,6 +235,33 @@ function togglePresenterView() {
   presenterTimer = setInterval(() => { presenterElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
   activeTool.value = 'pointer'
   void nextTick(() => presenterExit.value?.focus())
+}
+
+function leaveReadingView() {
+  if (!readingView.value) return
+  readingView.value = false
+  readingNotesOpen.value = false
+  if (zoomBeforeReading !== undefined) setZoom(zoomBeforeReading)
+  if (zoomPanBeforeReading) setZoomPan(zoomPanBeforeReading.x, zoomPanBeforeReading.y)
+  zoomBeforeReading = undefined
+  zoomPanBeforeReading = undefined
+}
+
+function toggleReadingView() {
+  if (readingView.value) {
+    leaveReadingView()
+    void nextTick(() => readingTrigger.value?.focus())
+    return
+  }
+  zoomBeforeReading = zoom.value
+  zoomPanBeforeReading = { ...zoomPan.value }
+  setZoom(1)
+  readingView.value = true
+  readingNotesOpen.value = false
+  activeTool.value = 'pointer'
+  laserPoint.value = null
+  contextMenu.value = null
+  void nextTick(() => readingExit.value?.focus())
 }
 
 function postProjectorMessage(message: PresenterMessage) {
@@ -185,6 +280,8 @@ function sendProjectorDocument() {
   postProjectorMessage({
     type: 'document', name: deck.value.name, width: deck.value.width, height: deck.value.height,
     totalSlides: deck.value.slides.length,
+    embeddedFonts: deck.value.embeddedFonts,
+    fontWarnings: deck.value.warnings.filter(warning => /embedded font/i.test(warning)),
   })
 }
 
@@ -193,11 +290,17 @@ function sendProjectorSlide() {
   postProjectorMessage({
     type: 'slide', slide: currentSlide.value, number: currentNumber.value, animationStep: animationStep.value,
     blank: screenOverlay.value, triggerPlayback: triggerPlayback.value, transitionPlayback: transitionPlayback.value,
+    ink: currentInk.value.map(stroke => ({ ...stroke })), draftStroke: draftStroke.value && { ...draftStroke.value },
+    laserPoint: activeTool.value === 'laser' && laserPoint.value ? { ...laserPoint.value } : null,
   })
 }
 
 function sendProjectorState() {
   postProjectorMessage({ type: 'state', animationStep: animationStep.value, blank: screenOverlay.value, triggerPlayback: triggerPlayback.value })
+}
+
+function sendProjectorLaserPoint(point: { x: number; y: number } | null) {
+  if (currentSlide.value) postProjectorMessage({ type: 'laser-point', slideId: currentSlide.value.id, point: point && { ...point } })
 }
 
 function sendProjectorSnapshot() {
@@ -230,6 +333,9 @@ function onProjectorMessage(event: MessageEvent<PresenterMessage>) {
   } else if (message.type === 'input') {
     if (message.action === 'next') nextSlide()
     else if (message.action === 'previous') previousSlide()
+    else if (message.action === 'end') goToLastSlide()
+    else if (message.action === 'go-to' && Number.isSafeInteger(message.slideNumber)
+      && message.slideNumber > 0 && message.slideNumber <= (deck.value?.slides.length || 0)) goToSlide(message.slideNumber - 1)
     else if (message.action === 'blank-black') screenOverlay.value = 'black'
     else if (message.action === 'blank-white') screenOverlay.value = 'white'
     else if (message.action === 'blank-clear') screenOverlay.value = null
@@ -283,13 +389,24 @@ watch(deck, () => {
   })
 }, { flush: 'post' })
 watch([deck, currentIndex], () => {
+  draftStroke.value = null
+  laserPoint.value = null
   triggerPlayback.value = []
   sendProjectorSlide()
 }, { flush: 'post' })
 watch([animationStep, screenOverlay, triggerPlayback], sendProjectorState, { flush: 'post' })
+watch(activeTool, tool => {
+  if (tool !== 'laser') {
+    laserPoint.value = null
+    sendProjectorLaserPoint(null)
+  }
+})
 
 function toggleSorterView() {
   sorterView.value = !sorterView.value
+  if (sorterView.value) {
+    leaveReadingView()
+  }
   draggedSlideIndex.value = null
   if (!sorterView.value) {
     void nextTick(() => sorterTrigger.value?.focus())
@@ -338,6 +455,10 @@ function clearDocument() {
   deckGeneration.value++
   presenterView.value = false
   sorterView.value = false
+  readingView.value = false
+  readingNotesOpen.value = false
+  zoomBeforeReading = undefined
+  zoomPanBeforeReading = undefined
   draggedSlideIndex.value = null
   stageShell.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]').forEach(media => media.pause())
   for (const media of continuingMedia.keys()) stopContinuingMedia(media)
@@ -350,7 +471,7 @@ function clearDocument() {
   stageShell.value?.classList.remove('is-prism-transition', 'is-flip-transition', 'is-switch-transition')
   flashOverlay.value?.getAnimations().forEach(animation => animation.cancel())
   transitionUnderlay.value?.replaceChildren()
-  deck.value?.objectUrls.forEach(URL.revokeObjectURL)
+  if (deck.value) disposePptxDocument(deck.value)
   deck.value = null
   currentIndex.value = 0
   animationStep.value = 0
@@ -359,7 +480,8 @@ function clearDocument() {
   laserPoint.value = null
   transitionPlayback.value = null
   activeTool.value = 'pointer'
-  zoom.value = 1
+  setZoom(1)
+  panStart = undefined
   touchPoints.clear()
 }
 
@@ -378,7 +500,7 @@ async function loadFile(file?: File) {
   try {
     const nextDocument = await parsePptxInWorker(file)
     if (generation !== fileLoadGeneration) {
-      nextDocument.objectUrls.forEach(URL.revokeObjectURL)
+      disposePptxDocument(nextDocument)
       return
     }
     clearDocument()
@@ -394,7 +516,14 @@ async function loadFile(file?: File) {
   }
 }
 
+function clearSlideNumberInput() {
+  slideNumberInput.value = ''
+  clearTimeout(slideNumberTimer)
+  slideNumberTimer = undefined
+}
+
 function previousSlide() {
+  clearSlideNumberInput()
   if (animationStep.value > 0) {
     if (currentSlide.value?.animationSequence?.rewindsOnPrevious === false) return
     // withEffect/afterEffect groups are folded into their preceding click step, matching skipTimed's prior-step boundary.
@@ -407,6 +536,7 @@ function previousSlide() {
 }
 
 function nextSlide() {
+  clearSlideNumberInput()
   if (animationStep.value < animationCount.value) {
     if (currentSlide.value?.animationSequence?.advancesOnNext === false) return
     animationStep.value++
@@ -418,8 +548,18 @@ function nextSlide() {
 }
 
 function goToSlide(index: number) {
+  clearSlideNumberInput()
   currentIndex.value = index
   animationStep.value = 0
+}
+
+function goToLastSlide() {
+  clearSlideNumberInput()
+  const slides = deck.value?.slides
+  if (!slides?.length) return
+  const index = slides.length - 1
+  currentIndex.value = index
+  animationStep.value = slides[index]?.animationSteps?.length || 0
 }
 
 function activateHyperlink(hyperlink: PptxHyperlink) {
@@ -517,18 +657,26 @@ function ensureActiveThumbnailVisible() {
 
 function onKeydown(event: KeyboardEvent) {
   if (!deck.value) return
-  const target = event.target as HTMLElement | null
-  if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'AUDIO', 'VIDEO'].includes(target.tagName)) return
-  if (/^\d$/.test(event.key) && !event.altKey && !event.ctrlKey && !event.metaKey) {
+  const target = event.target instanceof HTMLElement ? event.target : null
+  if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'AUDIO', 'VIDEO'].includes(target.tagName) || ([' ', 'Enter'].includes(event.key) && !(event.key === 'Enter' && slideNumberInput.value) && Boolean(target.closest('button, a, [role="button"]'))))) return
+  if (event.key === 'F5' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
     event.preventDefault()
-    slideNumberInput.value = `${slideNumberInput.value}${event.key}`.slice(-3)
+    togglePresenterView()
+    return
+  }
+  const sorterArrow = sorterView.value && event.altKey && !event.ctrlKey && !event.metaKey && ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key)
+  if ((event.altKey || event.ctrlKey || event.metaKey) && !sorterArrow) return
+  if (slideNumberInput.value && !/^\d$/.test(event.key) && event.key !== 'Enter') clearSlideNumberInput()
+  if (/^\d$/.test(event.key)) {
+    event.preventDefault()
+    const maxDigits = Math.max(3, String(deck.value.slides.length).length)
+    slideNumberInput.value = `${slideNumberInput.value}${event.key}`.slice(-maxDigits)
     clearTimeout(slideNumberTimer)
-    slideNumberTimer = setTimeout(() => { slideNumberInput.value = '' }, 2_000)
+    slideNumberTimer = setTimeout(clearSlideNumberInput, 2_000)
   } else if (event.key === 'Enter' && slideNumberInput.value) {
     event.preventDefault()
     const index = Number(slideNumberInput.value) - 1
-    slideNumberInput.value = ''
-    clearTimeout(slideNumberTimer)
+    clearSlideNumberInput()
     if (index >= 0 && index < deck.value.slides.length) goToSlide(index)
   } else if (event.key === 'Escape') {
     if (presenterView.value) {
@@ -539,6 +687,11 @@ function onKeydown(event: KeyboardEvent) {
       toggleSorterView()
       return
     }
+    if (readingView.value) {
+      if (document.fullscreenElement) void document.exitFullscreen()
+      else toggleReadingView()
+      return
+    }
     if (activeTool.value !== 'pointer') {
       activeTool.value = 'pointer'
       laserPoint.value = null
@@ -546,7 +699,7 @@ function onKeydown(event: KeyboardEvent) {
     }
     contextMenu.value = null
     screenOverlay.value = null
-    slideNumberInput.value = ''
+    clearSlideNumberInput()
     if (document.fullscreenElement) void document.exitFullscreen()
   } else if (sorterView.value && event.altKey && ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown'].includes(event.key)) {
     event.preventDefault()
@@ -557,11 +710,11 @@ function onKeydown(event: KeyboardEvent) {
   } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) {
     event.preventDefault(); previousSlide()
   } else if (event.key === 'Home') {
-    currentIndex.value = 0
-    animationStep.value = 0
+    event.preventDefault()
+    goToSlide(0)
   } else if (event.key === 'End') {
-    currentIndex.value = deck.value.slides.length - 1
-    animationStep.value = deck.value.slides[currentIndex.value]?.animationSteps?.length || 0
+    event.preventDefault()
+    goToLastSlide()
   } else if (event.key === 'F5') {
     event.preventDefault()
     if (!event.shiftKey) {
@@ -575,9 +728,9 @@ function onKeydown(event: KeyboardEvent) {
     togglePresenterView()
   } else if (event.key.toLowerCase() === 'g') {
     toggleSorterView()
-  } else if (event.key.toLowerCase() === 'b') {
+  } else if (['b', '.'].includes(event.key.toLowerCase())) {
     screenOverlay.value = screenOverlay.value === 'black' ? null : 'black'
-  } else if (event.key.toLowerCase() === 'w') {
+  } else if (['w', ','].includes(event.key.toLowerCase())) {
     screenOverlay.value = screenOverlay.value === 'white' ? null : 'white'
   }
 }
@@ -597,8 +750,13 @@ function onPointerDown(event: PointerEvent) {
   if (event.pointerType !== 'touch') return
   touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY })
   try { (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId) } catch {}
-  if (touchPoints.size === 1) pointerStartX.value = event.clientX
+  if (touchPoints.size === 1 && zoom.value > 1) {
+    pointerStartX.value = null
+    panStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, offsetX: zoomPan.value.x, offsetY: zoomPan.value.y, moved: false }
+  } else if (touchPoints.size === 1) pointerStartX.value = event.clientX
   else if (touchPoints.size === 2) {
+    panStart = undefined
+    pointerStartX.value = null
     const [first, second] = [...touchPoints.values()]
     pinchStartDistance = Math.hypot(second!.x - first!.x, second!.y - first!.y)
     pinchStartZoom = zoom.value
@@ -609,6 +767,13 @@ function onPointerDown(event: PointerEvent) {
 function onPointerMove(event: PointerEvent) {
   if (event.pointerType !== 'touch' || !touchPoints.has(event.pointerId)) return
   touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY })
+  if (touchPoints.size === 1 && panStart?.pointerId === event.pointerId) {
+    const deltaX = event.clientX - panStart.x
+    const deltaY = event.clientY - panStart.y
+    if (Math.hypot(deltaX, deltaY) >= 5) panStart.moved = true
+    if (panStart.moved) setZoomPan(panStart.offsetX + deltaX, panStart.offsetY + deltaY)
+    return
+  }
   if (touchPoints.size < 2 || !pinchStartDistance) return
   const [first, second] = [...touchPoints.values()]
   setZoom(pinchStartZoom * Math.hypot(second!.x - first!.x, second!.y - first!.y) / pinchStartDistance)
@@ -617,6 +782,15 @@ function onPointerMove(event: PointerEvent) {
 function onPointerUp(event: PointerEvent, allowSwipe = true) {
   if (event.pointerType !== 'touch') return
   touchPoints.delete(event.pointerId)
+  if (panStart?.pointerId === event.pointerId) {
+    if (panStart.moved) {
+      suppressClick.value = true
+      window.setTimeout(() => { suppressClick.value = false }, 400)
+    }
+    panStart = undefined
+    pointerStartX.value = null
+    return
+  }
   if (wasPinching) {
     if (touchPoints.size < 2) {
       wasPinching = false
@@ -660,6 +834,21 @@ function onWheel(event: WheelEvent) {
 
 function setZoom(value: number) {
   zoom.value = Math.min(3, Math.max(.5, Math.round(value * 100) / 100))
+  setZoomPan(zoomPan.value.x, zoomPan.value.y)
+}
+
+function setZoomPan(x: number, y: number) {
+  const host = stageSlideHost.value
+  if (zoom.value <= 1 || !host) {
+    zoomPan.value = { x: 0, y: 0 }
+    return
+  }
+  const maxX = host.offsetWidth * (zoom.value - 1) / 2
+  const maxY = host.offsetHeight * (zoom.value - 1) / 2
+  zoomPan.value = {
+    x: Math.max(-maxX, Math.min(maxX, x)),
+    y: Math.max(-maxY, Math.min(maxY, y)),
+  }
 }
 
 function inkPoint(event: PointerEvent) {
@@ -674,15 +863,25 @@ function onInkPointerDown(event: PointerEvent) {
   if (activeTool.value === 'pointer') return
   const point = inkPoint(event)
   try { (event.currentTarget as SVGElement).setPointerCapture(event.pointerId) } catch {}
-  if (activeTool.value === 'laser') laserPoint.value = point
-  else draftStroke.value = { tool: activeTool.value, points: `${point.x},${point.y}` }
+  if (activeTool.value === 'laser') {
+    laserPoint.value = point
+    sendProjectorLaserPoint(point)
+  } else if (currentSlide.value) {
+    draftStroke.value = { tool: activeTool.value, points: `${point.x},${point.y}` }
+    postProjectorMessage({ type: 'ink-start', slideId: currentSlide.value.id, stroke: { ...draftStroke.value } })
+  }
 }
 
 function onInkPointerMove(event: PointerEvent) {
   if (activeTool.value !== 'laser' && !event.buttons && event.pointerType !== 'touch') return
   const point = inkPoint(event)
-  if (activeTool.value === 'laser') laserPoint.value = point
-  else if (draftStroke.value) draftStroke.value = { ...draftStroke.value, points: `${draftStroke.value.points} ${point.x},${point.y}` }
+  if (activeTool.value === 'laser') {
+    laserPoint.value = point
+    sendProjectorLaserPoint(point)
+  } else if (draftStroke.value) {
+    draftStroke.value = { ...draftStroke.value, points: `${draftStroke.value.points} ${point.x},${point.y}` }
+    if (currentSlide.value) postProjectorMessage({ type: 'ink-point', slideId: currentSlide.value.id, point })
+  }
 }
 
 function onInkPointerUp() {
@@ -690,13 +889,23 @@ function onInkPointerUp() {
   if (stroke && currentSlide.value && stroke.points.includes(' ')) {
     inkBySlide.value = { ...inkBySlide.value, [currentSlide.value.id]: [...currentInk.value, stroke] }
   }
+  if (stroke && currentSlide.value) postProjectorMessage({ type: 'ink-end', slideId: currentSlide.value.id })
   draftStroke.value = null
+  if (laserPoint.value) sendProjectorLaserPoint(null)
   laserPoint.value = null
+}
+
+function onInkPointerLeave() {
+  if (activeTool.value !== 'laser') return
+  laserPoint.value = null
+  sendProjectorLaserPoint(null)
 }
 
 function clearInk() {
   if (!currentSlide.value) return
   inkBySlide.value = { ...inkBySlide.value, [currentSlide.value.id]: [] }
+  draftStroke.value = null
+  postProjectorMessage({ type: 'ink-clear', slideId: currentSlide.value.id })
 }
 
 function openContextMenu(event: MouseEvent) {
@@ -773,20 +982,35 @@ watch(currentIndex, (nextIndex, previousIndex) => {
   continueMediaAcrossSlides(nextIndex, previousIndex)
   draftStroke.value = null
   laserPoint.value = null
-  zoom.value = 1
+  setZoom(1)
+  void nextTick(positionContinuingMediaHost)
 }, { flush: 'sync' })
+
+watch([zoom, () => zoomPan.value.x, () => zoomPan.value.y], () => {
+  void nextTick(positionContinuingMediaHost)
+}, { flush: 'post' })
 
 watch([() => deck.value, () => currentIndex.value], scheduleSlideAdvance, { immediate: true })
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
   window.addEventListener('resize', scheduleThumbnailUpdate)
+  window.addEventListener('resize', positionContinuingMediaHost)
+  document.addEventListener('fullscreenchange', positionContinuingMediaHost)
+  if (stageShell.value) {
+    continuingMediaResizeObserver = new ResizeObserver(positionContinuingMediaHost)
+    continuingMediaResizeObserver.observe(stageShell.value)
+  }
   void nextTick(updateThumbnailWindow)
 })
 onBeforeUnmount(() => {
   fileLoadGeneration++
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', scheduleThumbnailUpdate)
+  window.removeEventListener('resize', positionContinuingMediaHost)
+  document.removeEventListener('fullscreenchange', positionContinuingMediaHost)
+  continuingMediaResizeObserver?.disconnect()
+  continuingMediaResizeObserver = undefined
   if (thumbnailFrame) cancelAnimationFrame(thumbnailFrame)
   clearTimeout(slideNumberTimer)
   if (presenterTimer) clearInterval(presenterTimer)
@@ -801,7 +1025,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" :class="{ 'is-reading-view': readingView }">
     <header class="topbar">
       <div class="brand" aria-label="Deckline PPTX Player">
         <span class="brand-mark">D</span>
@@ -854,6 +1078,7 @@ onBeforeUnmount(() => {
           <button class="text-button" :disabled="!deck" title="Fullscreen (F)" @click="toggleFullscreen">⛶ <span>Present</span></button>
           <button ref="sorterTrigger" class="tool-mode-button" data-tool="sorter" :disabled="!deck" aria-label="Open slide sorter" title="Slide sorter (G)" @click="toggleSorterView">sort</button>
           <button ref="presenterTrigger" class="tool-mode-button" data-tool="speaker" :disabled="!deck" aria-label="Open speaker view" title="Speaker view (S)" @click="togglePresenterView">speaker</button>
+          <button ref="readingTrigger" class="tool-mode-button" data-tool="reading" :disabled="!deck" aria-label="Open reading view" title="Reading view" @click="toggleReadingView">read</button>
           <button v-for="tool in (['pointer', 'pen', 'highlighter', 'laser'] as const)" :key="tool" class="tool-mode-button" :class="{ 'is-active': activeTool === tool }" :data-tool="tool" :disabled="!deck" @click="activeTool = tool">{{ tool }}</button>
           <button class="tool-mode-button" :disabled="!deck || !currentInk.length" data-tool="clear" @click="clearInk">clear</button>
           <div class="tool-separator" />
@@ -879,10 +1104,10 @@ onBeforeUnmount(() => {
         >
           <div class="stage-grid" />
           <div ref="transitionUnderlay" class="slide-transition-underlay" :class="{ 'is-pulling': currentSlide?.transition?.effect === 'pull', 'is-splitting-in': currentSlide?.transition?.effect === 'split' && currentSlide.transition.direction === 'in' }" aria-hidden="true" />
-          <div ref="continuingMediaHost" class="continuing-media-host" aria-hidden="true" />
+          <div ref="continuingMediaHost" class="continuing-media-host" />
           <div v-if="isDragging" class="upload-overlay">DROP YOUR PRESENTATION</div>
-            <div v-if="currentSlide && deck" ref="stageSlideHost" class="slide-host" :data-slide-number="currentNumber" :data-transition-effect="currentSlide.transition?.effect" :data-transition-preset="currentSlide.transition?.presetName" :style="{ '--slide-ratio': String(deck.width / deck.height), transform: `scale(${zoom})` }">
-            <SlideStage :key="deckGeneration + '-' + currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" @trigger-playback="triggerPlayback = $event" @activate-hyperlink="activateHyperlink" />
+            <div v-if="currentSlide && deck" ref="stageSlideHost" class="slide-host" :data-slide-number="currentNumber" :data-transition-effect="currentSlide.transition?.effect" :data-transition-preset="currentSlide.transition?.presetName" :style="{ '--slide-ratio': String(deck.width / deck.height), translate: zoomPan.x + 'px ' + zoomPan.y + 'px', transform: 'scale(' + zoom + ')' }">
+            <SlideStage :key="deckGeneration + '-' + currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" @trigger-playback="triggerPlayback = $event" @activate-hyperlink="activateHyperlink" @stop-all-audio="stopAllAudio" />
             <svg
               class="ink-layer"
               :class="{ 'is-active': activeTool !== 'pointer' }"
@@ -893,7 +1118,7 @@ onBeforeUnmount(() => {
               @pointermove.stop.prevent="onInkPointerMove"
               @pointerup.stop.prevent="onInkPointerUp"
               @pointercancel.stop.prevent="onInkPointerUp"
-              @pointerleave="activeTool === 'laser' && (laserPoint = null)"
+              @pointerleave="onInkPointerLeave"
             >
               <polyline v-for="(stroke, index) in currentInk" :key="index" :points="stroke.points" fill="none" :stroke="stroke.tool === 'pen' ? '#ef4444' : '#fde047'" :stroke-width="stroke.tool === 'pen' ? 3 : 16" :opacity="stroke.tool === 'pen' ? 1 : .4" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
               <polyline v-if="draftStroke" :points="draftStroke.points" fill="none" :stroke="draftStroke.tool === 'pen' ? '#ef4444' : '#fde047'" :stroke-width="draftStroke.tool === 'pen' ? 3 : 16" :opacity="draftStroke.tool === 'pen' ? 1 : .4" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
@@ -934,7 +1159,15 @@ onBeforeUnmount(() => {
           <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
           <button class="zoom-button" :disabled="!deck || zoom >= 3" aria-label="Zoom in" @click="setZoom(zoom + .25)">+</button>
           <span class="shortcut-hint">ARROWS · F5 START · SHIFT+F5 CURRENT · F FULLSCREEN</span>
+          <button v-if="readingView" class="reading-control-button" data-reading-notes :aria-expanded="readingNotesOpen" :aria-controls="readingNotesOpen ? 'reading-notes' : undefined" @click="readingNotesOpen = !readingNotesOpen">{{ readingNotesOpen ? 'Hide notes' : 'Notes' }}</button>
+          <button v-if="readingView" ref="readingExit" class="reading-control-button" data-reading-exit @click="toggleReadingView">Back to player</button>
         </div>
+        <aside v-if="readingView && readingNotesOpen && currentSlide" id="reading-notes" class="reading-notes-panel" data-reading-notes-panel aria-label="Speaker notes">
+          <header><strong>Speaker notes</strong><button aria-label="Hide speaker notes" @click="readingNotesOpen = false">×</button></header>
+          <SpeakerNotes v-if="currentSlide.speakerNoteParagraphs?.length" :paragraphs="currentSlide.speakerNoteParagraphs" @activate-hyperlink="activateHyperlink" />
+          <p v-else-if="currentSlide.speakerNotes" class="reading-notes-plain">{{ currentSlide.speakerNotes }}</p>
+          <p v-else class="reading-notes-plain">No speaker notes on this slide.</p>
+        </aside>
       </section>
     </div>
     <div v-if="presenterView && deck && currentSlide" class="presenter-view" data-presenter-view :data-current-slide="currentNumber" :data-animation-step="animationStep" role="dialog" aria-modal="true" aria-label="Speaker view">
@@ -972,7 +1205,8 @@ onBeforeUnmount(() => {
           </section>
           <section class="presenter-notes-panel" aria-label="Speaker notes">
             <div class="presenter-panel-title"><span>Speaker notes</span></div>
-            <p v-if="currentSlide.speakerNotes" data-presenter-notes>{{ currentSlide.speakerNotes }}</p>
+            <SpeakerNotes v-if="currentSlide.speakerNoteParagraphs?.length" :paragraphs="currentSlide.speakerNoteParagraphs" @activate-hyperlink="activateHyperlink" />
+            <p v-else-if="currentSlide.speakerNotes" data-presenter-notes>{{ currentSlide.speakerNotes }}</p>
             <p v-else class="presenter-no-notes" data-presenter-notes>No speaker notes on this slide.</p>
           </section>
         </aside>

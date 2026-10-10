@@ -7,7 +7,8 @@
     "dev": "nuxt dev --host 127.0.0.1",
     "preview": "nuxt preview",
     "typecheck": "nuxt typecheck",
-    "verify:animation": "node scripts/verify-animation.mjs"
+    "verify:animation": "node scripts/verify-animation.mjs",
+    "verify:chart-number-format": "node scripts/verify-chart-number-format.mjs"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",

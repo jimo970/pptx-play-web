@@ -10,6 +10,7 @@ export interface PptxRun {
     letterSpacingPt?: number
     baselineOffsetEm?: number
     color?: string
+    fillPattern?: string
     outlineColor?: string
     outlineWidth?: number
     bold?: boolean
@@ -22,7 +23,9 @@ export interface PptxRun {
     lineThroughStyle?: 'solid' | 'double'
     hyperlink?: PptxHyperlink
     shadow?: PptxShadow
+    shadows?: PptxShadow[]
     glow?: PptxGlow
+    glows?: PptxGlow[]
 }
 
 export type PptxHyperlink =
@@ -35,6 +38,7 @@ export interface PptxShadow {
     blur: number
     distance: number
     angle: number
+    inset?: boolean
 }
 
 export interface PptxGlow {
@@ -88,6 +92,10 @@ export type PptxChartTickLabelPosition = 'high' | 'low' | 'nextTo' | 'none'
 
 export type PptxChartDataLabelPosition = 'bestFit' | 'b' | 'ctr' | 'inBase' | 'inEnd' | 'l' | 'outEnd' | 'r' | 't'
 
+export type PptxChartDataLabelStyle = Pick<PptxRun, 'fontFamily' | 'fontSizePt' | 'color' | 'bold' | 'italic' | 'letterSpacingPt' | 'baselineOffsetEm' | 'underline' | 'underlineStyle' | 'underlineColor' | 'underlineThicknessEmu' | 'lineThrough' | 'lineThroughStyle'>
+
+export type PptxChartMarkerSymbol = 'auto' | 'circle' | 'dash' | 'diamond' | 'dot' | 'none' | 'picture' | 'plus' | 'square' | 'star' | 'triangle' | 'x'
+
 export interface PptxChartSeries {
     legendIndex: number
     name: string
@@ -105,8 +113,14 @@ export interface PptxChartSeries {
     radarShowLine?: boolean
     radarShowMarker?: boolean
     radarMarkerSize?: number
+    markerSymbol?: PptxChartMarkerSymbol
+    markerSize?: number
+    markerSymbolOverrides?: Record<number, PptxChartMarkerSymbol>
+    markerSizeOverrides?: Record<number, number>
     color: string
     pointColors: Record<number, string>
+    showLegendKey: boolean
+    legendKeyOverrides: Record<number, boolean>
     showValueLabels: boolean
     valueLabelOverrides: Record<number, boolean>
     showPercentLabels: boolean
@@ -123,6 +137,8 @@ export interface PptxChartSeries {
     valueNumberFormatOverrides: Record<number, string>
     dataLabelPosition?: PptxChartDataLabelPosition
     dataLabelPositionOverrides: Record<number, PptxChartDataLabelPosition>
+    dataLabelStyle?: PptxChartDataLabelStyle
+    dataLabelStyleOverrides: Record<number, PptxChartDataLabelStyle>
 }
 
 export type PptxChartGrouping = 'clustered' | 'stacked' | 'percentStacked'
@@ -130,7 +146,9 @@ export type PptxChartGrouping = 'clustered' | 'stacked' | 'percentStacked'
 export interface PptxChartAxis {
     min: number
     max: number
+    logBase?: number
     majorUnit?: number
+    minorUnit?: number
     numberFormat?: string
     reverse?: boolean
     deleted?: boolean
@@ -139,6 +157,7 @@ export interface PptxChartAxis {
     crosses?: PptxChartAxisCrosses
     crossesAt?: number
     majorTickMark?: PptxChartTickMark
+    minorTickMark?: PptxChartTickMark
     tickLabelPosition?: PptxChartTickLabelPosition
 }
 
@@ -181,7 +200,7 @@ export interface PptxChart {
     labelSeparator?: string
     numberFormat?: string
     date1904?: boolean
-    dateAxis?: {values: number[]; min?: number; max?: number; reverse?: boolean; majorUnit?: number; majorTimeUnit?: 'days' | 'months' | 'years'}
+    dateAxis?: {values: number[]; min?: number; max?: number; reverse?: boolean; majorUnit?: number; majorTimeUnit?: 'days' | 'months' | 'years'; minorUnit?: number; minorTimeUnit?: 'days' | 'months' | 'years'}
     valueAxis?: PptxChartAxis
     xAxis?: PptxChartAxis
     categoryAxisNumberFormat?: string
@@ -191,7 +210,10 @@ export interface PptxChart {
     categoryAxisDeleted?: boolean
     categoryAxisMajorGridlines?: boolean
     categoryAxisMajorTickMark?: PptxChartTickMark
+    categoryAxisMinorTickMark?: PptxChartTickMark
     categoryAxisTickLabelPosition?: PptxChartTickLabelPosition
+    categoryAxisTickLabelSkip?: number
+    categoryAxisTickMarkSkip?: number
     legend?: {
         position: 'bottom' | 'top' | 'left' | 'right' | 'topRight'
         hiddenEntries?: number[]
@@ -222,6 +244,7 @@ export interface PptxElement {
     hyperlink?: PptxHyperlink
     kind: 'shape' | 'picture' | 'video' | 'audio' | 'line' | 'placeholder' | 'table' | 'chart'
     geometry: string
+    linePath?: string
     presetAdjustment?: number
     presetAdjustments?: Record<string, number>
     customPaths?: PptxCustomPath[]
@@ -243,7 +266,9 @@ export interface PptxElement {
     lineHeadEnd?: PptxLineEnd
     lineTailEnd?: PptxLineEnd
     shadow?: PptxShadow
+    shadows?: PptxShadow[]
     glow?: PptxGlow
+    glows?: PptxGlow[]
     imageUrl?: string
     mediaUrl?: string
     mediaType?: 'video' | 'audio'
@@ -288,6 +313,7 @@ export interface PptxSlide {
     automaticAnimations?: PptxAnimation[]
     animationSteps?: PptxAnimation[][]
     animationSequence?: {
+        concurrent?: boolean
         nextAction: 'none' | 'seek'
         advancesOnNext?: boolean
         rewindsOnPrevious?: boolean
@@ -298,6 +324,8 @@ export interface PptxSlide {
             | {type: 'slide'; event: 'onNext' | 'onPrev' | 'onStopAudio'}
             | {type: 'mediaBookmark'; id: string; bookmarkName: string; timeMs: number}
             | {type: 'timeNode'; id: string; event: 'onBegin' | 'onEnd'; sourceStep?: number; sourceDelayMs: number; delayMs: number}
+        restart?: 'always' | 'whenNotActive' | 'never'
+        concurrent?: boolean
         steps: PptxAnimation[][]
     }[]
     advanceOnClick?: boolean
@@ -370,7 +398,7 @@ export interface PptxTransitionPlayback {
     transition: NonNullable<PptxSlide['transition']>
 }
 
-export type TextStyleAnimationProperty = 'fontStyle' | 'fontFamily' | 'underline' | 'lineThrough' | 'textTransform' | 'outline' | 'textShadow' | 'emboss'
+export type TextStyleAnimationProperty = 'fontWeight' | 'fontStyle' | 'fontFamily' | 'underline' | 'lineThrough' | 'textTransform' | 'outline' | 'textShadow' | 'emboss'
 
 export type TextStyleAnimationValue = boolean | 'none' | 'normal' | 'sub' | 'super' | string
 
@@ -397,6 +425,7 @@ export interface PptxAnimation {
     paragraphRange?: {start: number; end: number}
     characterRange?: {start: number; end: number}
     iteration?: {intervalMs: number; ranges: Array<{start: number; end: number}>; backwards?: boolean}
+    effectProgress?: number
     effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
     direction: 'in' | 'out'
     durationMs: number
@@ -497,6 +526,7 @@ export interface PptxAnimation {
     mediaStartSeconds?: number
     mediaVolume?: number
     mediaMuted?: boolean
+    motionCoordinateProperty?: 'ppt_x' | 'ppt_y'
     motionPath?: Array<{x: number; y: number; distance: number}>
     motionPathLength?: number
     motionPathSamples?: Array<{progress: number; x: number; y: number}>

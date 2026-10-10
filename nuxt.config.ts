@@ -1,4 +1,5 @@
 export default defineNuxtConfig({
+  compatibilityDate: '2026-09-30',
   css: ['~/assets/css/main.css'],
   devtools: { enabled: false },
   app: {

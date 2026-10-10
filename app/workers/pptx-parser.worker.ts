@@ -1,5 +1,6 @@
 import { DOMParser as XmlDomParser } from '@xmldom/xmldom'
-import { parsePptx, type PptxDocument } from '../utils/pptx'
+import { parsePptx } from '../utils/pptx'
+import type { PptxDocument } from '../utils/pptx-model'
 
 interface ParseRequest {
   id: number

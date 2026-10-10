@@ -1,17 +1,88 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
+import { DOMParser } from '@xmldom/xmldom'
+import { scriptSegments } from '../app/utils/text-fonts.ts'
+
+const mixedScripts = scriptSegments('A\u0301中文\u0301العربية\u0651𠀀B')
+if (mixedScripts.map(segment => segment.script).join(',') !== 'latin,eastAsia,complexScript,eastAsia,latin' || mixedScripts.map(segment => segment.text).join('') !== 'A\u0301中文\u0301العربية\u0651𠀀B' || scriptSegments('').length) throw new Error('Script segmentation must preserve mixed text, combining marks, and supplementary Han characters.')
 
 const baseUrl = process.env.DECKLINE_BASE_URL || 'http://127.0.0.1:3000/'
 const keepFixture = process.env.DECKLINE_KEEP_FIXTURE === '1'
 const inputPptx = process.env.DECKLINE_INPUT_PPTX
+const embeddedFontTestPath = process.env.DECKLINE_EMBEDDED_FONT_TEST_PATH
 const captureOnly = process.env.DECKLINE_CAPTURE_ONLY === '1'
 const grayscaleOnly = process.env.DECKLINE_VERIFY_GRAYSCALE === '1'
 const strokeWidthOnly = process.env.DECKLINE_VERIFY_STROKE_WIDTH === '1'
+const textOutlineRangeOnly = process.env.DECKLINE_VERIFY_TEXT_OUTLINE_RANGE === '1'
 const themeBackgroundOnly = process.env.DECKLINE_VERIFY_THEME_BACKGROUND === '1'
+const notesOnly = process.env.DECKLINE_VERIFY_NOTES === '1'
+const performanceOnly = process.env.DECKLINE_VERIFY_PERFORMANCE === '1'
+let presetGeometryNames = []
+let presetTextRectNames = []
+const pieCases = [[600000, 400000], [900000, 400000, 2700000, 16200000], [400000, 600000, 18000000, 1800000], [600000, 400000, 5400000, 5400000], [600000, 400000, -540000, 22000000]]
+const chordCases = [[600000, 400000], [900000, 400000, 2700000, 16200000], [400000, 600000, 18000000, 1800000], [600000, 400000, 5400000, 5400000], [600000, 400000, -540000, 22000000]]
+const arcCases = [[900000, 400000], [400000, 600000, 0, 5400000], [600000, 400000, 18000000, 1800000], [600000, 400000, 5400000, 5400000], [600000, 400000, -540000, 22000000]]
+const blockArcCases = [[900000, 400000], [600000, 400000, 18000000, 1800000, 10000], [600000, 400000, 5400000, 5400000, 25000], [400000, 600000, 9000000, 0, 50000], [600000, 400000, -540000, 22000000, 75000]]
+const presetDashCases = [['dot', [1, 3]], ['sysDot', [1, 1]], ['dash', [4, 3]], ['sysDash', [3, 1]], ['lgDash', [8, 3]], ['dashDot', [4, 3, 1, 3]], ['sysDashDot', [3, 1, 1, 1]], ['lgDashDot', [8, 3, 1, 3]], ['lgDashDotDot', [8, 3, 1, 3, 1, 3]], ['sysDashDotDot', [3, 1, 1, 1, 1, 1]]]
+const colorModelCases = [
+  ['<a:hslClr hue="7200000" sat="50%" lum="25%"/>', 'rgb(32, 96, 32)'],
+  ['<a:hslClr hue="7200000" sat="50000" lum="25000"/>', 'rgb(32, 96, 32)'],
+  ['<a:hslClr hue="0" sat="0%" lum="50%"/>', 'rgb(128, 128, 128)'],
+  ['<a:scrgbClr r="50000" g="50000" b="50000"/>', 'rgb(188, 188, 188)'],
+  ['<a:scrgbClr r="50%" g="50%" b="50%"/>', 'rgb(188, 188, 188)'],
+  ['<a:scrgbClr r="0.1%" g="0%" b="100%"/>', 'rgb(3, 0, 255)'],
+  ['<a:scrgbClr r="50%" g="50%" b="50%"><a:alpha val="50%"/></a:scrgbClr>', 'rgba(188, 188, 188, 0.5)'],
+  ['<a:schemeClr val="accent3"/>', 'rgb(188, 188, 188)'],
+  ['<a:schemeClr val="accent4"/>', 'rgb(32, 96, 32)'],
+  ['<a:hslClr hue="7200000" sat="0%" lum="50%"><a:sat val="100%"/></a:hslClr>', 'rgb(0, 255, 0)'],
+]
+const colorPercentageCases = [
+  ['000000', '<a:tint val="10%"/>', 'rgb(230, 230, 230)'],
+  ['000000', '<a:tint val="10000"/>', 'rgb(230, 230, 230)'],
+  ['000000', '<a:tint val="0%"/>', 'rgb(255, 255, 255)'],
+  ['000000', '<a:tint val="100%"/>', 'rgb(0, 0, 0)'],
+  ['808080', '<a:shade val="25%"/>', 'rgb(32, 32, 32)'],
+  ['808080', '<a:alpha val="50%"/><a:alphaMod val="50%"/>', 'rgba(128, 128, 128, 0.25)'],
+  ['808080', '<a:alpha val="50%"/><a:alphaOff val="-20%"/>', 'rgba(128, 128, 128, 0.3)'],
+  ['808080', '<a:alpha val="20%"/><a:alphaOff val="90%"/><a:alphaMod val="50%"/>', 'rgba(128, 128, 128, 0.5)'],
+  ['808080', '<a:lumMod val="150%"/><a:lumOff val="-25%"/>', 'rgb(128, 128, 128)'],
+  ['000000', '<a:tint val="10%"/><a:shade val="50%"/>', 'rgb(115, 115, 115)'],
+  ['ff0000', '<a:hue val="7200000"/>', 'rgb(0, 255, 0)'],
+  ['ff0000', '<a:hueOff val="-7200000"/>', 'rgb(0, 0, 255)'],
+  ['00ff00', '<a:hueMod val="200%"/>', 'rgb(0, 0, 255)'],
+  ['ff0000', '<a:sat val="50%"/>', 'rgb(191, 64, 64)'],
+  ['ff0000', '<a:satMod val="50%"/>', 'rgb(191, 64, 64)'],
+  ['ff0000', '<a:satOff val="-50%"/>', 'rgb(191, 64, 64)'],
+  ['ff0000', '<a:lum val="25%"/>', 'rgb(128, 0, 0)'],
+  ['ff0000', '<a:hue val="7200000"/><a:sat val="0%"/><a:sat val="100%"/>', 'rgb(0, 255, 0)'],
+  ['ff0000', '<a:satOff val="100%"/><a:satMod val="50%"/>', 'rgb(191, 64, 64)'],
+  ['4080c0', '<a:red val="50%"/>', 'rgb(128, 128, 192)'],
+  ['4080c0', '<a:redMod val="50%"/>', 'rgb(32, 128, 192)'],
+  ['4080c0', '<a:redOff val="-50%"/>', 'rgb(0, 128, 192)'],
+  ['4080c0', '<a:green val="25%"/>', 'rgb(64, 64, 192)'],
+  ['4080c0', '<a:greenMod val="50%"/>', 'rgb(64, 64, 192)'],
+  ['4080c0', '<a:greenOff val="50%"/>', 'rgb(64, 255, 192)'],
+  ['4080c0', '<a:blue val="0%"/>', 'rgb(64, 128, 0)'],
+  ['4080c0', '<a:blueMod val="50%"/>', 'rgb(64, 128, 96)'],
+  ['4080c0', '<a:blueOff val="-25%"/>', 'rgb(64, 128, 128)'],
+  ['4080c0', '<a:redMod val="50000"/><a:alpha val="50%"/>', 'rgba(32, 128, 192, 0.5)'],
+  ['4080c0', '<a:redOff val="100%"/><a:redMod val="50%"/>', 'rgb(128, 128, 192)'],
+  ['ff0000', '<a:hue val="7200000"/><a:green val="0%"/><a:lum val="50%"/>', 'rgb(128, 128, 128)'],
+  ['ff0000', '<a:comp/>', 'rgb(0, 255, 255)'],
+  ['4080c0', '<a:comp/>', 'rgb(192, 128, 64)'],
+  ['808080', '<a:comp/>', 'rgb(128, 128, 128)'],
+  ['4080c0', '<a:inv/>', 'rgb(191, 127, 63)'],
+  ['4080c0', '<a:inv/><a:inv/>', 'rgb(64, 128, 192)'],
+  ['4080c0', '<a:alpha val="25%"/><a:alphaInv/>', 'rgba(64, 128, 192, 0.75)'],
+  ['4080c0', '<a:alphaInv/>', 'rgba(64, 128, 192, 0)'],
+  ['4080c0', '<a:alpha val="0%"/><a:alphaInv/>', 'rgb(64, 128, 192)'],
+  ['4080c0', '<a:alpha val="25%"/><a:alphaInv/><a:inv/><a:redMod val="0%"/>', 'rgba(0, 127, 63, 0.75)'],
+  ['ff0000', '<a:sat val="0%"/><a:comp/><a:sat val="100%"/>', 'rgb(0, 255, 255)'],
+]
 const browserPath = process.env.DECKLINE_BROWSER || [
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -45,7 +116,16 @@ async function createFixture() {
   zip.file('ppt/_rels/presentation.xml.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide4.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide5.xml"/><Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide6.xml"/><Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide7.xml"/><Relationship Id="rId8" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide8.xml"/><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide9.xml"/><Relationship Id="rId10" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide10.xml"/><Relationship Id="rId11" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide11.xml"/><Relationship Id="rId12" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide12.xml"/><Relationship Id="rId13" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide13.xml"/><Relationship Id="rId14" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide14.xml"/><Relationship Id="rId15" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide15.xml"/></Relationships>`)
   const shadow = `<a:effectLst><a:outerShdw blurRad="127000" dist="127000" dir="2700000"><a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr></a:outerShdw></a:effectLst>`
   const shape = (id, name, x, y, color, width = 2600000, height = 2500000) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></p:spPr></p:sp>`
+  const gradientFill = `<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"><a:alpha val="50000"/></a:srgbClr></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill>`
+  const animatedGradientShape = (id, name, x) => shape(id, name, x, 4000000, 'ef4444', 2600000, 1200000).replace(/<a:solidFill>.*?<\/a:solidFill>/, gradientFill)
+  const gradientOpacityShape = animatedGradientShape(9900, 'Gradient opacity', 5000000)
+  const gradientOpacitySetShape = animatedGradientShape(9901, 'Gradient p:set opacity', 7900000)
+  const customGradientOpacityShape = shape(9902, 'Custom gradient opacity', 9000000, 6100000, 'ef4444', 2600000, 600000)
+    .replace('<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>', '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="0" b="0"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/></a:lnTo><a:lnTo><a:pt x="500" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>')
+    .replace(/<a:solidFill>.*?<\/a:solidFill>/, gradientFill)
+  const connector = (id, name, geometry, x, y, width, height, adjustments = '<a:avLst/>', attachments = '') => `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvCxnSpPr>${attachments}</p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="${geometry}">${adjustments}</a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="1d4ed8"/></a:solidFill></a:ln></p:spPr></p:cxnSp>`
   const shadowedWithPrevious = shape(3, 'With previous', 3000000, 0, '2563eb').replace('</p:spPr>', `${shadow}</p:spPr>`)
+  const appearanceToggleShape = shape(326, 'Appearance toggles', 10000000, 0, 'f43f5e', 1800000, 1200000).replace('</p:spPr>', `<a:ln w="25400"><a:solidFill><a:srgbClr val="2563eb"/></a:solidFill></a:ln>${shadow}</p:spPr>`)
   const customGeometryShape = `<p:sp><p:nvSpPr><p:cNvPr id="61" name="Custom geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="9000000" y="6100000"/><a:ext cx="2600000" cy="600000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="0" b="0"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:cubicBezTo><a:pt x="250" y="0"/><a:pt x="750" y="0"/><a:pt x="1000" y="500"/></a:cubicBezTo><a:cubicBezTo><a:pt x="750" y="1000"/><a:pt x="250" y="1000"/><a:pt x="0" y="500"/></a:cubicBezTo><a:close/></a:path><a:path w="1000" h="1000" fill="none"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:quadBezTo><a:pt x="500" y="1000"/><a:pt x="1000" y="0"/></a:quadBezTo><a:lnTo><a:pt x="1000" y="1000"/></a:lnTo><a:close/></a:path><a:path w="1000" h="1000" fill="none"><a:moveTo><a:pt x="100" y="500"/></a:moveTo><a:arcTo wR="400" hR="250" stAng="10800000" swAng="10800000"/><a:lnTo><a:pt x="100" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="a3e635"/></a:solidFill><a:ln w="25400" cap="rnd"><a:solidFill><a:srgbClr val="166534"/></a:solidFill><a:custDash><a:ds d="250000" sp="50000"/><a:ds d="50000" sp="25000"/></a:custDash></a:ln></p:spPr></p:sp>`
   const placeholderShape = `<p:sp><p:nvSpPr><p:cNvPr id="3" name="Inherited paragraph"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr lvl="2"/><a:r><a:t>Inherited placeholder</a:t></a:r></a:p></p:txBody></p:sp>`
   const mediaPicture = (id, name, x, y, tag, relation, mediaOptions = '', mediaLink) => `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${name}"/><p:cNvPicPr/><p:nvPr><a:${tag} r:link="${relation}"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media${mediaLink ? ` r:link="${mediaLink}"` : ''} r:embed="${relation}">${mediaOptions}</p14:media></p:ext></p:extLst></p:nvPr></p:nvPicPr><p:blipFill><a:blip r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="5000000" cy="2800000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`
@@ -61,20 +141,31 @@ async function createFixture() {
 const guideDrivenGeometryPath = `<a:path w="1000" h="1000"><a:moveTo><a:pt x="xQuarter" y="bottom"/></a:moveTo><a:lnTo><a:pt x="xThreeQuarter" y="bottom"/></a:lnTo><a:lnTo><a:pt x="xThreeQuarter" y="top"/></a:lnTo><a:close/></a:path>`
 const guideFormulaPath = `<a:path w="1000" h="1000"><a:moveTo><a:pt x="addDiv" y="ifElse"/></a:moveTo><a:lnTo><a:pt x="absVal" y="maxVal"/><a:pt x="minVal" y="modVal"/><a:pt x="catVal" y="cosVal"/><a:pt x="ifElseFallback" y="satVal"/><a:pt x="sinVal" y="sqrtVal"/><a:pt x="tanVal" y="pinLow"/><a:pt x="pinHigh" y="adjX"/></a:lnTo></a:path>`
 const guideFormulaArcPath = `<a:path w="1000" h="1000"><a:moveTo><a:pt x="300" y="500"/></a:moveTo><a:arcTo wR="200" hR="200" stAng="angle45" swAng="cd4"/></a:path>`
+const customNegativeArcPath = `<a:path w="1000" h="1000" fill="none"><a:moveTo><a:pt x="100" y="500"/></a:moveTo><a:arcTo wR="400" hR="250" stAng="10800000" swAng="-10800000"/><a:lnTo><a:pt x="100" y="500"/></a:lnTo></a:path>`
 const customGeometryShapeWithGuides = customGeometryShape
   .replace('<a:avLst/><a:gdLst/>', '<a:avLst><a:gd name="adjX" fmla="val 250"/></a:avLst><a:gdLst><a:gd name="xQuarter" fmla="*/ w adjX 1000"/><a:gd name="xThreeQuarter" fmla="+- w 0 xQuarter"/><a:gd name="bottom" fmla="pin 0 750 h"/><a:gd name="top" fmla="min h 250"/><a:gd name="addDiv" fmla="+/ 300 100 2"/><a:gd name="ifElse" fmla="?: 1 50 0"/><a:gd name="ifElseFallback" fmla="?: 0 50 25"/><a:gd name="absVal" fmla="abs -10"/><a:gd name="angle45" fmla="at2 1 1"/><a:gd name="catVal" fmla="cat2 100 1 0"/><a:gd name="cosVal" fmla="cos 100 0"/><a:gd name="maxVal" fmla="max 10 20"/><a:gd name="minVal" fmla="min 10 20"/><a:gd name="modVal" fmla="mod 3 4 12"/><a:gd name="satVal" fmla="sat2 100 1 0"/><a:gd name="sinVal" fmla="sin 100 0"/><a:gd name="sqrtVal" fmla="sqrt 256"/><a:gd name="tanVal" fmla="tan 100 0"/><a:gd name="pinLow" fmla="pin 0 -5 1000"/><a:gd name="pinHigh" fmla="pin 0 1200 1000"/></a:gdLst>')
-  .replace('</a:pathLst>', `${guideDrivenGeometryPath}${guideFormulaPath}${guideFormulaArcPath}</a:pathLst>`)
+  .replace('</a:pathLst>', `${guideDrivenGeometryPath}${guideFormulaPath}${guideFormulaArcPath}${customNegativeArcPath}</a:pathLst>`)
 const customGeometryTextShape = `<p:sp><p:nvSpPr><p:cNvPr id="65" name="Custom text rectangle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5000000" y="4200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst><a:gd name="quarterWidth" fmla="*/ w 1 4"/></a:gdLst><a:ahLst/><a:cxnLst/><a:rect l="quarterWidth" t="200" r="900" b="800"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:lnTo><a:pt x="1000" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="38bdf8"/></a:solidFill></p:spPr><p:txBody><a:bodyPr lIns="0" rIns="0" tIns="0" bIns="0"/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"/><a:t>Inside custom text rectangle</a:t></a:r></a:p></p:txBody></p:sp>`
 const invalidCustomGeometryTextShape = `<p:sp><p:nvSpPr><p:cNvPr id="66" name="Invalid custom text rectangle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="7500000" y="4200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="800" t="200" r="200" b="800"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:lnTo><a:pt x="1000" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></p:spPr><p:txBody><a:bodyPr lIns="0" rIns="0" tIns="0" bIns="0"/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"/><a:t>Fallback text box</a:t></a:r></a:p></p:txBody></p:sp>`
 const customGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="67" name="Custom gradient geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="10000000" y="4200000"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/><a:pt x="1000" y="1000"/><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ff0000"/></a:gs><a:gs pos="50000"><a:srgbClr val="00ff00"><a:alpha val="50000"/></a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="0000ff"/></a:gs></a:gsLst><a:lin ang="0" scaled="1"/></a:gradFill><a:ln w="63500"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ffff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill></a:ln></p:spPr></p:sp>`
 const customRadialGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="68" name="Custom radial gradient geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="9500000" y="5200000"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/><a:pt x="1000" y="1000"/><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ff0000"><a:alpha val="50000"/></a:srgbClr></a:gs><a:gs pos="50000"><a:srgbClr val="00ff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000ff"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill><a:ln w="63500"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ffff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:path path="circle"/></a:gradFill></a:ln></p:spPr></p:sp>`
 const characterSpacedShapeId = 59
+  const groupFillPlaceholderShape = placeholderShape.replace('id="3"', 'id="96"').replace('Inherited paragraph', 'Group fill placeholder').replace('idx="1"', 'idx="2"').replace('<p:spPr/>', '<p:spPr><a:grpFill/><a:ln><a:grpFill/></a:ln></p:spPr>')
+  const groupFillGroupShape = '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="100" name="Group fill parent"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="8000000" y="1000000"/><a:ext cx="2600000" cy="1500000"/><a:chOff x="0" y="0"/><a:chExt cx="2600000" cy="1500000"/></a:xfrm><a:solidFill><a:srgbClr val="12ab34"/></a:solidFill></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="101" name="Grouped fill child"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="1500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:grpFill/><a:ln w="25400"><a:grpFill/></a:ln></p:spPr></p:sp></p:grpSp>'
+  const groupFillTextBody = '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:grpFill/></a:rPr><a:t>Group fill text</a:t></a:r><a:r><a:rPr><a:noFill/></a:rPr><a:t>No fill text</a:t></a:r><a:r><a:rPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"/></a:gs></a:gsLst></a:gradFill></a:rPr><a:t>Gradient text</a:t></a:r></a:p></p:txBody>'
+  const underlineFillRuns = '<a:r><a:rPr u="sng"><a:uFill><a:solidFill><a:srgbClr val="ff00ff"/></a:solidFill></a:uFill></a:rPr><a:t>Custom underline fill</a:t></a:r><a:r><a:rPr u="sng"><a:solidFill><a:srgbClr val="0b5394"/></a:solidFill><a:uFillTx/></a:rPr><a:t>Underline follows text</a:t></a:r><a:r><a:rPr u="sng"><a:uFill><a:noFill/></a:uFill></a:rPr><a:t>Transparent underline</a:t></a:r>'
+  const underlineStrokeRuns = '<a:r><a:rPr u="sng" strike="sngStrike"><a:solidFill><a:srgbClr val="111111"/></a:solidFill><a:uLn w="25400"><a:solidFill><a:srgbClr val="dc2626"/></a:solidFill><a:prstDash val="dot"/></a:uLn></a:rPr><a:t>Custom underline stroke</a:t></a:r><a:r><a:rPr u="sng"><a:ln w="38100"><a:solidFill><a:srgbClr val="1d4ed8"/></a:solidFill></a:ln><a:uLnTx/></a:rPr><a:t>Underline stroke follows outline</a:t></a:r>'
+  const wordsUnderlineRun = '<a:r><a:rPr u="words"/><a:t>Words and spaces</a:t></a:r>'
+  const groupFillTextBodyWithUnderline = groupFillTextBody.replace('</a:p></p:txBody>', `${underlineFillRuns}${underlineStrokeRuns}${wordsUnderlineRun}</a:p></p:txBody>`)
+  const groupFillGroupShapeWithText = groupFillGroupShape.replace('</p:sp></p:grpSp>', `${groupFillTextBodyWithUnderline}</p:sp></p:grpSp>`)
+  const nestedGroupFillShape = '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="102" name="Nested group fill parent"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="1500000"/><a:chOff x="0" y="0"/><a:chExt cx="2600000" cy="1500000"/></a:xfrm><a:grpFill/></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="103" name="Nested grouped fill child"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="1500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:grpFill/><a:ln w="25400"><a:grpFill/></a:ln></p:spPr></p:sp></p:grpSp>'
+const groupGradientShape = groupFillGroupShape.replace('id="100"', 'id="104"').replace('id="101"', 'id="105"').replace('Group fill parent', 'Group gradient parent').replace('Grouped fill child', 'Grouped gradient child').replace('<a:solidFill><a:srgbClr val="12ab34"/></a:solidFill>', '<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"/></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill>')
 const baselineShiftedShapeId = 45
 const characterSlide = `<p:par><p:cTn id="18001" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="slide(fromLeft)"><p:cBhvr><p:cTn id="18002" dur="400" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="160"><p:txEl><p:charRg st="4" end="8"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
-const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="2600000" cy="800000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="e2e8f0"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"${id === characterSpacedShapeId ? ' spc="250"' : ''}${id === baselineShiftedShapeId ? ' baseline="30000"' : ''}>${outline}</a:rPr><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
+const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="2600000" cy="800000"/></a:xfrm><a:prstGeom prst="${geometry}"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="e2e8f0"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"${id === characterSpacedShapeId ? ' spc="250"' : ''}${id === baselineShiftedShapeId ? ' baseline="30000"' : ''}>${outline}</a:rPr><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
   const autoFitText = (id, name, x, y, width, height, size, text) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln w="12700"><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr wrap="square" lIns="0" rIns="0" tIns="0" bIns="0" anchor="t"><a:spAutoFit/></a:bodyPr><a:lstStyle/><a:p><a:r><a:rPr sz="${size}" b="1"/><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
   const tableCell = (text, attributes = '', color = 'ffffff') => `<a:tc ${attributes}><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1800" b="1"/><a:t>${text}</a:t></a:r></a:p></a:txBody><a:tcPr marL="91440" marR="91440" marT="45720" marB="45720"><a:lnL w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnL><a:lnR w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnR><a:lnT w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnT><a:lnB w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnB><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:tcPr></a:tc>`
-  const autofitTableCell = tableCell('Table cell normal autofit shrinks overflowing text to stay inside this saved row. '.repeat(4), '', 'dbeafe').replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
+  const autofitTableCell = tableCell('Table cell normal autofit shrinks overflowing text to stay inside this saved row. '.repeat(40), '', 'dbeafe').replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
   const columnTableCell = tableCell('This cell fills its first text column, then overflows into the left column with a gap.', '', 'fef3c7').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
   const table = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="Basic table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="3000000" y="500000"/><a:ext cx="6000000" cy="4500000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="3000000"/></a:tblGrid><a:tr h="1500000">${tableCell('Merged header', 'gridSpan="2"', '1e40af')}${tableCell('', 'hMerge="1"')}</a:tr><a:tr h="1500000">${tableCell('Left cell')}${autofitTableCell}</a:tr><a:tr h="1500000">${columnTableCell}${tableCell('Next cell')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>` + customRadialGradientShape
   const chartFrame = (id, name, relationship, x, y, width, height) => `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${relationship}"/></a:graphicData></a:graphic></p:graphicFrame>`
@@ -103,13 +194,16 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const parentRepeatCount = effectGroup(300, 'clickEffect', 106, 'in', 'fade', 301, 300, '0', undefined, '', 'hold', ' dur="600" repeatCount="2000" repeatDur="indefinite"')
   const parentRepeatDuration = effectGroup(303, 'clickEffect', 108, 'in', 'fade', 304, 300, '0', undefined, '', 'hold', ' dur="600" repeatCount="indefinite" repeatDur="900"')
   const parentRepeatAfterEffect = effectGroup(305, 'afterEffect', 109, 'in', 'fade', 306, 100)
+  const parentRepeatDurationNextStep = effectGroup(309, 'clickEffect', 106, 'out', 'fade', 310, 80)
+  const parentSequentialStep = `<p:seq concurrent="0"><p:cTn id="311" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="109"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(312, 'clickEffect', 106, 'in', 'fade', 313, 600)}${effectGroup(314, 'clickEffect', 108, 'in', 'fade', 315, 200)}</p:childTnLst></p:cTn></p:seq>`
   const parentReverseSpeedGroup = effectGroup(800, 'clickEffect', 113, 'in', 'fade', 801, 600, '0', undefined, '', 'hold', ' dur="600" spd="-200000"')
   const parentAutoReverseGroup = effectGroup(802, 'clickEffect', 115, 'in', 'fade', 803, 600, '0', undefined, '', 'hold', ' dur="600" autoRev="1"')
   const parentIndefiniteRepeat = effectGroup(807, 'clickEffect', 117, 'in', 'fade', 808, 180, '0', undefined, '', 'hold', ' dur="360" repeatDur="indefinite"')
   const childRepeatDuration = effectGroup(810, 'clickEffect', 119, 'in', 'fade', 811, 150, '0', undefined, ' repeatDur="450"')
   const triggeredSequence = (id, trigger, groups) => `<p:seq><p:cTn id="${id}" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="${trigger}"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${groups}</p:childTnLst></p:cTn></p:seq>`
-  const parentRepeatSequences = `<p:seq><p:cTn id="307" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="105"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatCount}</p:childTnLst></p:cTn></p:seq><p:seq><p:cTn id="308" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="107"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatDuration}${parentRepeatAfterEffect}</p:childTnLst></p:cTn></p:seq>${triggeredSequence(804, 112, parentReverseSpeedGroup)}${triggeredSequence(805, 114, parentAutoReverseGroup)}${triggeredSequence(806, 116, parentIndefiniteRepeat)}${triggeredSequence(809, 118, childRepeatDuration)}`
-  const objectShapeElements = `${shape(49, 'Circle mask animation', 0, 6500000, '0ea5e9')}${shape(50, 'Diamond mask animation', 3000000, 6500000, '3b82f6')}${shape(51, 'Box mask animation', 6000000, 6500000, '2563eb')}${shape(52, 'Dissolve mask animation', 0, 3500000, '0891b2')}${shape(53, 'Wheel mask animation', 3000000, 3500000, '2563eb')}${shape(54, 'Wedge mask animation', 6000000, 3500000, '7c3aed')}${shape(55, 'Plus in mask animation', 0, 8500000, '0891b2')}${shape(56, 'Plus out mask animation', 6000000, 8500000, '7c3aed')}${shape(57, 'Random horizontal bars animation', 0, 10500000, '0284c7')}${shape(58, 'Random vertical bars animation', 6000000, 10500000, '7c3aed')}${shape(74, 'Media after-effect', 9000000, 7000000, '10b981')}`
+  const timedNodeSequence = (id, timeNode, event, groups, delay = '0') => `<p:seq><p:cTn id="${id}" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="${event}" delay="${delay}"><p:tn val="${timeNode}"/></p:cond></p:stCondLst><p:childTnLst>${groups}</p:childTnLst></p:cTn></p:seq>`
+  const parentRepeatSequences = `<p:seq><p:cTn id="307" dur="indefinite" nodeType="interactiveSeq" restart="never"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="105"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatCount}</p:childTnLst></p:cTn></p:seq><p:seq concurrent="1"><p:cTn id="308" dur="indefinite" nodeType="interactiveSeq" restart="whenNotActive"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="107"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatDuration}${parentRepeatAfterEffect}${parentRepeatDurationNextStep}</p:childTnLst></p:cTn></p:seq>${parentSequentialStep}${triggeredSequence(804, 112, parentReverseSpeedGroup)}${triggeredSequence(805, 114, parentAutoReverseGroup)}${triggeredSequence(806, 116, parentIndefiniteRepeat)}${triggeredSequence(809, 118, childRepeatDuration)}`
+  const objectShapeElements = `${shape(49, 'Circle mask animation', 0, 6500000, '0ea5e9')}${shape(50, 'Diamond mask animation', 3000000, 6500000, '3b82f6')}${shape(51, 'Box mask animation', 6000000, 6500000, '2563eb')}${shape(52, 'Dissolve mask animation', 0, 3500000, '0891b2')}${shape(53, 'Wheel mask animation', 3000000, 3500000, '2563eb')}${shape(54, 'Wedge mask animation', 6000000, 3500000, '7c3aed')}${shape(55, 'Plus in mask animation', 0, 8500000, '0891b2')}${shape(56, 'Plus out mask animation', 6000000, 8500000, '7c3aed')}${shape(57, 'Random horizontal bars animation', 0, 10500000, '0284c7')}${shape(58, 'Random vertical bars animation', 6000000, 10500000, '7c3aed')}${shape(74, 'Media after-effect', 9000000, 7000000, '10b981')}${shape(9001, 'Stop audio trigger', 9000000, 9000000, '10b981')}${shape(9002, 'Media bookmark trigger', 3500000, 9000000, '10b981')}${shape(9003, 'Media bookmark start trigger', 6500000, 9000000, '10b981')}`
   const shapeMaskClick = `${effectGroup(111, 'clickEffect', 49, 'in', 'circle(in)', 112, 400)}${effectGroup(113, 'clickEffect', 50, 'out', 'diamond(out)', 114, 400)}${effectGroup(115, 'clickEffect', 51, 'in', 'box(in)', 116, 400)}${effectGroup(117, 'clickEffect', 52, 'in', 'dissolve', 118, 400)}${effectGroup(119, 'clickEffect', 53, 'in', 'wheel(4)', 120, 400)}${effectGroup(121, 'clickEffect', 54, 'in', 'wedge', 122, 400)}${effectGroup(123, 'clickEffect', 55, 'in', 'plus(in)', 124, 400)}${effectGroup(125, 'clickEffect', 56, 'out', 'plus(out)', 126, 400)}${effectGroup(127, 'clickEffect', 57, 'in', 'randombar(horizontal)', 128, 400)}${effectGroup(129, 'clickEffect', 58, 'in', 'randombar(vertical)', 130, 400)}`
   const objectStripsElements = ['downLeft', 'upLeft', 'downRight', 'upRight'].map((direction, index) => shape(65 + index, `Strips ${direction} animation`, index * 3000000, 4200000, 'f97316')).join('')
   const objectStripsClick = ['downLeft', 'upLeft', 'downRight', 'upRight'].map((direction, index) => effectGroup(131 + index * 2, 'clickEffect', 65 + index, 'in', `strips(${direction})`, 132 + index * 2, 400)).join('')
@@ -127,10 +221,14 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const togglePauseClick = mediaCommandClick(157, 158, 'togglePause')
   const pauseClick = mediaCommandClick(159, 160, 'pause')
   const stopClick = mediaCommandClick(161, 162, 'stop')
+  const stopAudioClick = `<p:par><p:cTn id="19029" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:cmd type="evt" cmd="onstopaudio"><p:cBhvr><p:cTn id="19030" dur="0"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:sldTgt/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par>`
   const crossSlidePlaybackClick = `<p:par><p:cTn id="167" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:audio><p:cMediaNode numSld="2" vol="100000" mute="0"><p:cTn id="168" dur="indefinite"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="5"/></p:tgtEl></p:cMediaNode></p:audio></p:childTnLst></p:cTn></p:par>`
-  const shapeMaskTiming = `<p:timing><p:tnLst><p:par><p:cTn id="120" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq><p:cTn id="121" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${automaticMediaPlayback}${mediaAfterEffect}${shapeMaskClick}${objectStripsClick}${objectBarnClick}${objectCharacterWipe}${playFromClick}${togglePauseClick}${pauseClick}${stopClick}${crossSlidePlaybackClick}</p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+  const stopAudioTriggered = `<p:seq><p:cTn id="19031" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onStopAudio" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(19032, 'clickEffect', 9001, 'in', 'fade', 19033, 100)}</p:childTnLst></p:cTn></p:seq>`
+  const mediaBookmarkTriggered = `<p:seq><p:cTn id="19034" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMediaBookmark" delay="0"><p:tgtEl><p14:bmkTgt spid="3" bmkName="chapter-one"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(19035, 'clickEffect', 9002, 'in', 'fade', 19036, 100)}</p:childTnLst></p:cTn></p:seq>`
+  const mediaBookmarkStartTriggered = `<p:seq><p:cTn id="19037" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMediaBookmark" delay="0"><p:tgtEl><p14:bmkTgt spid="5" bmkName="chapter-start"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(19038, 'clickEffect', 9003, 'in', 'fade', 19039, 100)}</p:childTnLst></p:cTn></p:seq>`
+  const shapeMaskTiming = `<p:timing><p:tnLst><p:par><p:cTn id="120" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq><p:cTn id="121" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${automaticMediaPlayback}${mediaAfterEffect}${shapeMaskClick}${objectStripsClick}${objectBarnClick}${objectCharacterWipe}${playFromClick}${togglePauseClick}${pauseClick}${stopClick}${stopAudioClick}${crossSlidePlaybackClick}${stopAudioTriggered}${mediaBookmarkTriggered}${mediaBookmarkStartTriggered}</p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
   const colorEffect = (id, target, property, from, to, paragraphRange = '', colorSpace = 'rgb', direction = 'cw') => `<p:par><p:cTn id="${id}" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr clrSpc="${colorSpace}" dir="${direction}"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}">${paragraphRange ? `<p:txEl><p:pRg st="${paragraphRange.split(',')[0]}" end="${paragraphRange.split(',')[1]}"/></p:txEl>` : ''}</p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="${from}"/></p:from><p:to><a:srgbClr val="${to}"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
-  const scaleEffect = `<p:par><p:cTn id="15" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr><p:cTn id="16" dur="200" fill="remove" repeatCount="1500" repeatDur="1000" autoRev="1"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cBhvr><p:by x="150000" y="150000"/></p:animScale></p:childTnLst></p:cTn></p:par>`
+  const scaleEffect = `<p:par><p:cTn id="15" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr accumulate="always"><p:cTn id="16" dur="200" fill="remove" repeatCount="1500" repeatDur="1000" autoRev="1"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cBhvr><p:by x="150000" y="150000"/></p:animScale></p:childTnLst></p:cTn></p:par>`
   const motionEffect = `<p:par><p:cTn id="31" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animMotion origin="layout" path="M 0 0 L 0.001 0 M 0.2 0 L 0.25 0 E"><p:cBhvr><p:cTn id="32" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="30"/></p:tgtEl></p:cBhvr></p:animMotion></p:childTnLst></p:cTn></p:par>`
   const curveMotionEffect = `<p:par><p:cTn id="33" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animMotion origin="layout" path="M 0 0 C 0.1 0 0.15 0.2 0.25 0.2 c 0.1 0 0.15 -0.2 0.25 -0.2 Z E"><p:cBhvr><p:cTn id="34" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="29"/></p:tgtEl></p:cBhvr></p:animMotion></p:childTnLst></p:cTn></p:par>`
   const rotationEffect = `<p:par><p:cTn id="75" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animRot by="5400000"><p:cBhvr><p:cTn id="76" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot></p:childTnLst></p:cTn></p:par>`
@@ -166,6 +264,7 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const lineThroughAnimation = `<p:par><p:cTn id="12100" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="false" to="true" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12101" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="132"/></p:tgtEl><p:attrNameLst><p:attrName>style.textDecorationLineThrough</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const textTransformAnimation = `<p:par><p:cTn id="12016" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="normal" to="super" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12017" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl><p:attrNameLst><p:attrName>style.textTransform</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const textOutlineAnimation = `<p:par><p:cTn id="12018" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="false" to="true" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12019" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl><p:attrNameLst><p:attrName>style.textEffectOutline</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
+  const textOutlineRangeAnimation = `<p:par><p:cTn id="19880" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="true" to="false" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19881" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="137"><p:txEl><p:charRg st="0" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.textEffectOutline</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const visibilityAnimation = `<p:anim from="visible" to="hidden" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12025" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="130"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr></p:anim>`
   const visibilityKeyframes = `<p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12027" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="131"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="hidden"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="visible"/></p:val></p:tav></p:tavLst></p:anim>`
   const grayscaleDirect = `<p:par><p:cTn id="19000" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="false" to="true" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19001" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="300"/></p:tgtEl><p:attrNameLst><p:attrName>imageData.grayscale</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
@@ -177,15 +276,21 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const characterRangeVisibility = `<p:anim from="visible" to="hidden" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="697" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="2" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr></p:anim>`
   const paragraphRangeVisibility = `<p:anim from="visible" to="hidden" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="698" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="687"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr></p:anim>`
   const opacityEffects = `${opacityEffect(198, 99, 'style.opacity', 1, 0.25)}${opacityEffect(200, 3, 'fill.opacity', 1, 0.5)}${opacityEffect(202, 42, 'stroke.opacity', 1, 0.5)}${opacityEffect(204, 3, 'shadow.opacity', 1, 0.5)}${opacityFormulaEffects}${textRangeOpacityEffects}${textRangeFormulaEffects}${wordOpacityIteration}${fontFamilyAnimation}${fontFamilyKeyframes}${unsafeFontFamilyAnimation}`
+  const gradientOpacitySet = `<p:par><p:cTn id="99004" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="99005" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="9901"/></p:tgtEl><p:attrNameLst><p:attrName>fill.opacity</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="0.25"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
+  const stringFontWeightKeyframes = `<p:par><p:cTn id="99007" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="99070" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="9903"/></p:tgtEl><p:attrNameLst><p:attrName>style.fontWeight</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="normal"/></p:val></p:tav><p:tav tm="50000"><p:val><p:strVal val="none"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="normal"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  const stringFontWeightFromTo = `<p:par><p:cTn id="99008" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str" from="bold" to="normal"><p:cBhvr><p:cTn id="99080" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="9904"/></p:tgtEl><p:attrNameLst><p:attrName>style.fontWeight</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
+  const gradientOpacityTrigger = `<p:seq><p:cTn id="99006" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="9901"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="99009" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${opacityEffect(99000, 9900, 'fill.opacity', 1, 0.5)}${opacityEffect(99002, 9902, 'fill.opacity', 1, 0.5)}${gradientOpacitySet}${stringFontWeightKeyframes}${stringFontWeightFromTo}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>`
+  const slide15GradientTiming = shapeMaskTiming.replace('</p:childTnLst></p:cTn></p:seq></p:childTnLst>', `${gradientOpacityTrigger}</p:childTnLst></p:cTn></p:seq></p:childTnLst>`)
+  if (slide15GradientTiming === shapeMaskTiming) throw new Error('The isolated slide 15 gradient timing could not be inserted.')
   const setOpacity = `<p:par><p:cTn id="270" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="271" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="61"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="0.5"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
   const setOpacityString = `<p:par><p:cTn id="272" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="273" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="59"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="0.75"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
   const setColor = `<p:par><p:cTn id="274" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="275" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="61"/></p:tgtEl><p:attrNameLst><p:attrName>fillcolor</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:clrVal><a:srgbClr val="ff0000"/></p:clrVal></p:to></p:set></p:childTnLst></p:cTn></p:par>`
-  const textStyleSet = (id, target, property, value) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="${id + 1}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${value}"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
+  const textStyleSet = (id, target, property, value, range = '') => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="${id + 1}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}">${range ? `<p:txEl>${range}</p:txEl>` : ''}</p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="${value}"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
   const textShadowAnimation = (id, target, from, to, range = '') => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="${from}" to="${to}" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}">${range ? `<p:txEl>${range}</p:txEl>` : ''}</p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.textShadow</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const textShadowDirect = textShadowAnimation(12110, 133, 'normal', 'none')
   const textShadowKeyframes = `<p:par><p:cTn id="12112" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12113" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="134"/></p:tgtEl><p:attrNameLst><p:attrName>style.textShadow</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="auto"/></p:val></p:tav><p:tav tm="50000"><p:val><p:strVal val="none"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="normal"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const unsupportedTextShadowBase = textShadowAnimation(12118, 43, 'normal', 'none')
-  const unsupportedTextShadowRange = textShadowAnimation(12120, 132, 'normal', 'none', '<p:charRg st="0" end="2"/>')
+  const textShadowRangeAnimation = textShadowAnimation(19884, 137, 'normal', 'none', '<p:charRg st="0" end="4"/>')
   const textEmbossAnimation = (id, target, from, to) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="${from}" to="${to}" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.textEffectEmboss</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const textEmbossDirect = textEmbossAnimation(12122, 133, 'normal', 'emboss')
   const textEmbossKeyframes = `<p:par><p:cTn id="12128" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12129" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="134"/></p:tgtEl><p:attrNameLst><p:attrName>style.textEffectEmboss</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="none"/></p:val></p:tav><p:tav tm="50000"><p:val><p:strVal val="emboss"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="normal"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
@@ -195,15 +300,17 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const setLineThrough = textStyleSet(12104, 43, 'style.textDecorationLineThrough', 'true')
   const setTextTransform = textStyleSet(12014, 43, 'style.textTransform', 'sub')
   const setTextOutline = textStyleSet(12020, 59, 'style.textEffectOutline', 'false')
+  const setTextOutlineRange = `<p:par><p:cTn id="19882" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="19883" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="137"><p:txEl><p:charRg st="5" end="8"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.textEffectOutline</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="false"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
   const setTextShadowNone = textStyleSet(12114, 135, 'style.textShadow', 'none')
   const setTextShadowAuto = textStyleSet(12116, 136, 'style.textShadow', 'auto')
+  const setTextShadowRange = textStyleSet(19886, 137, 'style.textShadow', 'none', '<p:charRg st="5" end="8"/>')
   const setTextEmboss = textStyleSet(12124, 135, 'style.textEffectEmboss', 'emboss')
   const setTextEmbossReset = textStyleSet(12126, 136, 'style.textEffectEmboss', 'normal')
   const setFontWeight = textStyleSet(12022, 43, 'style.fontWeight', 'bold')
   const setFontWeightReset = textStyleSet(12024, 7, 'style.fontWeight', 'none')
   const unsupportedSet = `<p:par><p:cTn id="264" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="265" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="99"/></p:tgtEl><p:attrNameLst><p:attrName>style.fontSize</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="0.5"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
   let fontSizeSet = `<p:par><p:cTn id="286" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="287" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="59"><p:txEl><p:charRg st="15" end="21"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.fontSize</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="1.5"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
-  fontSizeSet += `${setFontWeight}${setFontWeightReset}`
+  fontSizeSet += `${setFontWeight}${setFontWeightReset}${['fill.on', 'stroke.on', 'shadow.on'].map((property, index) => textStyleSet(19100 + index * 2, 326, property, 'false')).join('')}${textStyleSet(19110, 326, 'stroke.dashstyle', 'longDash')}`
   const pictureBulletFixture = plainTextShape(299, 'Picture bullet', 9300000, 6100000, 'A picture bullet with a deliberately long line of text to verify that horizontal overflow is clipped at the DrawingML text frame boundary without wrapping past its bounds')
     .replace('<a:bodyPr/>', '<a:bodyPr horzOverflow="clip" vertOverflow="clip" wrap="none"/>')
     .replace('<a:p><a:r>', '<a:p><a:pPr><a:buSzPct val="125000"/><a:buBlip><a:blip r:embed="rIdBullet"/></a:buBlip></a:pPr><a:r>')
@@ -213,7 +320,9 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const imageGain = `<p:par><p:cTn id="19017" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="1" to="2" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="19018" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="306"/></p:tgtEl><p:attrNameLst><p:attrName>imageData.gain</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const imageBlacklevel = `<p:par><p:cTn id="19019" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="19020" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="307"/></p:tgtEl><p:attrNameLst><p:attrName>imageData.blacklevel</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:fltVal val="0"/></p:val></p:tav><p:tav tm="50000"><p:val><p:fltVal val="0.1"/></p:val></p:tav><p:tav tm="100000"><p:val><p:fltVal val="0.2"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const imageGamma = `<p:par><p:cTn id="19021" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="19022" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="308"/></p:tgtEl><p:attrNameLst><p:attrName>imageData.gamma</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="0.5"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
-  const grayscalePictures = `${picture(300, 'Grayscale direct', 9000000)}${picture(301, 'Grayscale keyframes', 9900000)}${picture(302, 'Grayscale p:set', 10800000)}${picture(303, 'Crop direct', 1000000)}${picture(304, 'Crop keyframes', 2000000)}${picture(305, 'Crop p:set', 3000000)}${picture(306, 'Image gain', 4000000)}${picture(307, 'Image blacklevel', 5000000)}${picture(308, 'Image gamma', 6000000)}`
+  const innerShadowFixture = '<a:innerShdw blurRad="63500" dist="127000" dir="2700000"><a:srgbClr val="ffff00"><a:alpha val="75000"/></a:srgbClr></a:innerShdw>'
+  const pictureGlowDag = `<a:effectDag type="sib">${innerShadowFixture}<a:glow rad="100000"><a:srgbClr val="ff00ff"/></a:glow><a:glow rad="50000"><a:srgbClr val="00ffff"/></a:glow></a:effectDag>`
+  const grayscalePictures = `${picture(300, 'Grayscale direct', 9000000).replace('</p:spPr>', `${pictureGlowDag}</p:spPr>`)}${picture(301, 'Grayscale keyframes', 9900000)}${picture(302, 'Grayscale p:set', 10800000)}${picture(303, 'Crop direct', 1000000)}${picture(304, 'Crop keyframes', 2000000)}${picture(305, 'Crop p:set', 3000000)}${picture(306, 'Image gain', 4000000)}${picture(307, 'Image blacklevel', 5000000)}${picture(308, 'Image gamma', 6000000)}`
   const grayscaleTriggered = `<p:seq><p:cTn id="19006" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="300"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${grayscaleDirect}${grayscaleKeyframes}${setGrayscale}${unsupportedChromakeyColorAnimation}</p:childTnLst></p:cTn></p:seq>`
   const cropTriggered = `<p:seq><p:cTn id="19016" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="300"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${cropDirect}${cropKeyframes}${cropSet}</p:childTnLst></p:cTn></p:seq>`
   const imageToneTriggered = `<p:seq><p:cTn id="19023" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="300"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${imageGain}${imageBlacklevel}${imageGamma}</p:childTnLst></p:cTn></p:seq>`
@@ -221,17 +330,53 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const strokeWeightAnimation = (id, target, from, to) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="${from}" to="${to}" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.weight</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const strokeWeightFormulaAnimation = (id, target, value) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.weight</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0" fmla="#stroke.weight+508000*sin(pi*$)"><p:val><p:fltVal val="${value}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:fltVal val="${value}"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const strokeWeightSet = `<p:par><p:cTn id="12130" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="12131" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="136"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.weight</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="3048000"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
-  const triggeredEffect = `<p:seq><p:cTn id="70" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(71, 'clickEffect', 2, 'in', 'fade', 72, 300)}${triggeredRotation}${triggeredColors}${opacityEffects}${strokeWeightAnimation(12120, 135, 25400, 50800)}${strokeWeightSet}${fontWeightEffect}${keyframedFontWeight}${formulaFontWeight}${formulaFontSize}${formulaOpacity}${textFontStyle}${underlineKeyframes}${lineThroughKeyframes}${lineThroughAnimation}${textTransformAnimation}${textOutlineAnimation}${keyframedOpacity}${discreteOpacity}${discreteFontSize}${setOpacity}${setOpacityString}${setColor}${setFontStyle}${setFontFamily}${setUnderline}${setLineThrough}${setTextTransform}${setTextOutline}${effectGroup(161, 'withEffect', 60, 'in', 'slide(fromLeft)', 162, 400)}${effectGroup(163, 'clickEffect', 60, 'out', 'slide(fromRight)', 164, 300)}</p:childTnLst></p:cTn></p:seq>`
+  const additiveRotationEffect = `<p:par><p:cTn id="19250" dur="indefinite" nodeType="withEffect"><p:childTnLst><p:animRot from="0" to="900000"><p:cBhvr additive="sum" accumulate="always"><p:cTn id="19251" dur="200" repeatCount="3000" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="19876"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot></p:childTnLst></p:cTn></p:par>`
+  const triggeredEffect = `<p:seq><p:cTn id="70" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(71, 'clickEffect', 2, 'in', 'fade', 72, 300)}${triggeredRotation}${additiveRotationEffect}${triggeredColors}${opacityEffects}${strokeWeightAnimation(12120, 135, 25400, 50800)}${strokeWeightSet}${fontWeightEffect}${keyframedFontWeight}${formulaFontWeight}${formulaFontSize}${formulaOpacity}${textFontStyle}${underlineKeyframes}${lineThroughKeyframes}${lineThroughAnimation}${textTransformAnimation}${textOutlineAnimation}${keyframedOpacity}${discreteFontSize}${discreteOpacity}${setOpacity}${setOpacityString}${setColor}${setFontStyle}${setFontFamily}${setUnderline}${setLineThrough}${setTextTransform}${setTextOutline}${effectGroup(161, 'withEffect', 60, 'in', 'slide(fromLeft)', 162, 400)}${effectGroup(163, 'clickEffect', 60, 'out', 'slide(fromRight)', 164, 300)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredMouseOver = `<p:seq><p:cTn id="180" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMouseOver" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(181, 'clickEffect', 5, 'in', 'fade', 182, 200)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredMouseOut = `<p:seq><p:cTn id="183" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMouseOut" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(184, 'clickEffect', 5, 'out', 'fade', 185, 200)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredDoubleClick = `<p:seq><p:cTn id="186" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onDblClick" delay="0"><p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(187, 'clickEffect', 5, 'in', 'fade', 188, 200)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredSlideNext = `<p:seq><p:cTn id="192" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(193, 'clickEffect', 90, 'in', 'fade', 194, 300)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredSlidePrevious = `<p:seq><p:cTn id="195" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(196, 'clickEffect', 91, 'in', 'fade', 197, 300)}</p:childTnLst></p:cTn></p:seq>`
+  const triggeredTimingNodeBegin = timedNodeSequence(19300, 150, 'onBegin', effectGroup(19301, 'clickEffect', 90, 'in', 'fade', 19302, 100))
+  const triggeredTimingNodeEnd = timedNodeSequence(19303, 150, 'onEnd', effectGroup(19304, 'clickEffect', 91, 'in', 'fade', 19305, 100))
   const speedTriggerSequence = `<p:seq><p:cTn id="250" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="98"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(251, 'clickEffect', 99, 'in', 'fade', 252, 300, '0', undefined, ' spd="200000"')}</p:childTnLst></p:cTn></p:seq>`
   const reverseSpeedSequence = `<p:seq><p:cTn id="253" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="100"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="254" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr><p:cTn id="255" dur="300" fill="hold" spd="-200000"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="101"/></p:tgtEl></p:cBhvr><p:from x="100000" y="100000"/><p:to x="200000" y="200000"/></p:animScale></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>`
   const elementIterationEffect = `<p:seq><p:cTn id="140" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="63"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="141" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:iterate type="el"><p:tmAbs val="200"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="142" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="62"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>`
   const wipeAnimations = ['right', 'left', 'up', 'down'].map((direction, index) => effectGroup(25 + index * 2, 'withEffect', 20 + index, 'in', `wipe(${direction})`, 26 + index * 2, 200, '0')).join('')
-  const timing = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${fontSizeSet}${unsupportedSet}${emptyMotionGroup}${effectGroup(3, 'afterEffect', 6, 'in', 'fade', 4, 150, '0', undefined, ' repeatCount="2000"', 'remove')}${effectGroup(5, 'clickEffect', 2, 'in', 'fade', 6, 300, '0', undefined, ' accel="50000" decel="50000"')}${parentSpeedGroup}${motionEffect}${curveMotionEffect}${effectGroup(17, 'withEffect', 24, 'out', 'wipe(left)', 18, 200)}${effectGroup(7, 'withEffect', 3, 'in', 'fade', 8, 200, '100')}${effectGroup(9, 'afterEffect', 4, 'out', 'fade', 10, 200, '50', undefined, '', 'freeze')}${characterFade}${characterColor}${characterFontSize}${letterFade}${wordFade}${objectBlinds}${objectChecker}${effectGroup(103, 'afterEffect', 44, 'out', 'fade', 104, 100)}${parentEasedGroup}${parentTimingAfterEffect}${effectGroup(11, 'clickEffect', 5, 'in', 'cut', 12, 1)}${colorEffect(87, 4, 'fillcolor', 'f59e0b', 'ff0000')}${effectGroup(13, 'withEffect', 7, 'in', 'cut', 14, 1, '0', 0)}${scaleEffect}${rotationEffect}${wipeAnimations}${triggeredEffect}${triggeredMouseOver}${triggeredMouseOut}${triggeredDoubleClick}${elementIterationEffect}${triggeredSlideNext}${triggeredSlidePrevious}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>${speedTriggerSequence}${reverseSpeedSequence}${parentRepeatSequences}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+  const timing = `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${fontSizeSet}${unsupportedSet}${emptyMotionGroup}${effectGroup(3, 'afterEffect', 6, 'in', 'fade', 4, 150, '0', undefined, ' repeatCount="2000"', 'remove')}${effectGroup(5, 'clickEffect', 2, 'in', 'fade', 6, 300, '0', undefined, ' accel="50000" decel="50000"')}${parentSpeedGroup}${motionEffect}${curveMotionEffect}${effectGroup(17, 'withEffect', 24, 'out', 'wipe(left)', 18, 200)}${effectGroup(7, 'withEffect', 3, 'in', 'fade', 8, 200, '100')}${effectGroup(9, 'afterEffect', 4, 'out', 'fade', 10, 200, '50', undefined, '', 'freeze')}${characterFade}${characterColor}${characterFontSize}${letterFade}${wordFade}${objectBlinds}${objectChecker}${effectGroup(103, 'afterEffect', 44, 'out', 'fade', 104, 100)}${parentEasedGroup}${parentTimingAfterEffect}${effectGroup(11, 'clickEffect', 5, 'in', 'cut', 12, 1)}${colorEffect(87, 4, 'fillcolor', 'f59e0b', 'ff0000')}${effectGroup(13, 'withEffect', 7, 'in', 'cut', 14, 1, '0', 0)}${scaleEffect}${rotationEffect}${wipeAnimations}${triggeredEffect}${triggeredMouseOver}${triggeredMouseOut}${triggeredDoubleClick}${elementIterationEffect}${triggeredSlideNext}${triggeredSlidePrevious}</p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq>${speedTriggerSequence}${reverseSpeedSequence}${parentRepeatSequences}${triggeredTimingNodeBegin}${triggeredTimingNodeEnd}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+  const longSlowAnimation = effectGroup(30002, 'clickEffect', 123, 'in', 'fade', 30003, 40000, '0', undefined, ' spd="50000"')
+  const longParentTiming = effectGroup(30004, 'clickEffect', 123, 'in', 'fade', 30005, 100, '0', undefined, '', 'hold', ' dur="60000" accel="25000"')
+  const longTimingProbe = triggeredSequence(30001, 123, `${longSlowAnimation}${longParentTiming}`)
+  const onOffProperties = ['fill.on', 'stroke.on', 'shadow.on']
+  const onOffAnimations = onOffProperties.map((property, index) => {
+    const id = 19130 + index * 10
+    return `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="${id + 1}" dur="100" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="326"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="false"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="true"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  }).join('')
+  const strokeDashAnimation = `<p:par><p:cTn id="19200" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19201" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="326"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.dashstyle</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="longDash"/></p:val></p:tav><p:tav tm="50000"><p:val><p:strVal val="dash"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="dashDot"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  const lineArrowSet = textStyleSet(19120, 42, 'stroke.startArrow', 'doublechevron')
+  const lineArrowSizeSets = `${textStyleSet(19160, 42, 'stroke.startArrowWidth', 'narrow')}${textStyleSet(19180, 42, 'stroke.endArrowLength', 'long')}`
+  const unsupportedLineArrowSizeSet = textStyleSet(19190, 42, 'stroke.startArrowWidth', 'long')
+  const lineArrowAnimation = `<p:par><p:cTn id="19210" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19211" dur="300" fill="hold"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="42"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.startArrow</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="doublechevron"/></p:val></p:tav><p:tav tm="50000"><p:val><p:strVal val="classic"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="open"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  const lineArrowLengthAnimation = `<p:par><p:cTn id="19220" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="short" to="long" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19221" dur="300" fill="hold"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="42"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.startArrowLength</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
+  const lineArrowWidthAnimation = `<p:par><p:cTn id="19230" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19231" dur="300" fill="hold"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="42"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.endArrowWidth</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="narrow"/></p:val></p:tav><p:tav tm="50000"><p:val><p:strVal val="medium"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="wide"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  const unsupportedLineArrowSizeAnimation = `<p:par><p:cTn id="19240" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="short" to="wide" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19241" dur="300" fill="hold"><p:stCondLst><p:cond delay="300"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="42"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.endArrowLength</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
+  const onOffTriggered = triggeredSequence(19170, 326, `${onOffAnimations}${strokeDashAnimation}${lineArrowSet}${lineArrowSizeSets}${unsupportedLineArrowSizeSet}${lineArrowAnimation}${lineArrowLengthAnimation}${lineArrowWidthAnimation}${unsupportedLineArrowSizeAnimation}`)
+  const onOffTimingClose = '</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>'
+  const letterWipe = letterFade.replace('filter="fade"', 'filter="wipe(right)"')
+  const letterSlide = `<p:animEffect transition="in" filter="slide(fromLeft)"><p:cBhvr><p:cTn id="29100" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl></p:cBhvr></p:animEffect>`
+  const letterScale = `<p:animScale><p:cBhvr><p:cTn id="29104" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl></p:cBhvr><p:from x="100000" y="100000"/><p:to x="150000" y="150000"/></p:animScale>`
+  const letterRotation = `<p:animRot by="5400000"><p:cBhvr><p:cTn id="29105" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot>`
+  const letterVisibility = `<p:anim from="visible" to="hidden" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="29107" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr></p:anim>`
+  const letterWipeAndSlide = letterWipe.replace('</p:animEffect></p:childTnLst>', `</p:animEffect>${letterSlide}${letterScale}${letterRotation}${letterVisibility}</p:childTnLst>`)
+  const timingWithLetterWipe = timing.replace(letterFade, letterWipeAndSlide)
+  assert(timingWithLetterWipe !== timing && letterWipeAndSlide.includes('filter="slide(fromLeft)"') && letterWipeAndSlide.includes('<p:attrName>style.visibility</p:attrName>'), 'The by-letter wipe, slide, and visibility fixtures must be included in slide timing.')
+  const wordStrips = `<p:animEffect transition="in" filter="strips(downLeft)"><p:cBhvr><p:cTn id="29103" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr></p:animEffect>`
+  const wordMotion = `<p:animMotion origin="parent"><p:cBhvr><p:cTn id="29106" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr><p:by x="0" y="10000"/></p:animMotion>`
+  const wordFadeWithStrips = wordFade.replace('<p:animEffect transition="in" filter="fade">', `${wordStrips}<p:animEffect transition="in" filter="fade">`).replace('</p:animEffect></p:childTnLst></p:cTn></p:par>', `</p:animEffect>${wordMotion}</p:childTnLst></p:cTn></p:par>`)
+  const timingWithWordStrips = timingWithLetterWipe.replace(wordFade, wordFadeWithStrips)
+  assert(timingWithWordStrips !== timingWithLetterWipe, 'The by-word strips fixture must be included in slide timing.')
+  const timingWithOnOff = timingWithWordStrips.replace(onOffTimingClose, `${onOffTriggered}${onOffTimingClose}`)
+  assert(timingWithOnOff !== timing, 'The appearance toggle trigger must be included in slide timing.')
   const relativeMotion = `<p:animMotion origin="parent"><p:cBhvr><p:cTn id="153" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="92"/></p:tgtEl></p:cBhvr><p:by x="25000" y="0"/></p:animMotion>`
   const fromToMotion = `<p:animMotion origin="layout"><p:cBhvr><p:cTn id="245" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="93"/></p:tgtEl></p:cBhvr><p:from x="25%" y="0%"/><p:to x="50000" y="0"/></p:animMotion>`
   const fromByMotion = `<p:animMotion origin="layout"><p:cBhvr><p:cTn id="246" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="94"/></p:tgtEl></p:cBhvr><p:from x="10000" y="0"/><p:by x="25000" y="0"/></p:animMotion>`
@@ -239,23 +384,26 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const rotatedMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" rAng="5400000" path="M 0.5 0.5 L 0.55 0.5 E"><p:cBhvr><p:cTn id="249" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="97"/></p:tgtEl></p:cBhvr><p:rCtr x="50000" y="50000"/></p:animMotion>`
   const formulaMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" path="M (#ppt_x #ppt_y) L (#ppt_x+#ppt_w*1.5, #ppt_y+sin(pi/2)*#ppt_h*0.5) E"><p:cBhvr><p:cTn id="250" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="122"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const dynamicFormulaMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" path="M (#ppt_x-sin(pi*$)/3, #ppt_y) L (#ppt_x, #ppt_y) E"><p:cBhvr><p:cTn id="251" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="123"/></p:tgtEl></p:cBhvr></p:animMotion>`
-  const dynamicMotionClick = `<p:par><p:cTn id="278" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${dynamicFormulaMotionPath}</p:childTnLst></p:cTn></p:par>`
+  const coordinateAnimation = (id, property, start, end, formula = '') => `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${id}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="150"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"${formula ? ` fmla="${formula}"` : ''}><p:val><p:strVal val="${start}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${end}"/></p:val></p:tav></p:tavLst></p:anim>`
+  const genericCoordinateAnimations = `${coordinateAnimation(28100, 'ppt_x', '1+#ppt_h/2', '#ppt_x')}${coordinateAnimation(28101, 'ppt_y', '#ppt_y', '#ppt_y', '#ppt_y+0.2*(1-$)')}`
+  const dynamicMotionClick = `<p:par><p:cTn id="278" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${dynamicFormulaMotionPath}${genericCoordinateAnimations}</p:childTnLst></p:cTn></p:par>`
   const dynamicMotionTrigger = triggeredSequence(814, 8, dynamicMotionClick)
   const groupedParentMotion = `<p:animMotion origin="parent" pathEditMode="relative" path="M 0 0 L 0.01 0 E"><p:cBhvr><p:cTn id="252" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="125"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const nestedParentMotion = `<p:animMotion origin="parent" pathEditMode="relative" path="M 0.008202099738 0.007290172061 L 0.018202099738 0.007290172061 E"><p:cBhvr><p:cTn id="253" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const positionMotions = `${relativeMotion}${fromToMotion}${fromByMotion}${toMotion}${rotatedMotionPath}${formulaMotionPath}${groupedParentMotion}${nestedParentMotion}`
-  const fixedMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" path="M 0 0 L 0.25 0 E"><p:cBhvr><p:cTn id="248" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="96"/></p:tgtEl></p:cBhvr></p:animMotion>`
+  const fixedMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" path="M 0.1 0.1 m 0.1 0 L 0.3 0.1 E"><p:cBhvr><p:cTn id="248" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="96"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const motionEffectWithRelativeMotion = motionEffect.replace('</p:childTnLst>', `${positionMotions}${fixedMotionPath}</p:childTnLst>`)
-  const textShadowActions = `${textShadowDirect}${textShadowKeyframes}${setTextShadowNone}${setTextShadowAuto}${unsupportedTextShadowBase}${unsupportedTextShadowRange}${textEmbossDirect}${textEmbossKeyframes}${setTextEmboss}${setTextEmbossReset}`
-  const triggeredEffectWithTextShadow = triggeredEffect.replace(textOutlineAnimation, `${textOutlineAnimation}${textShadowActions}`)
-  const timingWithCharacterSlide = timing.replace(characterFade, `${characterFade}${characterSlide}`)
+  const textShadowActions = `${textShadowDirect}${textShadowKeyframes}${setTextShadowNone}${setTextShadowAuto}${unsupportedTextShadowBase}${textShadowRangeAnimation}${setTextShadowRange}${textEmbossDirect}${textEmbossKeyframes}${setTextEmboss}${setTextEmbossReset}`
+  const textOutlineRangeActions = `${textOutlineRangeAnimation}${setTextOutlineRange}`
+  const triggeredEffectWithTextShadow = triggeredEffect.replace(textOutlineAnimation, `${textOutlineAnimation}${textShadowActions}${textOutlineRangeActions}`)
+  const timingWithCharacterSlide = timingWithOnOff.replace(characterFade, `${characterFade}${characterSlide}`)
   const timingWithTextShadow = timingWithCharacterSlide.replace(triggeredEffect, triggeredEffectWithTextShadow)
   assert(timingWithTextShadow !== timing, 'Text-shadow animations must be inserted into the trigger sequence.')
   const triggeredEffectWithStrokeWeight = triggeredEffectWithTextShadow
     .replace(`${strokeWeightAnimation(12120, 135, 25400, 50800)}${strokeWeightSet}`, '')
-    .replace('</p:childTnLst>', `${strokeWeightAnimation(12120, 135, 1016000, 2032000)}${strokeWeightSet}${strokeWeightFormulaAnimation(12140, 137, 1016000)}</p:childTnLst>`)
+    .replace('</p:childTnLst>', `${strokeWeightAnimation(12120, 135, 1016000, 2032000)}${strokeWeightSet}${strokeWeightFormulaAnimation(12140, 137, 1016000)}${opacityEffect(21000, 135, 'stroke.opacity', 1, 0.25)}${opacityEffect(21002, 137, 'stroke.opacity', 1, 0.5)}${opacityEffect(21004, 67, 'stroke.opacity', 1, 0.5)}${strokeWeightSet.replace('id="12130"', 'id="21006"').replace('id="12131"', 'id="21007"').replace('stroke.weight', 'stroke.opacity').replace('val="3048000"', 'val="0.2"')}</p:childTnLst>`)
   const timingWithStrokeWeight = timingWithTextShadow.replace(triggeredEffectWithTextShadow, triggeredEffectWithStrokeWeight)
-  const timingWithRelativeMotion = timingWithStrokeWeight.replace(motionEffect, motionEffectWithRelativeMotion).replace('</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>', `${dynamicMotionTrigger}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`)
+  const timingWithRelativeMotion = timingWithStrokeWeight.replace(motionEffect, motionEffectWithRelativeMotion).replace('</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>', `${dynamicMotionTrigger}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`).replace('</p:tnLst></p:timing>', `${longTimingProbe}</p:tnLst></p:timing>`)
   assert(timingWithRelativeMotion !== timing, 'The from/to/by motion fixture must be inserted into the main sequence.')
   const wipeShapes = ['right', 'left', 'up', 'down'].map((direction, index) => shape(20 + index, `Wipe ${direction}`, index * 3000000, 4000000, '38bdf8')).join('')
   const characterSlideShape = plainTextShape(160, 'Character slide animation', 9000000, 5900000, 'RESTMOVE')
@@ -268,15 +416,90 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
     .replace('<a:p><a:r>', '<a:p><a:pPr><a:lnSpc><a:spcPct val="200000"/></a:lnSpc></a:pPr><a:r>')
   const autofitReferenceShape = plainTextShape(121, 'Autofit reference', 3500000, 5900000, 'Autofit sample')
     .replace('<a:bodyPr/>', '<a:bodyPr vertOverflow="ellipsis"/>')
+    .replace('Autofit sample', 'Trailing ellipsis must appear at the final visible line when this paragraph contains more text than the PowerPoint text frame can show. '.repeat(3))
     .replace('sz="1800"', 'sz="2000"')
   const textRangeOpacityShape = plainTextShape(132, 'Text range opacity', 5000000, 5800000, 'Paragraph opacity', '<a:solidFill><a:srgbClr val="1d4ed8"/></a:solidFill><a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln><a:effectLst><a:outerShdw blurRad="63500" dist="63500" dir="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst>').replace('sz="1800"', 'sz="1800" strike="dblStrike"')
   const textShadowMarkup = '<a:effectLst><a:outerShdw blurRad="63500" dist="63500" dir="0"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst>'
+  const textOutlineRangeShape = plainTextShape(137, 'Text outline range', 6500000, 6000000, 'Test range', `<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>${textShadowMarkup}`)
   const textShadowShapes = `${plainTextShape(133, 'Text shadow direct', 0, 6500000, 'Direct shadow', textShadowMarkup)}${plainTextShape(134, 'Text shadow keyframes', 3000000, 6500000, 'Keyframed shadow', textShadowMarkup)}${plainTextShape(135, 'Text shadow set none', 6000000, 6500000, 'Set shadow none', textShadowMarkup)}${plainTextShape(136, 'Text shadow set auto', 9000000, 6500000, 'Set shadow auto', textShadowMarkup)}`
-  const animatedSlide = `${animatedShapes}${parentRepeatShapes}${parentTimingShapes}${normalAutofitShape}${autofitReferenceShape}${lineShape(42, 'Stroke color', 500000, 6000000, '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="diamond" w="sm" len="sm"/>')}${plainTextShape(59, 'Paragraph wipe target', 9000000, 5500000, 'Paragraph wipe target', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${textRangeOpacityShape}`
-  const animatedSlideWithTextShadow = `${animatedSlide}${characterSlideShape}${textShadowShapes}`
+  const presetConnectorShapes = `${connector(7002, 'Bent connector 2', 'bentConnector2', 2600000, 6000000, 700000, 500000)}${connector(7003, 'Bent connector 3', 'bentConnector3', 3400000, 6000000, 700000, 500000, '<a:avLst><a:gd name="adj1" fmla="val 25000"/></a:avLst>')}${connector(7004, 'Bent connector 4', 'bentConnector4', 4200000, 6000000, 700000, 500000, '<a:avLst><a:gd name="adj1" fmla="val 30000"/><a:gd name="adj2" fmla="val 60000"/></a:avLst>')}${connector(7005, 'Bent connector 5', 'bentConnector5', 5000000, 6000000, 700000, 500000, '<a:avLst><a:gd name="adj1" fmla="val 20000"/><a:gd name="adj2" fmla="val 50000"/><a:gd name="adj3" fmla="val 80000"/></a:avLst>')}${connector(7006, 'Curved connector 2', 'curvedConnector2', 5800000, 6000000, 700000, 500000)}${connector(7007, 'Curved connector 3', 'curvedConnector3', 6600000, 6000000, 700000, 500000, '<a:avLst><a:gd name="adj1" fmla="val 40000"/></a:avLst>')}${connector(7008, 'Curved connector 4', 'curvedConnector4', 7400000, 6000000, 700000, 500000, '<a:avLst><a:gd name="adj1" fmla="val 40000"/><a:gd name="adj2" fmla="val 60000"/></a:avLst>')}${connector(7009, 'Curved connector 5', 'curvedConnector5', 8200000, 6000000, 700000, 500000, '<a:avLst><a:gd name="adj1" fmla="val 30000"/><a:gd name="adj2" fmla="val 40000"/><a:gd name="adj3" fmla="val 80000"/></a:avLst>')}`
+  const customConnectedTarget = shape(12003, 'Custom connector target', 7000000, 2000000, '86efac', 1000000, 1000000)
+    .replace('<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>', '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst><a:cxn ang="0"><a:pos x="250" y="500"/></a:cxn><a:cxn ang="0"><a:pos x="750" y="250"/></a:cxn></a:cxnLst><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/></a:lnTo><a:lnTo><a:pt x="1000" y="1000"/></a:lnTo><a:lnTo><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>')
+  const groupedConnectedTarget = `<p:grpSp><p:nvGrpSpPr><p:cNvPr id="12005" name="Connector transform group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm rot="5400000" flipH="1"><a:off x="8000000" y="4000000"/><a:ext cx="2000000" cy="2000000"/><a:chOff x="0" y="0"/><a:chExt cx="1000000" cy="1000000"/></a:xfrm></p:grpSpPr>${shape(12006, 'Grouped connector target', 0, 0, 'c4b5fd', 1000000, 1000000)}</p:grpSp>`
+  const connectedTargets = `${shape(12000, 'Rotated connector target', 1000000, 1000000, 'fca5a5', 1000000, 1000000).replace('<a:xfrm>', '<a:xfrm rot="5400000">')}${shape(12001, 'Ellipse connector target', 5000000, 1000000, '93c5fd', 1000000, 1000000).replace('<a:prstGeom prst="rect">', '<a:prstGeom prst="ellipse">')}`
+  const connectorShapes = `${connector(7000, 'Static straight connector', 'straightConnector1', 500000, 6000000, 1000000, 400000)}${connector(7001, 'Static inverse connector', 'lineInv', 1800000, 6000000, 1000000, 400000)}${connectedTargets}${connector(12002, 'Bound straight connector', 'straightConnector1', 1900000, 1400000, 3800000, 700000, '<a:avLst/>', '<a:stCxn id="12000" idx="0"/><a:endCxn id="12001" idx="4"/>')}`
+  const attachedPresetConnectorShapes = `${presetConnectorShapes}${customConnectedTarget}${groupedConnectedTarget}${connector(12004, 'Custom bound connector', 'straightConnector1', 6500000, 2000000, 1500000, 500000, '<a:avLst/>', '<a:endCxn id="12003" idx="1"/>')}${connector(12007, 'Grouped bound connector', 'straightConnector1', 8500000, 5800000, 1000000, 500000, '<a:avLst/>', '<a:endCxn id="12006" idx="1"/>')}`
+  const patternFillShape = (id, name, x, preset, foreground, background, geometry = 'rect') => shape(id, name, x, 6500000, background, 1200000, 600000)
+    .replace('<a:prstGeom prst="rect">', `<a:prstGeom prst="${geometry}">`)
+    .replace(`<a:solidFill><a:srgbClr val="${background}"/></a:solidFill>`, `<a:pattFill prst="${preset}"><a:fgClr><a:srgbClr val="${foreground}"/></a:fgClr><a:bgClr><a:srgbClr val="${background}"/></a:bgClr></a:pattFill>`)
+  const patternFillText = plainTextShape(19999, 'Pattern-filled text', 5000000, 6500000, 'Pattern text', '<a:pattFill prst="horz"><a:fgClr><a:srgbClr val="dc2626"/></a:fgClr><a:bgClr><a:srgbClr val="fff7ed"/></a:bgClr></a:pattFill>')
+  const patternFillShapes = `${patternFillShape(13001, 'Horizontal pattern fill', 100000, 'horz', 'dc2626', 'fff7ed')}${patternFillShape(13002, 'Percent pattern fill', 1500000, 'pct25', '1d4ed8', 'eff6ff')}${patternFillShape(13003, 'SVG pattern fill fallback', 2900000, 'cross', '15803d', 'f0fdf4', 'triangle')}${patternFillText}`
+  const effectDagShape = (id, name, x, effects) => shape(id, name, x, 6200000, 'e2e8f0', 2400000, 500000).replace('</p:spPr>', `${effects}</p:spPr>`)
+  const dagShadow = '<a:outerShdw blurRad="127000" dist="76200" dir="2700000"><a:srgbClr val="123456"><a:alpha val="60000"/></a:srgbClr></a:outerShdw>'
+  const dagShadowSecond = '<a:outerShdw blurRad="63500" dist="127000" dir="0"><a:srgbClr val="00ff00"/></a:outerShdw>'
+  const dagGlowSecond = '<a:glow rad="50000"><a:srgbClr val="0000ff"/></a:glow>'
+  const effectDagShapes = `${effectDagShape(7100, 'Sibling effect DAG', 300000, `<a:effectDag type="sib">${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${effectDagShape(7101, 'Tree effect DAG', 3700000, `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${effectDagShape(7102, 'Nested effect DAG', 7100000, `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}`
+  const effectDagTextShapes = `${plainTextShape(7110, 'Sibling text effect DAG', 300000, 5200000, 'Sibling text', `<a:effectDag>${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${plainTextShape(7111, 'Tree text effect DAG', 3700000, 5200000, 'Tree text', `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${plainTextShape(7112, 'Nested text effect DAG', 7100000, 5200000, 'Nested text', `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}${plainTextShape(7113, 'Single text tree effect DAG', 9500000, 5200000, 'Single tree effect', `<a:effectDag type="tree">${dagShadow}</a:effectDag>`)}`
+  const animatedSlide = `${animatedShapes}${connectorShapes}${parentRepeatShapes}${parentTimingShapes}${normalAutofitShape}${autofitReferenceShape}${lineShape(42, 'Stroke color', 500000, 6000000, '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="diamond" w="sm" len="sm"/>')}${plainTextShape(59, 'Paragraph wipe target', 9000000, 5500000, 'Paragraph wipe target', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${textRangeOpacityShape}`
+  const insetEffectFixtures = [
+    shape(7114, 'Shape inner effect list', 300000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
+    shape(7115, 'Shape inner effect DAG', 2700000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectDag type="sib">${dagShadow}${innerShadowFixture}</a:effectDag></p:spPr>`),
+    shape(7116, 'Unsupported polygon inner shadow', 5100000, 6100000, 'e2e8f0', 2200000, 500000).replace('<a:prstGeom prst="rect">', '<a:prstGeom prst="triangle">').replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
+    plainTextShape(7117, 'Direct text inner shadow', 7500000, 6100000, 'Text inner shadow', `<a:effectLst>${innerShadowFixture}</a:effectLst>`),
+    plainTextShape(7118, 'DAG text inner shadow', 9900000, 6100000, 'Text inner shadow', `<a:effectDag>${innerShadowFixture}</a:effectDag>`)
+  ].join('')
+  const animatedSlideWithTextShadow = `${animatedSlide}${characterSlideShape}${textShadowShapes}${appearanceToggleShape}${textOutlineRangeShape}`
   const animatedSlideWithRelativeMotion = `${animatedSlideWithTextShadow}${shape(92, 'Relative position motion', 4500000, 3000000, 'ea580c')}${shape(93, 'From/to motion', 5500000, 3000000, 'c026d3')}${shape(94, 'From/by motion', 6500000, 3000000, 'ca8a04')}${shape(95, 'To-only motion', 7500000, 3000000, '2563eb')}${shape(96, 'Fixed motion path', 4500000, 4000000, '0d9488')}`.replace('<a:ln w="25400">', '<a:ln w="25400"><a:prstDash val="dash"/>')
     zip.file('ppt/slides/slide1.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(`${animatedSlideWithRelativeMotion}${pictureBulletFixture}`)}<p:transition spd="med"><p:zoom dir="in"/></p:transition>${timingWithRelativeMotion}</p:sld>`)
   const lineChartPart = chartPart.replace('<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>', '<c:lineChart><c:grouping val="standard"/>').replaceAll('barChart', 'lineChart')
+  const bracketShapeFixtures = [
+    ['leftBracket', undefined, 2_600_000, 800_000],
+    ['rightBracket', undefined, 2_600_000, 800_000],
+    ['rightBracket', '25000', 2_600_000, 800_000],
+    ['leftBracket', '100000', 2_600_000, 800_000],
+    ['rightBracket', '100000', 800_000, 2_600_000],
+    ['bracketPair', undefined, 2_600_000, 800_000],
+    ['bracketPair', '40000', 2_600_000, 800_000],
+    ['bracketPair', '60000', 2_600_000, 800_000],
+  ].map(([kind, adjustment, width, height], index) => {
+      const guides = adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`
+      const geometry = `<a:prstGeom prst="${kind}"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+      return plainTextShape(20902 + index, `Preset ${kind} ${index}`, 500000, 500000, 'Bracket text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+  }).join('')
+  const bracePairShapeFixtures = [
+    [undefined, 2_600_000, 800_000],
+    ['20000', 1_600_000, 1_600_000],
+    ['25000', 800_000, 2_600_000],
+    ['30000', 2_600_000, 800_000],
+  ].map(([adjustment, width, height], index) => {
+    const guides = adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`
+    const geometry = `<a:prstGeom prst="bracePair"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+    return plainTextShape(20910 + index, `Preset bracePair ${index}`, 500000, 500000, 'Brace text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+  }).join('')
+  const singleBraceShapeFixtures = [
+    ['leftBrace', undefined, undefined, 2_600_000, 800_000],
+    ['rightBrace', '20000', '25000', 2_600_000, 800_000],
+    ['leftBrace', '40000', '50000', 2_600_000, 800_000],
+    ['rightBrace', '30000', '50000', 800_000, 2_600_000],
+    ['leftBrace', '0', '110000', 2_600_000, 800_000],
+  ].map(([kind, adjustment1, adjustment2, width, height], index) => {
+    const guides = [
+      adjustment1 === undefined ? '' : `<a:gd name="adj1" fmla="val ${adjustment1}"/>`,
+      adjustment2 === undefined ? '' : `<a:gd name="adj2" fmla="val ${adjustment2}"/>`,
+    ].join('')
+    const geometry = `<a:prstGeom prst="${kind}"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+    return plainTextShape(20914 + index, `Preset ${kind} ${index}`, 500000, 500000, 'Brace text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+  }).join('')
+  zip.file('ppt/slides/slide1.xml', (await zip.file('ppt/slides/slide1.xml').async('string')).replace('</p:spTree>', `${bracketShapeFixtures}${bracePairShapeFixtures}${singleBraceShapeFixtures}</p:spTree>`))
   const stackedLineChartPart = lineChartPart.replace('<c:grouping val="standard"/>', '<c:grouping val="stacked"/>')
   const percentStackedLineChartPart = lineChartPart.replace('<c:grouping val="standard"/>', '<c:grouping val="percentStacked"/>')
   const areaChartPart = chartPart.replace('<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>', '<c:areaChart><c:grouping val="standard"/>').replaceAll('barChart', 'areaChart')
@@ -285,8 +508,16 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const pieChartPart = chartPart.replace('<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>', '<c:pieChart>').replace('<c:axId val="1"/><c:axId val="2"/>', '').replaceAll('barChart', 'pieChart')
   const doughnutChartPart = pieChartPart.replaceAll('pieChart', 'doughnutChart').replace('</c:doughnutChart>', '<c:firstSliceAng val="90"/><c:holeSize val="40"/></c:doughnutChart>')
   const scatterCache = values => `<c:numRef><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values.map((value, index) => `<c:pt idx="${index}"><c:v>${value}</c:v></c:pt>`).join('')}</c:numCache></c:numRef>`
-  const scatterSeries = (index, name, color, x, y, noLine = false) => `<c:ser><c:idx val="${index}"/><c:order val="${index}"/><c:tx><c:v>${name}</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${noLine ? '<a:ln><a:noFill/></a:ln>' : ''}</c:spPr><c:marker><c:symbol val="circle"/></c:marker><c:xVal>${scatterCache(x)}</c:xVal><c:yVal>${scatterCache(y)}</c:yVal></c:ser>`
+  const scatterSeries = (index, name, color, x, y, noLine = false) => `<c:ser><c:idx val="${index}"/><c:order val="${index}"/><c:tx><c:v>${name}</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${noLine ? '<a:ln><a:noFill/></a:ln>' : ''}</c:spPr>${index === 1 ? '<c:dPt><c:idx val="1"/><c:marker><c:symbol val="triangle"/><c:size val="10"/></c:marker></c:dPt>' : ''}<c:marker><c:symbol val="${index === 0 ? 'diamond' : 'square'}"/><c:size val="7"/></c:marker><c:xVal>${scatterCache(x)}</c:xVal><c:yVal>${scatterCache(y)}</c:yVal></c:ser>`
   const scatterChartPart = `<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Measured values</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:layout/><c:scatterChart>${scatterSeries(0, 'Sensor A', '0ea5e9', [1, 3, 5], [10, 20, 15])}${scatterSeries(1, 'Sensor B', 'f97316', [2, 4, 6], [15, 25, 5], true)}<c:axId val="700"/><c:axId val="701"/></c:scatterChart><c:valAx><c:axId val="700"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/><c:max val="6"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorGridlines/><c:numFmt formatCode="0" sourceLinked="0"/><c:majorUnit val="2"/><c:majorTickMark val="out"/><c:tickLblPos val="nextTo"/><c:crossAx val="701"/><c:crosses val="autoZero"/></c:valAx><c:valAx><c:axId val="701"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/><c:max val="30"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="0" sourceLinked="0"/><c:majorUnit val="10"/><c:majorTickMark val="out"/><c:tickLblPos val="nextTo"/><c:crossAx val="700"/><c:crosses val="autoZero"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/></c:legend></c:chart></c:chartSpace>`
+  const logScatterChartPart = scatterChartPart
+    .replace(scatterSeries(0, 'Sensor A', '0ea5e9', [1, 3, 5], [10, 20, 15]), scatterSeries(0, 'Sensor A', '0ea5e9', [1, 10, 100], [1, 10, 100]))
+    .replace(scatterSeries(1, 'Sensor B', 'f97316', [2, 4, 6], [15, 25, 5], true), scatterSeries(1, 'Sensor B', 'f97316', [0, 2, 100], [10, -1, 100], true))
+    .replace('<c:scaling><c:orientation val="minMax"/><c:min val="0"/><c:max val="6"/></c:scaling>', '<c:scaling><c:logBase val="10"/><c:orientation val="minMax"/></c:scaling>')
+    .replace('<c:scaling><c:orientation val="minMax"/><c:min val="0"/><c:max val="30"/></c:scaling>', '<c:scaling><c:logBase val="10"/><c:orientation val="minMax"/></c:scaling>')
+    .replace('<c:majorUnit val="2"/>', '<c:majorUnit val="1"/>')
+    .replace('<c:majorUnit val="10"/>', '<c:majorUnit val="1"/>')
+  const invalidLogScatterChartPart = logScatterChartPart.replace('<c:logBase val="10"/>', '<c:logBase val="1"/>').replace('<c:logBase val="10"/>', '<c:logBase val="1001"/>')
   const xyAxesXml = scatterChartPart.slice(scatterChartPart.indexOf('</c:scatterChart>') + '</c:scatterChart>'.length, scatterChartPart.indexOf('</c:plotArea>'))
   const bubbleAxesXml = xyAxesXml.replace('<c:max val="6"/>', '<c:max val="10"/>').replace('<c:max val="30"/>', '<c:max val="40"/>')
   const bubbleSeries = (index, name, color, x, y, sizes, pointColor) => `<c:ser><c:idx val="${index}"/><c:order val="${index}"/><c:tx><c:v>${name}</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr>${pointColor ? `<c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="${pointColor}"/></a:solidFill></c:spPr></c:dPt>` : ''}<c:xVal>${scatterCache(x)}</c:xVal><c:yVal>${scatterCache(y)}</c:yVal><c:bubbleSize>${scatterCache(sizes)}</c:bubbleSize></c:ser>`
@@ -333,7 +564,7 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const percentStackedBarChartPart = chartPart
     .replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')
     .replace('<c:grouping val="clustered"/>', '<c:grouping val="percentStacked"/>')
-  const withValueAxis = (xml, { min, max, majorUnit, numberFormat, reverse = false, categoryPosition = 'b', valuePosition = 'l', categoryCrosses = 'autoZero', valueCrosses = 'autoZero', categoryCrossAt, valueCrossAt, categoryTickMark = 'none', valueTickMark = 'none', categoryTickLabelPosition = 'nextTo', valueTickLabelPosition = 'nextTo', categoryDeleted = false, valueDeleted = false, majorGridlines = true }) => xml.replace('</c:plotArea>', `<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${categoryDeleted ? 1 : 0}"/><c:axPos val="${categoryPosition}"/><c:majorTickMark val="${categoryTickMark}"/><c:tickLblPos val="${categoryTickLabelPosition}"/><c:crossAx val="2"/><c:crosses val="${categoryCrosses}"/>${categoryCrossAt === undefined ? '' : `<c:crossesAt val="${categoryCrossAt}"/>`}<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx><c:valAx><c:axId val="2"/><c:scaling><c:orientation val="${reverse ? 'maxMin' : 'minMax'}"/><c:min val="${min}"/><c:max val="${max}"/></c:scaling><c:delete val="${valueDeleted ? 1 : 0}"/><c:axPos val="${valuePosition}"/>${majorGridlines ? '<c:majorGridlines/>' : ''}<c:numFmt formatCode="${numberFormat}" sourceLinked="0"/><c:majorTickMark val="${valueTickMark}"/><c:tickLblPos val="${valueTickLabelPosition}"/><c:minorTickMark val="none"/><c:crossAx val="1"/><c:crosses val="${valueCrosses}"/>${valueCrossAt === undefined ? '' : `<c:crossesAt val="${valueCrossAt}"/>`}<c:crossBetween val="between"/><c:majorUnit val="${majorUnit}"/></c:valAx></c:plotArea>`)
+  const withValueAxis = (xml, { min, max, majorUnit, numberFormat, categoryNumberFormat, reverse = false, categoryPosition = 'b', valuePosition = 'l', categoryCrosses = 'autoZero', valueCrosses = 'autoZero', categoryCrossAt, valueCrossAt, categoryTickMark = 'none', valueTickMark = 'none', categoryTickLabelPosition = 'nextTo', valueTickLabelPosition = 'nextTo', categoryDeleted = false, valueDeleted = false, majorGridlines = true }) => xml.replace('</c:plotArea>', `<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="${categoryDeleted ? 1 : 0}"/><c:axPos val="${categoryPosition}"/>${categoryNumberFormat ? `<c:numFmt formatCode="${categoryNumberFormat}" sourceLinked="0"/>` : ''}<c:majorTickMark val="${categoryTickMark}"/><c:tickLblPos val="${categoryTickLabelPosition}"/><c:crossAx val="2"/><c:crosses val="${categoryCrosses}"/>${categoryCrossAt === undefined ? '' : `<c:crossesAt val="${categoryCrossAt}"/>`}<c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/></c:catAx><c:valAx><c:axId val="2"/><c:scaling><c:orientation val="${reverse ? 'maxMin' : 'minMax'}"/><c:min val="${min}"/><c:max val="${max}"/></c:scaling><c:delete val="${valueDeleted ? 1 : 0}"/><c:axPos val="${valuePosition}"/>${majorGridlines ? '<c:majorGridlines/>' : ''}<c:numFmt formatCode="${numberFormat}" sourceLinked="0"/><c:majorTickMark val="${valueTickMark}"/><c:tickLblPos val="${valueTickLabelPosition}"/><c:minorTickMark val="none"/><c:crossAx val="1"/><c:crosses val="${valueCrosses}"/>${valueCrossAt === undefined ? '' : `<c:crossesAt val="${valueCrossAt}"/>`}<c:crossBetween val="between"/><c:majorUnit val="${majorUnit}"/></c:valAx></c:plotArea>`)
   const withLabelPosition = (xml, position) => xml.replaceAll('<c:dLbls>', `<c:dLbls><c:dLblPos val="${position}"/>`)
   const withPointLabelPosition = (xml, index, position) => xml.replace(`<c:dLbl><c:idx val="${index}"/>`, `<c:dLbl><c:idx val="${index}"/><c:dLblPos val="${position}"/>`)
   const withSeriesPointLabelPosition = (xml, index, position) => xml.replace('</c:val></c:ser>', `</c:val><c:dLbls><c:dLbl><c:idx val="${index}"/><c:dLblPos val="${position}"/></c:dLbl></c:dLbls></c:ser>`)
@@ -355,10 +586,35 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/charts/chart2.xml', withLegend(withValueAxis(withSeriesPointLabelPosition(withLabelPosition(withValueLabels(lineChartPart, 'lineChart', false, true, '0.0%').replace('<c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:showVal val="1"/>', '<c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:showVal val="1"/><c:showSerName val="1"/><c:separator> | </c:separator>'), 'b'), 2, 'r'), { min: 10, max: 30, majorUnit: 5, numberFormat: '0.0', reverse: true, categoryPosition: 't', valuePosition: 'r', categoryCrossAt: 2, valueCrossAt: 15, categoryTickMark: 'cross', valueTickMark: 'in' }), 'l'))
   zip.file('ppt/charts/chart3.xml', withLegend(pieWithPercentLabels, 'r').replace('</c:legend>', '<c:legendEntry><c:idx val="1"/><c:delete val="1"/></c:legendEntry></c:legend>'))
   const horizontalBarChartPart = chartPart.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')
-  zip.file('ppt/charts/chart4.xml', withValueAxis(horizontalBarChartPart, { min: 0, max: 30, majorUnit: 10, numberFormat: '0', categoryPosition: 'r', valuePosition: 't', categoryCrosses: 'max', valueCrosses: 'min', categoryTickMark: 'out', valueTickMark: 'in', categoryTickLabelPosition: 'low', valueTickLabelPosition: 'none', majorGridlines: false }))
+  const numericCategoryChartPart = chartPart.replace(/<c:cat>[\s\S]*?<\/c:cat>/g, '<c:cat><c:numRef><c:f>Data!$A$2:$A$4</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="3"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt></c:numCache></c:numRef></c:cat>')
+  const horizontalNumericCategoryChartPart = numericCategoryChartPart.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')
+  zip.file('ppt/charts/chart4.xml', withValueAxis(horizontalNumericCategoryChartPart, { min: 0, max: 30, majorUnit: 10, numberFormat: '0', categoryNumberFormat: '&quot;USD &quot;0.00E+00', categoryPosition: 'r', valuePosition: 't', categoryCrosses: 'max', valueCrosses: 'min', categoryTickMark: 'out', valueTickMark: 'in', categoryTickLabelPosition: 'low', valueTickLabelPosition: 'none', majorGridlines: false }))
   zip.file('ppt/charts/chart5.xml', withValueAxis(horizontalBarChartPart, { min: 0, max: 30, majorUnit: 10, numberFormat: '0', categoryPosition: 'r', valuePosition: 't', categoryCrosses: 'max', valueCrosses: 'min', categoryTickMark: 'out', valueTickMark: 'out', categoryDeleted: true }))
   zip.file('ppt/charts/chart6.xml', withLegend(withValueAxis(horizontalBarChartPart, { min: 0, max: 30, majorUnit: 10, numberFormat: '0', categoryPosition: 'r', valuePosition: 't', categoryCrosses: 'max', valueCrosses: 'min', categoryTickMark: 'out', valueTickMark: 'out', valueDeleted: true }), 'r').replace('</c:legend>', '<c:layout><c:manualLayout><c:xMode val="edge"/><c:x val="0.72"/><c:yMode val="factor"/><c:y val="0"/><c:wMode val="edge"/><c:w val="0.95"/><c:hMode val="factor"/><c:h val="0.5"/></c:manualLayout></c:layout><c:overlay val="1"/></c:legend>'))
   zip.file('ppt/charts/chart7.xml', doughnutChartPart)
+  const chart1GroupLabelTextProperties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1200" b="1" u="sng"><a:solidFill><a:srgbClr val="1e40af"/></a:solidFill><a:uFill><a:solidFill><a:srgbClr val="00aaff"/></a:solidFill></a:uFill><a:uLn w="12700"/><a:latin typeface="Arial"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
+  const chart1SeriesLabelTextProperties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1000" b="0"><a:solidFill><a:srgbClr val="15803d"/></a:solidFill><a:latin typeface="Verdana"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
+  const chart1PointLabelTextProperties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr baseline="30000" i="1" spc="200" u="none" strike="sngStrike"><a:solidFill><a:srgbClr val="d21f3c"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
+  const chart1WithLabelStyles = await zip.file('ppt/charts/chart1.xml').async('string')
+  zip.file('ppt/charts/chart1.xml', chart1WithLabelStyles
+    .replace('<c:dLbls><c:dLblPos val="outEnd"/><c:numFmt', `<c:dLbls><c:dLblPos val="outEnd"/>${chart1GroupLabelTextProperties}<c:numFmt`)
+    .replace('<c:dLbls><c:dLblPos val="outEnd"/><c:showVal val="0"/>', `<c:dLbls><c:dLblPos val="outEnd"/>${chart1SeriesLabelTextProperties}<c:showVal val="0"/>`)
+    .replace('</c:dLbl>', `${chart1PointLabelTextProperties}</c:dLbl>`))
+  const chart1WithMinorTicks = await zip.file('ppt/charts/chart1.xml').async('string')
+  zip.file('ppt/charts/chart1.xml', chart1WithMinorTicks.replace('<c:minorTickMark val="none"/>', '<c:minorTickMark val="out"/>'))
+  const chart1WithLegendKeys = await zip.file('ppt/charts/chart1.xml').async('string')
+  zip.file('ppt/charts/chart1.xml', chart1WithLegendKeys
+    .replace('<c:dLblPos val="outEnd"/><c:txPr>', '<c:dLblPos val="outEnd"/><c:showLegendKey val="0"/><c:txPr>')
+    .replace('<c:dLblPos val="outEnd"/><c:txPr>', '<c:dLblPos val="outEnd"/><c:showLegendKey val="1"/><c:txPr>')
+    .replace('<c:dLblPos val="ctr"/>', '<c:dLblPos val="ctr"/><c:showLegendKey val="1"/>'))
+  const chart4WithMinorTicks = await zip.file('ppt/charts/chart4.xml').async('string')
+  zip.file('ppt/charts/chart4.xml', chart4WithMinorTicks
+    .replace('<c:majorTickMark val="out"/><c:tickLblPos val="low"/>', '<c:majorTickMark val="out"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/>')
+    .replace('<c:minorTickMark val="none"/>', '<c:minorTickMark val="out"/>')
+    .replace('<c:majorUnit val="10"/></c:valAx>', '<c:majorUnit val="10"/><c:minorUnit val="5"/></c:valAx>')
+    .replace('<c:lblOffset val="100"/></c:catAx>', '<c:lblOffset val="100"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="2"/></c:catAx>'))
+  const chart4WithLegendKeys = await zip.file('ppt/charts/chart4.xml').async('string')
+  zip.file('ppt/charts/chart4.xml', chart4WithLegendKeys.replace('<c:axId val="1"/>', '<c:dLbls><c:showLegendKey val="1"/><c:dLbl><c:idx val="1"/><c:showLegendKey val="0"/></c:dLbl></c:dLbls><c:axId val="1"/>'))
   zip.file('ppt/charts/chart8.xml', withValueLabels(stackedBarChartPart, 'barChart'))
   zip.file('ppt/charts/chart9.xml', withValueLabels(percentStackedBarChartPart, 'barChart'))
   zip.file('ppt/charts/chart10.xml', withValueLabels(stackedLineChartPart, 'lineChart'))
@@ -404,6 +660,12 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/charts/chart18.xml', radarStandardChartPart)
   zip.file('ppt/charts/chart19.xml', radarMarkerChartPart)
   zip.file('ppt/charts/chart20.xml', radarFilledChartPart)
+  const dateAxisCategories = '<c:cat><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>39267</c:v></c:pt><c:pt idx="1"><c:v>39268</c:v></c:pt><c:pt idx="2"><c:v>39270</c:v></c:pt></c:numCache></c:numRef></c:cat>'
+  const dateAxisChartPart = chartPart
+    .replace('Quarterly sales', 'Date axis 1904 chart')
+    .replaceAll(/<c:cat>.*?<\/c:cat>/gs, dateAxisCategories)
+    .replace('xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">', 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:date1904 val="1"/>')
+    .replace('</c:plotArea>', '<c:dateAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/><c:min val="39266"/><c:max val="39275"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="m/d/yyyy" sourceLinked="0"/><c:majorGridlines/><c:majorTickMark val="out"/><c:majorTimeUnit val="days"/><c:majorUnit val="2"/><c:tickLblPos val="nextTo"/><c:crossAx val="2"/><c:crosses val="autoZero"/></c:dateAx><c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/><c:max val="30"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:numFmt formatCode="0" sourceLinked="0"/><c:majorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:crossAx val="1"/><c:crosses val="autoZero"/><c:majorUnit val="10"/></c:valAx></c:plotArea>')
   const typesWithRadar = await zip.file('[Content_Types].xml').async('string')
   zip.file('[Content_Types].xml', typesWithRadar.replace('</Types>', '<Override PartName="/ppt/charts/chart18.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/ppt/charts/chart19.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/ppt/charts/chart20.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>'))
   const slide2WithStocks = await zip.file('ppt/slides/slide2.xml').async('string')
@@ -422,11 +684,43 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/charts/chart24.xml', comboAreaChartPart)
   zip.file('ppt/charts/chart25.xml', stockVolumeHlcChartPart)
   zip.file('ppt/charts/chart26.xml', stockVolumeOhlcChartPart)
+  const typesWithDateAxis = await zip.file('[Content_Types].xml').async('string')
+  zip.file('[Content_Types].xml', typesWithDateAxis.replace('</Types>', '<Override PartName="/ppt/charts/chart27.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>'))
+  const slide2WithDateAxis = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', slide2WithDateAxis.replace('</p:spTree>', chartFrame(1012, 'Date axis 1904 chart', 'rIdChart27', 11000000, 42000000, 4300000, 2600000) + '</p:spTree>'))
+  const slide2WithDateAxisRels = await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string')
+  zip.file('ppt/slides/_rels/slide2.xml.rels', slide2WithDateAxisRels.replace('</Relationships>', '<Relationship Id="rIdChart27" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart27.xml"/></Relationships>'))
+  zip.file('ppt/charts/chart27.xml', dateAxisChartPart
+    .replace('<c:majorTickMark val="out"/>', '<c:majorTickMark val="out"/><c:minorTickMark val="out"/>')
+    .replace('<c:majorTimeUnit val="days"/>', '<c:majorTimeUnit val="days"/><c:minorUnit val="1"/><c:minorTimeUnit val="days"/>'))
+  const elapsedAxisCategories = '<c:cat><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>0.5</c:v></c:pt><c:pt idx="1"><c:v>1</c:v></c:pt><c:pt idx="2"><c:v>1.5</c:v></c:pt></c:numCache></c:numRef></c:cat>'
+  const elapsedAxisChartPart = dateAxisChartPart
+    .replace('Date axis 1904 chart', 'Elapsed time axis chart')
+    .replaceAll(dateAxisCategories, elapsedAxisCategories)
+    .replace('formatCode="m/d/yyyy"', 'formatCode="[h]:mm:ss.00"')
+    .replace('val="39266"', 'val="0"')
+    .replace('val="39275"', 'val="2"')
+    .replace('<c:majorUnit val="2"/>', '<c:majorUnit val="0.5"/>')
+  const typesWithElapsedAxis = await zip.file('[Content_Types].xml').async('string')
+  zip.file('[Content_Types].xml', typesWithElapsedAxis.replace('</Types>', '<Override PartName="/ppt/charts/chart30.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>'))
+  const slide2WithElapsedAxis = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', slide2WithElapsedAxis.replace('</p:spTree>', chartFrame(1015, 'Elapsed time axis chart', 'rIdChart30', 25000000, 42000000, 4300000, 2600000) + '</p:spTree>'))
+  const slide2WithElapsedAxisRels = await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string')
+  zip.file('ppt/slides/_rels/slide2.xml.rels', slide2WithElapsedAxisRels.replace('</Relationships>', '<Relationship Id="rIdChart30" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart30.xml"/></Relationships>'))
+  zip.file('ppt/charts/chart30.xml', elapsedAxisChartPart)
+  const typesWithLogScatter = await zip.file('[Content_Types].xml').async('string')
+  zip.file('[Content_Types].xml', typesWithLogScatter.replace('</Types>', '<Override PartName="/ppt/charts/chart28.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/ppt/charts/chart29.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>'))
+  const slide2WithLogScatter = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', slide2WithLogScatter.replace('</p:spTree>', chartFrame(1013, 'Logarithmic XY chart', 'rIdChart28', 16000000, 42000000, 4300000, 2600000) + chartFrame(1014, 'Invalid log base XY chart', 'rIdChart29', 20300000, 42000000, 4300000, 2600000) + '</p:spTree>'))
+  const slide2WithLogScatterRels = await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string')
+  zip.file('ppt/slides/_rels/slide2.xml.rels', slide2WithLogScatterRels.replace('</Relationships>', '<Relationship Id="rIdChart28" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart28.xml"/><Relationship Id="rIdChart29" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart29.xml"/></Relationships>'))
+  zip.file('ppt/charts/chart28.xml', logScatterChartPart)
+  zip.file('ppt/charts/chart29.xml', invalidLogScatterChartPart)
   zip.file('ppt/slides/slide3.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${tree(`${shape(2, 'Third slide', 0, 0, '0ea5e9')}${grayscalePictures}`)}<p:transition spd="med"><p:push dir="r"/></p:transition>${grayscaleTiming}</p:sld>`)
   zip.file('ppt/slides/_rels/slide3.xml.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdBullet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/tile-background.svg"/></Relationships>`)
   zip.file('ppt/slides/slide4.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Pull slide', 0, 0, 'f97316'))}<p:transition spd="med"><p:pull dir="ld"/></p:transition></p:sld>`)
-  zip.file('ppt/slides/slide5.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Split out slide', 0, 0, 'a855f7'))}<p:transition spd="med"><p:split orient="vert" dir="out"/></p:transition></p:sld>`)
-  zip.file('ppt/slides/slide6.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Split in slide', 0, 0, 'ec4899'))}<p:transition spd="med"><p:split orient="horz" dir="in"/></p:transition></p:sld>`)
+  zip.file('ppt/slides/slide5.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Split out slide', 0, 0, 'a855f7'))}<p:transition spd="med"><p:split/></p:transition></p:sld>`)
+  zip.file('ppt/slides/slide6.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Split in slide', 0, 0, 'ec4899'))}<p:transition spd="med"><p:split orient="vert" dir="in"/></p:transition></p:sld>`)
   zip.file('ppt/slides/slide7.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Circle slide', 0, 0, '14b8a6'))}<p:transition spd="med"><p:circle/></p:transition></p:sld>`)
   zip.file('ppt/slides/slide8.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Diamond slide', 0, 0, 'f43f5e'))}<p:transition spd="med"><p:diamond/></p:transition></p:sld>`)
   zip.file('ppt/slides/slide9.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:future="urn:example:future-transition" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Cut through black slide', 0, 0, '64748b'))}<mc:AlternateContent><mc:Choice Requires="future"><p:transition spd="fast" p14:dur="900"><p:fade/></p:transition></mc:Choice><mc:Fallback><p:transition spd="med"><p:cut thruBlk="1"/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
@@ -435,7 +729,7 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/slides/slide12.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Blinds slide', 0, 0, '0ea5e9'))}<p:transition spd="med"><p:blinds dir="vert"/></p:transition></p:sld>`)
   zip.file('ppt/slides/slide13.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Checker slide', 0, 0, '8b5cf6'))}<p:transition spd="med"><p:checker dir="horz"/></p:transition></p:sld>`)
   zip.file('ppt/slides/slide14.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Wheel slide', 0, 0, 'f97316'))}<mc:AlternateContent><mc:Choice Requires="p14"><p:transition spd="med"><p14:wheelReverse spokes="8"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="med"><p:wheel spokes="8"/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
-  zip.file('ppt/slides/slide15.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">${tree(`${mediaPicture(2, 'Embedded video', 500000, 700000, 'videoFile', 'rId2', '<p14:fade in="200ms" out="100ms"/>')}${mediaPicture(3, 'Embedded audio', 6500000, 700000, 'audioFile', 'rId4', '<p14:trim st="100ms" end="100ms"/><p14:fade in="200ms" out="100ms"/>', 'rId3')}${mediaPicture(4, 'Invalid trim', 500000, 4000000, 'audioFile', 'rId4', '<p14:trim st="200ms" end="100ms"/><p14:fade in="200ms" out="100ms"/>')}${mediaPicture(5, 'Cross-slide audio', 6500000, 4000000, 'audioFile', 'rId5', '', 'rId5')}${objectShapeElements}`)}<p:transition spd="med"><p:dissolve/></p:transition>${shapeMaskTiming}</p:sld>`)
+  zip.file('ppt/slides/slide15.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">${tree(`${mediaPicture(2, 'Embedded video', 500000, 700000, 'videoFile', 'rId2', '<p14:fade in="200ms" out="100ms"/>')}${mediaPicture(3, 'Embedded audio', 6500000, 700000, 'audioFile', 'rId4', '<p14:trim st="100ms" end="100ms"/><p14:fade in="200ms" out="100ms"/><p14:bmkLst><p14:bmk name="chapter-one" time="250ms"/></p14:bmkLst>', 'rId3')}${mediaPicture(4, 'Invalid trim', 500000, 4000000, 'audioFile', 'rId4', '<p14:trim st="200ms" end="100ms"/><p14:fade in="200ms" out="100ms"/>')}${mediaPicture(5, 'Cross-slide audio', 6500000, 4000000, 'audioFile', 'rId5', '<p14:bmkLst><p14:bmk name="chapter-start" time="0ms"/></p14:bmkLst>', 'rId5')}${objectShapeElements}`)}<p:transition spd="med"><p:dissolve/></p:transition>${slide15GradientTiming}</p:sld>`)
   zip.file('ppt/slides/_rels/slide15.xml.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/poster.svg"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2007/relationships/media" Target="../media/clip.mp4"/><Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2007/relationships/media" Target="../media/audio.wav"/><Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2007/relationships/media" Target="../media/audio-short.wav"/><Relationship Id="rId5" Type="http://schemas.microsoft.com/office/2007/relationships/media" Target="../media/audio-long.wav"/></Relationships>`)
   zip.file('ppt/media/poster.svg', `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 90"><rect width="160" height="90" fill="#15231b"/><circle cx="80" cy="45" r="18" fill="#b8f36b"/></svg>`)
   zip.file('ppt/media/clip.mp4', Buffer.from('000000186674797069736F6D0000020069736F6D69736F32', 'hex'))
@@ -445,15 +739,16 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
    const firstSlideXml = await zip.file('ppt/slides/slide1.xml').async('string')
    const overflowingText = 'Shape autofit must retain readable text and expand its shape when content exceeds the saved bounds. '.repeat(6)
     const dynamicAutoFitText = 'Normal autofit shrinks text to remain inside the saved shape bounds. '.repeat(2)
-    const shapeAutoFitFixtures = plainTextShape(122, 'Shape autofit', 0, 5900000, overflowingText).replace('<a:bodyPr/>', '<a:bodyPr><a:spAutoFit/></a:bodyPr>')
-     + plainTextShape(123, 'Shape autofit baseline', 3500000, 5900000, overflowingText)
-      + plainTextShape(124, 'Normal autofit dynamic', 6500000, 5900000, dynamicAutoFitText).replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
-   const strokeWeightFixtures = [[135, 'Stroke weight animation'], [136, 'Stroke weight set'], [137, 'Stroke weight formula']].map(([id, title], index) => shape(id, title, index * 1500000, 5000000, 'ffffff', 1200000, 1000000).replace('</p:spPr>', '<a:ln w="1016000"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>')).join('')
+   const shapeAutoFitFixtures = plainTextShape(320, 'Shape autofit', 0, 5900000, overflowingText).replace('<a:bodyPr/>', '<a:bodyPr><a:spAutoFit/></a:bodyPr>')
+     + plainTextShape(321, 'Shape autofit baseline', 3500000, 5900000, overflowingText)
+      + plainTextShape(322, 'Normal autofit dynamic', 6500000, 5900000, dynamicAutoFitText).replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
+   const strokeWeightFixtures = [[323, 'Stroke weight animation'], [324, 'Stroke weight set'], [325, 'Stroke weight formula']].map(([id, title], index) => shape(id, title, index * 1500000, 5000000, 'ffffff', 1200000, 1000000).replace('prst="rect"', `prst="${index === 2 ? 'ellipse' : 'rect'}"`).replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0].replace('w="63500"', 'w="1016000"').replace('val="ffff00"/>', 'val="ffff00"><a:alpha val="50000"/></a:srgbClr>')}</p:spPr>`)).join('')
    const internalSlideHyperlink = plainTextShape(138, 'Internal slide hyperlink', 9000000, 5000000, 'Jump to slide 3').replace('<p:cNvPr id="138" name="Internal slide hyperlink"/>', '<p:cNvPr id="138" name="Internal slide hyperlink"><a:hlinkClick r:id="rIdSlide3" action="ppaction://hlinksldjump" tooltip="Go to slide 3"/></p:cNvPr>')
    const externalTextHyperlink = plainTextShape(139, 'External text hyperlink', 9000000, 5900000, 'Open external link', '<a:hlinkClick r:id="rIdExternal" tooltip="Open external documentation"/>')
    const unsafeTextHyperlink = plainTextShape(140, 'Unsafe text hyperlink', 6000000, 6200000, 'Blocked unsafe link', '<a:hlinkClick r:id="rIdUnsafe"/>')
    const hyperlinkFixtures = `${internalSlideHyperlink}${externalTextHyperlink}${unsafeTextHyperlink}`
-   const firstSlideWithAutoFit = firstSlideXml.replace('</p:spTree>', `${shapeAutoFitFixtures}${strokeWeightFixtures}${hyperlinkFixtures}</p:spTree>`)
+   const additiveRotationShape = shape(19876, 'Additive rotation', 10900000, 5600000, '0ea5e9', 650000, 650000).replace('<a:xfrm>', '<a:xfrm rot="1800000">')
+   const firstSlideWithAutoFit = firstSlideXml.replace('</p:spTree>', `${shapeAutoFitFixtures}${strokeWeightFixtures}${hyperlinkFixtures}${additiveRotationShape}</p:spTree>`)
    zip.file('ppt/slides/slide1.xml', firstSlideWithAutoFit
      .replace('xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">', 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">')
      .replace('<p:spTree>', '<p:bg><p:bgPr><a:blipFill><a:blip r:embed="rIdBackground"/><a:srcRect l="10000" r="10000"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg><p:spTree>'))
@@ -485,6 +780,10 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const smartArtHierarchyFallbackFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="94" name="SmartArt hierarchy fallback fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="5000000" y="5500000"/><a:ext cx="2000000" cy="800000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId7"/></a:graphicData></a:graphic></p:graphicFrame>`
   const oleFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="92" name="OLE preview fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="9200000" y="4200000"/><a:ext cx="2500000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj name="Quarterly workbook" progId="Excel.Sheet.12" r:id="rId5"><p:embed/><p:pic><p:nvPicPr><p:cNvPr id="93" name="OLE preview image"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2500000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
   const oleNoPreviewFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="94" name="OLE no-preview fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="6500000" y="5400000"/><a:ext cx="2200000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj name="Linked report" progId="Word.Document.12" r:id="rId5"><p:link/></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
+  const tiledCropSlide17Xml = await zip.file('ppt/slides/slide17.xml').async('string')
+  zip.file('ppt/slides/slide17.xml', tiledCropSlide17Xml.replace('<a:blip r:embed="rId3"/><a:tile', '<a:blip r:embed="rId3"/><a:srcRect l="50000"/><a:tile'))
+  const groupFillSlide17Xml = await zip.file('ppt/slides/slide17.xml').async('string')
+  zip.file('ppt/slides/slide17.xml', groupFillSlide17Xml.replace('</p:spTree>', groupFillPlaceholderShape + groupFillGroupShapeWithText.replace('</p:grpSp>', nestedGroupFillShape + '</p:grpSp>') + groupGradientShape + '</p:spTree>'))
   const smartArtSlide17Xml = await zip.file('ppt/slides/slide17.xml').async('string')
   zip.file('ppt/slides/slide17.xml', smartArtSlide17Xml.replace('</p:spTree>', `${smartArtFrame}${smartArtHierarchyFallbackFrame}${oleFrame}${oleNoPreviewFrame}</p:spTree>`))
   zip.file('ppt/slides/slide18.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Staggered strips slide', 0, 0, 'f59e0b'))}<p:transition spd="med"><p:strips dir="ru"/></p:transition></p:sld>`)
@@ -528,6 +827,11 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/slides/slide51.xml', directionTransitionSlide('conveyor', 'Conveyor right', 'd946ef', 'dir="r"'))
   zip.file('ppt/slides/slide52.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Conveyor right', 4200000, 2200000, 'f59e0b', 3400000, 1700000))}<mc:AlternateContent><mc:Choice Requires="p159"><p:transition spd="med" p14:dur="1000ms"><p159:morph option="byObject"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
   zip.file('ppt/slides/slide53.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Conveyor right', 6000000, 800000, '8b5cf6', 2400000, 2000000))}<mc:AlternateContent><mc:Choice Requires="p159"><p:transition spd="med" p14:dur="650ms"><p159:morph option="byWord"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
+  const morphTextShape = (id, name, x, y, text) => plainTextShape(id, name, x, y, text).replace('cx="2600000" cy="800000"', 'cx="8000000" cy="1400000"')
+  const slide52WithMorphText = await zip.file('ppt/slides/slide52.xml').async('string')
+  zip.file('ppt/slides/slide52.xml', slide52WithMorphText.replace('</p:spTree>', `${morphTextShape(3, 'Morph Words', 400000, 3800000, 'The quick brown fox')}${morphTextShape(4, 'Morph Characters', 400000, 2000000, 'LISTEN')}</p:spTree>`))
+  const slide53WithMorphText = await zip.file('ppt/slides/slide53.xml').async('string')
+  zip.file('ppt/slides/slide53.xml', slide53WithMorphText.replace('</p:spTree>', `${morphTextShape(3, 'Morph Words', 4000000, 4200000, 'fox quick The jumps')}${morphTextShape(4, 'Morph Characters', 4500000, 2000000, 'LISTEN')}</p:spTree>`))
   const presetNames = ['fallOver', 'drape', 'curtains', 'wind', 'prestige', 'fracture', 'crush', 'peelOff', 'pageCurlDouble', 'pageCurlSingle', 'airplane', 'origami']
   presetNames.forEach((presetName, index) => {
     const attributes = presetName === 'fallOver' ? 'invY="1"' : presetName === 'peelOff' ? 'invX="1"' : ''
@@ -556,19 +860,23 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const characterWedge = `<p:par><p:cTn id="711" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="wedge"><p:cBhvr><p:cTn id="712" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="696"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const paragraphShapeMask = `<p:par><p:cTn id="713" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="diamond(in)"><p:cBhvr><p:cTn id="714" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="697"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   zip.file('ppt/slides/slide67.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld>${tree(plainTextShape(670, 'Character transform target', 2500000, 1800000, 'PPTX') + plainTextShape(687, 'Paragraph blinds target', 2500000, 3200000, 'Blinds') + plainTextShape(688, 'Paragraph checker target', 5500000, 3200000, 'Checker') + plainTextShape(689, 'Paragraph barn target', 8500000, 3200000, 'Barn') + plainTextShape(690, 'Paragraph random bars target', 10500000, 3200000, 'Random bars') + plainTextShape(691, 'Paragraph strips target', 8500000, 4000000, 'Strips') + plainTextShape(692, 'Character strips target', 10500000, 4000000, 'ABCD') + plainTextShape(693, 'Paragraph dissolve target', 0, 4800000, 'Dissolve') + plainTextShape(694, 'Character dissolve target', 3000000, 4800000, 'ABCD') + plainTextShape(695, 'Paragraph wheel target', 6000000, 4800000, 'Wheel') + plainTextShape(696, 'Character wedge target', 9000000, 4800000, 'ABCD') + plainTextShape(697, 'Paragraph shape target', 12000000, 4800000, 'Shape'))}</p:cSld><p:timing><p:tnLst><p:par><p:cTn id="673" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1"><p:cTn id="674" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="675" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${textScale}${textRotation}${nestedPresetScale}${characterBlinds}${paragraphBlinds}${paragraphChecker}${paragraphBarn}${characterBarn}${paragraphRandomBars}${paragraphStrips}${characterStrips}${paragraphDissolve}${characterDissolve}${paragraphWheel}${characterWedge}${paragraphShapeMask}${characterRangeOpacity}${setCharacterRangeOpacity}${characterRangeVisibility}${paragraphRangeVisibility}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing></p:sld>`)
+  const unsupportedFilterFade = `<p:par><p:cTn id="715" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="999"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="vendorCustom"><p:cBhvr><p:cTn id="716" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="698"/></p:tgtEl></p:cBhvr><p:progress><p:fltVal val="0.5"/></p:progress></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const withGroupTextColor = `<p:par><p:cTn id="677" dur="indefinite" nodeType="withGroup"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr><p:cBhvr><p:cTn id="678" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="3" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.color</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="000000"/></p:from><p:to><a:srgbClr val="ff0000"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
   const afterGroupTextColor = `<p:par><p:cTn id="679" dur="indefinite" nodeType="afterGroup"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr><p:cBhvr><p:cTn id="680" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="3" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.color</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="ff0000"/></p:from><p:to><a:srgbClr val="0000ff"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
   const characterChecker = `<p:par><p:cTn id="691" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="checkerboard(across)"><p:cBhvr><p:cTn id="692" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const textRangeSlideXml = await zip.file('ppt/slides/slide67.xml').async('string')
-  zip.file('ppt/slides/slide67.xml', textRangeSlideXml.replace('</p:childTnLst></p:cTn></p:seq>', `${withGroupTextColor}${afterGroupTextColor}${characterChecker}</p:childTnLst></p:cTn></p:seq>`))
+  const textRangeSlideXmlWithFallback = textRangeSlideXml.replace('</p:spTree>', `${plainTextShape(698, 'Unsupported filter fallback target', 2500000, 6000000, 'Fade')}</p:spTree>`)
+  zip.file('ppt/slides/slide67.xml', textRangeSlideXmlWithFallback.replace('</p:childTnLst></p:cTn></p:seq>', `${withGroupTextColor}${afterGroupTextColor}${characterChecker}${unsupportedFilterFade}</p:childTnLst></p:cTn></p:seq>`))
+  const morphCharacterShape = morphTextShape(2, 'Morph Characters', 4500000, 2000000, 'SILENT!')
+  zip.file('ppt/slides/slide68.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main">${tree(morphCharacterShape)}<p:transition spd="med" p14:dur="800ms"><p159:morph option="byChar"/></p:transition></p:sld>`)
   const morphContentTypes = await zip.file('[Content_Types].xml').async('string')
   zip.file('[Content_Types].xml', morphContentTypes.replace('</Types>', '<Override PartName="/ppt/slides/slide52.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide53.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>'))
   const presetContentTypes = await zip.file('[Content_Types].xml').async('string')
-  zip.file('[Content_Types].xml', presetContentTypes.replace('</Types>', Array.from({ length: 14 }, (_, index) => `<Override PartName="/ppt/slides/slide${54 + index}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('') + '</Types>'))
+  zip.file('[Content_Types].xml', presetContentTypes.replace('</Types>', Array.from({ length: 15 }, (_, index) => `<Override PartName="/ppt/slides/slide${54 + index}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('') + '</Types>'))
   const morphPresentationRels = await zip.file('ppt/_rels/presentation.xml.rels').async('string')
   zip.file('ppt/_rels/presentation.xml.rels', morphPresentationRels.replace('</Relationships>', '<Relationship Id="rId52" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide52.xml"/><Relationship Id="rId53" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide53.xml"/></Relationships>'))
   const presetPresentationRels = await zip.file('ppt/_rels/presentation.xml.rels').async('string')
-  zip.file('ppt/_rels/presentation.xml.rels', presetPresentationRels.replace('</Relationships>', Array.from({ length: 14 }, (_, index) => `<Relationship Id="rId${54 + index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${54 + index}.xml"/>`).join('') + '</Relationships>'))
+  zip.file('ppt/_rels/presentation.xml.rels', presetPresentationRels.replace('</Relationships>', Array.from({ length: 15 }, (_, index) => `<Relationship Id="rId${54 + index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${54 + index}.xml"/>`).join('') + '</Relationships>'))
   zip.file('ppt/slides/_rels/slide17.xml.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/tile-background.svg"/></Relationships>`)
   const slide17Rels = await zip.file('ppt/slides/_rels/slide17.xml.rels').async('string')
   zip.file('ppt/slides/_rels/slide17.xml.rels', slide17Rels.replace('</Relationships>', '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="../diagrams/data1.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="../embeddings/oleObject1.bin"/><Relationship Id="rId6" Type="http://schemas.microsoft.com/office/2007/relationships/diagramDrawing" Target="../diagrams/drawing1.xml"/><Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData" Target="../diagrams/data2.xml"/></Relationships>'))
@@ -584,7 +892,11 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/slideLayouts/_rels/slideLayout1.xml.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>`)
   zip.file('ppt/slideMasters/slideMaster1.xml', `<?xml version="1.0"?><p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:txStyles><p:titleStyle/><p:bodyStyle><a:lvl1pPr algn="r" marL="360000" indent="-180000"><a:spcBef><a:spcPts val="1200"/></a:spcBef></a:lvl1pPr><a:lvl3pPr algn="r" marL="360000" indent="-180000"><a:lnSpc><a:spcPct val="150000"/></a:lnSpc><a:buChar char="•"/><a:defRPr sz="2800" b="1" strike="sngStrike"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:defRPr></a:lvl3pPr></p:bodyStyle><p:otherStyle/></p:txStyles></p:sldMaster>`)
   const slide15Xml = await zip.file('ppt/slides/slide15.xml').async('string')
-  zip.file('ppt/slides/slide15.xml', slide15Xml.replace('</p:spTree>', `${objectStripsElements}${objectBarnElements}${plainTextShape(73, 'Character range wipe target', 9300000, 5500000, 'WIPE')}</p:spTree>`))
+  const stringFontWeightShape = plainTextShape(9903, 'String font weight keyframes', 500000, 6000000, 'Keyframe weight').replace('<a:rPr sz="1800"', '<a:rPr sz="1800" b="1"')
+    + plainTextShape(9904, 'String font weight from-to', 3500000, 6000000, 'Direct weight')
+  zip.file('ppt/slides/slide15.xml', slide15Xml.replace('</p:spTree>', `${objectStripsElements}${objectBarnElements}${attachedPresetConnectorShapes}${patternFillShapes}${effectDagShapes}${effectDagTextShapes}${gradientOpacityShape}${gradientOpacitySetShape}${customGradientOpacityShape}${stringFontWeightShape}${plainTextShape(73, 'Character range wipe target', 9300000, 5500000, 'WIPE')}</p:spTree>`))
+  const slide15WithInnerShadows = await zip.file('ppt/slides/slide15.xml').async('string')
+  zip.file('ppt/slides/slide15.xml', slide15WithInnerShadows.replace('</p:spTree>', `${insetEffectFixtures}</p:spTree>`))
   const shredContentTypes = await zip.file('[Content_Types].xml').async('string')
   zip.file('[Content_Types].xml', shredContentTypes.replace('</Types>', '<Override PartName="/ppt/slides/slide38.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide39.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide40.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide41.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide42.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide43.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide44.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide45.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide46.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide47.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide48.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide49.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide50.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide51.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>'))
   const shredPresentation = await zip.file('ppt/presentation.xml').async('string')
@@ -592,7 +904,7 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   const orderedMorphPresentation = await zip.file('ppt/presentation.xml').async('string')
   zip.file('ppt/presentation.xml', orderedMorphPresentation.replace('r:id="rId51"/></p:sldIdLst>', 'r:id="rId51"/><p:sldId id="315" r:id="rId52"/><p:sldId id="316" r:id="rId53"/></p:sldIdLst>'))
   const orderedPresetPresentation = await zip.file('ppt/presentation.xml').async('string')
-  zip.file('ppt/presentation.xml', orderedPresetPresentation.replace('r:id="rId53"/></p:sldIdLst>', 'r:id="rId53"/>' + Array.from({ length: 14 }, (_, index) => `<p:sldId id="${317 + index}" r:id="rId${54 + index}"/>`).join('') + '</p:sldIdLst>'))
+  zip.file('ppt/presentation.xml', orderedPresetPresentation.replace('r:id="rId53"/></p:sldIdLst>', 'r:id="rId53"/>' + Array.from({ length: 15 }, (_, index) => `<p:sldId id="${317 + index}" r:id="rId${54 + index}"/>`).join('') + '</p:sldIdLst>'))
   const shredPresentationRels = await zip.file('ppt/_rels/presentation.xml.rels').async('string')
   zip.file('ppt/_rels/presentation.xml.rels', shredPresentationRels.replace('</Relationships>', '<Relationship Id="rId38" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide38.xml"/><Relationship Id="rId39" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide39.xml"/><Relationship Id="rId40" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide40.xml"/><Relationship Id="rId41" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide41.xml"/><Relationship Id="rId42" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide42.xml"/><Relationship Id="rId43" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide43.xml"/><Relationship Id="rId44" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide44.xml"/><Relationship Id="rId45" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide45.xml"/><Relationship Id="rId46" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide46.xml"/><Relationship Id="rId47" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide47.xml"/><Relationship Id="rId48" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide48.xml"/><Relationship Id="rId49" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide49.xml"/><Relationship Id="rId50" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide50.xml"/><Relationship Id="rId51" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide51.xml"/></Relationships>'))
   const slide17Xml = await zip.file('ppt/slides/slide17.xml').async('string')
@@ -612,9 +924,11 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/slides/slide17.xml', slide17Xml.replace('</p:spTree>', verticalOrientationFixtures + '</p:spTree>'))
   const layoutPath = 'ppt/slideLayouts/slideLayout1.xml'
   const layoutXml = await zip.file(layoutPath).async('string')
-  const layoutWithStyles = layoutXml.replace('<a:noFill/>', '<a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:prstDash val="dash"/></a:ln>').replace('<a:bodyPr/>', '<a:bodyPr wrap="none" vert="vert"/>')
+  const groupFillLayoutPlaceholder = '<p:sp><p:nvSpPr><p:cNvPr id="95" name="Group fill layout"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="2"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="2500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:ln w="25400"><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
+  const layoutWithStyles = layoutXml.replace('<a:noFill/>', '<a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:prstDash val="dash"/></a:ln>').replace('<a:bodyPr/>', '<a:bodyPr wrap="none" vert="vert"/>').replace('</p:spTree>', groupFillLayoutPlaceholder + '</p:spTree>')
   assert(layoutWithStyles !== layoutXml && layoutWithStyles.includes('<a:bodyPr wrap="none" vert="vert"/>'), 'The layout placeholder line, no-wrap, and vertical-text fixtures must be inserted.')
-  zip.file(layoutPath, layoutWithStyles)
+  const inheritedLineLayoutPlaceholder = '<p:sp><p:nvSpPr><p:cNvPr id="97" name="Inherited line layout"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="3"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="6000000" y="5000000"/><a:ext cx="2600000" cy="500000"/></a:xfrm><a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 25000"/></a:avLst></a:prstGeom><a:ln w="63500"><a:solidFill><a:srgbClr val="008800"/></a:solidFill></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
+  zip.file(layoutPath, layoutWithStyles.replace('</p:spTree>', `${inheritedLineLayoutPlaceholder}</p:spTree>`))
   const imageContentTypes = await zip.file('[Content_Types].xml').async('string')
   zip.file('[Content_Types].xml', imageContentTypes.replace('</Types>', '<Default Extension="png" ContentType="image/png"/><Default Extension="svg" ContentType="image/svg+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>'))
   const themedSlide = await zip.file('ppt/slides/slide2.xml').async('string')
@@ -623,6 +937,731 @@ const plainTextShape = (id, name, x, y, text, outline = '') => `<p:sp><p:nvSpPr>
   zip.file('ppt/slides/slide3.xml', fillStyleSlide.replace('<p:cSld>', '<p:cSld><p:bg><p:bgRef idx="1"><a:srgbClr val="00ff00"/></p:bgRef></p:bg>'))
   zip.file('ppt/theme/theme1.xml', '<?xml version="1.0"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Fixture"><a:themeElements><a:clrScheme name="Fixture"><a:accent1><a:srgbClr val="4472c4"/></a:accent1><a:accent2><a:srgbClr val="ed7d31"/></a:accent2></a:clrScheme><a:fontScheme name="Fixture"><a:majorFont><a:latin typeface="Arial"/></a:majorFont><a:minorFont><a:latin typeface="Arial"/></a:minorFont></a:fontScheme><a:fmtScheme name="Fixture"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst/><a:effectStyleLst/><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>')
   zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/></Relationships>')
+  if (themeBackgroundOnly) {
+    const mapAttributes = overrides => Object.entries({ bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2', accent1: 'accent1', accent2: 'accent2', accent3: 'accent3', accent4: 'accent4', accent5: 'accent5', accent6: 'accent6', hlink: 'hlink', folHlink: 'folHlink', ...overrides }).map(([key, value]) => `${key}="${value}"`).join(' ')
+    const masterXml = await zip.file('ppt/slideMasters/slideMaster1.xml').async('string')
+    zip.file('ppt/slideMasters/slideMaster1.xml', masterXml.replace('</p:sldMaster>', `<p:clrMap ${mapAttributes({ bg1: 'dk1', tx1: 'lt1', accent1: 'accent2', accent2: 'accent1' })}/></p:sldMaster>`))
+    const layoutXml = await zip.file(layoutPath).async('string')
+    zip.file(layoutPath, layoutXml.replace('</p:sldLayout>', `<p:clrMapOvr><a:overrideClrMapping ${mapAttributes({ bg1: 'accent3', accent1: 'accent4', accent2: 'accent5' })}/></p:clrMapOvr></p:sldLayout>`))
+    const colorAnimation = colorEffect(9010, 9000, 'fillcolor', 'accent1', 'accent2').replaceAll('a:srgbClr', 'a:schemeClr').replace('nodeType="withEffect"', 'nodeType="clickEffect"').replace('delay="0"', 'delay="indefinite"')
+    const schemeChart = chartPart.replace('<a:srgbClr val="0ea5e9"/>', '<a:schemeClr val="accent1"/>').replace('<a:srgbClr val="f97316"/>', '<a:schemeClr val="accent2"/>')
+    const chartMapping = `<c:clrMapOvr ${mapAttributes({ accent1: 'accent2', accent2: 'accent1' })}/>`
+    let chartProbes = '', chartRelationships = ''
+    for (const [index, name, contents] of [
+      [0, 'Chart map override', schemeChart.replace('<c:chart>', `${chartMapping}<c:chart>`)],
+      [1, 'Chart map inherited', schemeChart],
+      [2, 'Chart map palette', schemeChart.replace(/<c:spPr>.*?<\/c:spPr>/g, '').replace('<c:chart>', `${chartMapping}<c:chart>`)],
+    ]) {
+      const path = `ppt/charts/color-map-${index}.xml`
+      zip.file(path, contents)
+      chartProbes += chartFrame(9020 + index, name, `rIdMap${index}`, index * 4000000, 3000000, 3800000, 3000000)
+      chartRelationships += `<Relationship Id="rIdMap${index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/color-map-${index}.xml"/>`
+      const contentTypes = await zip.file('[Content_Types].xml').async('string')
+      zip.file('[Content_Types].xml', contentTypes.replace('</Types>', `<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>`))
+    }
+    for (const [number, override] of [
+      [4, '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>'],
+      [5, `<p:clrMapOvr><a:overrideClrMapping ${mapAttributes({ bg1: 'lt2', tx1: 'dk2', accent1: 'accent6', accent2: 'accent1' })}/></p:clrMapOvr>`],
+      [6, ''],
+      [7, '<p:clrMapOvr><a:overrideClrMapping accent1="invalid"/></p:clrMapOvr>'],
+    ]) {
+      let probes = plainTextShape(9000, 'Color map accent1', 1000000, 1000000, 'Color map text', '<a:solidFill><a:schemeClr val="tx1"/></a:solidFill>').replace('<a:srgbClr val="e2e8f0"/>', '<a:schemeClr val="accent1"/>')
+        + shape(9001, 'Color map accent2', 4000000, 1000000, '000000').replace('<a:srgbClr val="000000"/>', '<a:schemeClr val="accent2"/>')
+      if (number === 5) probes += chartProbes
+      const timing = number === 5 ? `<p:timing><p:tnLst><p:par><p:cTn id="9008" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq><p:cTn id="9009" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${colorAnimation}</p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>` : ''
+      zip.file(`ppt/slides/slide${number}.xml`, `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${tree(probes).replace('<p:cSld>', '<p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg>')}${override}${timing}</p:sld>`)
+      zip.file(`ppt/slides/_rels/slide${number}.xml.rels`, '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdLayout" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>')
+      if (number === 5) zip.file(`ppt/slides/_rels/slide${number}.xml.rels`, (await zip.file(`ppt/slides/_rels/slide${number}.xml.rels`).async('string')).replace('</Relationships>', `${chartRelationships}</Relationships>`))
+    }
+  }
+  if (notesOnly) {
+    const supplementalFonts = '<a:ea typeface=""/><a:cs typeface=""/><a:font script="Hans" typeface="SimSun"/><a:font script="Hant" typeface="Microsoft JhengHei"/><a:font script="Jpan" typeface="Yu Gothic"/><a:font script="Hang" typeface="Malgun Gothic"/><a:font script="Arab" typeface="Traditional Arabic"/><a:font script="Hebr" typeface="David"/>'
+    const slideTheme = (await zip.file('ppt/theme/theme1.xml').async('string'))
+      .replace('</a:clrScheme>', '<a:accent3><a:scrgbClr r="50%" g="50%" b="50%"/></a:accent3><a:accent4><a:hslClr hue="7200000" sat="50%" lum="25%"/></a:accent4></a:clrScheme>')
+    zip.file('ppt/theme/theme1.xml', slideTheme.replace('<a:effectStyleLst/>', '<a:effectStyleLst><a:effectStyle><a:effectLst><a:outerShdw blurRad="127000" dist="127000" dir="0"><a:schemeClr val="phClr"><a:alphaMod val="50%"/></a:schemeClr></a:outerShdw></a:effectLst></a:effectStyle><a:effectStyle><a:effectLst><a:glow rad="127000"><a:srgbClr val="ff0000"/></a:glow></a:effectLst></a:effectStyle></a:effectStyleLst>').replace('<a:lnStyleLst/>', '<a:lnStyleLst><a:ln w="25400" cap="rnd"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="dash"/><a:headEnd type="triangle" w="sm" len="lg"/></a:ln></a:lnStyleLst>').replace('<a:majorFont><a:latin typeface="Arial"/>', '<a:majorFont><a:latin typeface="Courier New"/>').replace('</a:majorFont>', `${supplementalFonts.replace('typeface="SimSun"', 'typeface="SimHei"')}</a:majorFont>`).replace('</a:minorFont>', `${supplementalFonts}</a:minorFont>`))
+    const effectThemeXml = await zip.file('ppt/theme/theme1.xml').async('string')
+    zip.file('ppt/theme/theme1.xml', effectThemeXml.replace('</a:effectStyleLst>', '<a:effectStyle><a:effectLst><a:innerShdw blurRad="127000" dist="127000" dir="0"><a:schemeClr val="phClr"/></a:innerShdw></a:effectLst></a:effectStyle></a:effectStyleLst>'))
+    let fontProbes = ''
+    fontProbes += '<p:sp><p:nvSpPr><p:cNvPr id="30000" name="Inherited line placeholder"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="3"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
+    for (const [index, language, text, role, explicit] of [
+      [0, 'zh-CN', '中文', 'mn'], [1, 'zh-TW', '漢字', 'mn'], [2, 'ja-JP', '日本', 'mn'], [3, 'ko-KR', '한국', 'mn'],
+      [4, 'ar-SA', 'العربية', 'mn'], [5, 'he-IL', 'עברית', 'mn'], [6, 'zh-CN', '标题', 'mj'], [7, 'zh-CN', '指定', 'mj', 'Georgia'],
+    ]) {
+      fontProbes += plainTextShape(9200 + index, `Supplemental font ${index}`, index * 1000000, 5000000, text)
+        .replace('<a:lstStyle/>', `<a:lstStyle><a:lvl1pPr><a:defRPr><a:ea typeface="+${role}-ea"/><a:cs typeface="+${role}-cs"/></a:defRPr></a:lvl1pPr></a:lstStyle>`)
+        .replace('<a:rPr sz="1800">', `<a:rPr sz="1800" lang="${language}">${explicit ? `<a:ea typeface="${explicit}"/>` : ''}`)
+    }
+    const fontSlide = await zip.file('ppt/slides/slide17.xml').async('string')
+    fontProbes += plainTextShape(10600, 'Fitting dynamic autofit', 0, 500000, 'Fits').replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
+    fontProbes += plainTextShape(10601, 'Fitting autofit reference', 3000000, 500000, 'Fits')
+    fontProbes += plainTextShape(10602, 'Preset ellipse text rectangle', 0, 500000, 'Ellipse text').replace('prst="rect"', 'prst="ellipse"')
+    for (const [index, [geometry, name, adjustments]] of [
+      ['circularArrow', 'Preset definition circular arrow', ''],
+      ['circularArrow', 'Preset definition adjusted circular arrow', '<a:gd name="adj1" fmla="val 20000"/>'],
+      ['wedgeEllipseCallout', 'Preset definition ellipse callout', ''],
+      ['funnel', 'Preset definition funnel with adjustment', '<a:gd name="adj1" fmla="val 20000"/>'],
+    ].entries()) {
+      fontProbes += plainTextShape(10603 + index, name, 500000, 1500000, 'Preset text', '', geometry)
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${adjustments}</a:avLst></a:prstGeom>`)
+    }
+    for (const [index, line, reference] of [[0, '<a:ln/>', ''], [1, '<a:ln w="25400"/>', ''], [2, '<a:ln w="25400"><a:noFill/></a:ln>', ''], [3, '<a:ln w="25400"/>', '<p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef></p:style>']]) {
+      fontProbes += customGradientShape.replace('id="67"', `id="${10500 + index}"`).replace('Custom gradient geometry', `Omitted line fill ${index}`).replace(/<a:ln w="63500">.*?<\/a:ln>/, line).replace('</p:spPr>', `</p:spPr>${reference}`)
+    }
+    for (const [index, width, fill] of [[0, undefined, '<a:solidFill><a:srgbClr val="ff0000"/></a:solidFill>'], [1, '0', '<a:solidFill><a:srgbClr val="ff0000"/></a:solidFill>'], [2, '0', '<a:noFill/>'], [3, '25400', '<a:solidFill><a:srgbClr val="ff0000"/></a:solidFill>']]) {
+      const line = `<a:ln${width === undefined ? '' : ` w="${width}"`}>${fill}</a:ln>`
+      for (const [kindIndex, kind] of ['line', 'rect', 'ellipse', 'custom'].entries()) {
+        const probe = kind === 'custom'
+          ? customGradientShape.replace('id="67"', `id="${10400 + index * 4 + kindIndex}"`).replace('Custom gradient geometry', `Hairline ${kind} ${index}`).replace(/<a:ln w="63500">.*?<\/a:ln>/, line)
+          : shape(10400 + index * 4 + kindIndex, `Hairline ${kind} ${index}`, index * 800000, 500000, 'ffffff').replace('prst="rect"', `prst="${kind}"`).replace('</p:spPr>', `${line}</p:spPr>`)
+        fontProbes += probe
+      }
+    }
+    for (const [index, kind] of ['rect', 'ellipse'].entries()) {
+      const outline = customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]
+        .replace('</a:ln>', '<a:custDash><a:ds d="250000" sp="50000"/></a:custDash></a:ln>')
+      fontProbes += shape(10700 + index, `Preset gradient outline ${kind}`, 500000, 500000, 'ffffff')
+        .replace('prst="rect"', `prst="${kind}"`).replace('</p:spPr>', `${outline}</p:spPr>`)
+    }
+    for (const [index, adjustment] of [undefined, '0', '25000', '50000', '75000', '-1000', 'invalid'].entries()) {
+      const geometry = `<a:prstGeom prst="roundRect"><a:avLst>${adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`}</a:avLst></a:prstGeom>`
+      const text = '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1200"/><a:t>Round text</a:t></a:r></a:p></p:txBody>'
+      fontProbes += shape(10800 + index, `Round rectangle adjustment ${index}`, 500000, 500000, 'ffffff', 2600000, 1300000)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+        .replace('</p:spPr>', '<a:ln w="0"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln></p:spPr>')
+        .replace('</p:sp>', `${text}</p:sp>`)
+    }
+    for (const [index, [kind, adjustment, extraAdjustments]] of [['triangle', undefined], ['triangle', '25000'], ['triangle', '-1000'], ['triangle', '150000'], ['triangle', 'invalid'], ['rtTriangle', undefined], ['diamond', undefined], ['parallelogram', undefined], ['hexagon', undefined], ['chevron', undefined], ['trapezoid', undefined], ['trapezoid', '0'], ['trapezoid', '50000'], ['trapezoid', '200000'], ['trapezoid', 'invalid'], ['octagon', undefined], ['octagon', '0'], ['octagon', '50000'], ['octagon', 'invalid'], ['dodecagon', undefined], ['pentagon', undefined], ['pentagon', undefined, { hf: '110000', vf: '100000' }], ['pentagon', undefined, { hf: 'invalid', vf: 'invalid' }]].entries()) {
+      const guides = [adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`, ...Object.entries(extraAdjustments ?? {}).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`)].join('')
+      const geometry = `<a:prstGeom prst="${kind}"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+      fontProbes += plainTextShape(10900 + index, `Preset polygon ${index}`, 500000, 500000, 'Polygon text')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, [adjustment, extraAdjustments]] of [[undefined, undefined], ['30000', undefined], ['25000', { hf: '110000', vf: '100000' }], ['invalid', undefined]].entries()) {
+      const guides = [adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`, ...Object.entries(extraAdjustments ?? {}).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`)].join('')
+      const geometry = `<a:prstGeom prst="star5"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+      fontProbes += plainTextShape(20000 + index, `Preset star5 ${index}`, 500000, 500000, 'Star text')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, [kind, adjustment, extraAdjustments]] of [['star6', undefined, undefined], ['star6', '30000', undefined], ['star6', '25000', { hf: '130000' }], ['star6', 'invalid', undefined], ['star8', undefined, undefined], ['star8', '20000', undefined], ['star8', 'invalid', undefined]].entries()) {
+      const guides = [adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`, ...Object.entries(extraAdjustments ?? {}).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`)].join('')
+      const geometry = `<a:prstGeom prst="${kind}"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+      fontProbes += plainTextShape(20100 + index, `Preset ${kind} ${index}`, 500000, 500000, 'Star text')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, adjustment] of [undefined, '25000', 'invalid'].entries()) {
+      const guides = adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`
+      const geometry = `<a:prstGeom prst="star4"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+      fontProbes += plainTextShape(20200 + index, `Preset star4 ${index}`, 500000, 500000, 'Four-point star')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, [adjustment, extraAdjustments]] of [[undefined, undefined], ['20000', undefined], ['25000', { hf: '110000', vf: '100000' }], ['invalid', undefined]].entries()) {
+      const guides = [adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`, ...Object.entries(extraAdjustments ?? {}).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`)].join('')
+      const geometry = `<a:prstGeom prst="star7"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+      fontProbes += plainTextShape(20500 + index, `Preset star7 ${index}`, 500000, 500000, 'Seven-point star')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [kind, cases, firstId] of [
+      ['star10', [[undefined, undefined], ['30000', undefined], ['25000', { hf: '115000' }], ['invalid', undefined]], 20300],
+      ['star12', [[undefined, undefined], ['20000', undefined], ['invalid', undefined]], 20400],
+    ]) {
+      for (const [index, [adjustment, extraAdjustments]] of cases.entries()) {
+        const guides = [adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`, ...Object.entries(extraAdjustments ?? {}).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`)].join('')
+        const geometry = `<a:prstGeom prst="${kind}"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+        fontProbes += plainTextShape(firstId + index, `Preset ${kind} ${index}`, 500000, 500000, 'Star text')
+          .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+          .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+      }
+    }
+    for (const [kind, firstId] of [['star16', 20600], ['star24', 20700], ['star32', 20800]]) {
+      for (const [index, adjustment] of [undefined, '25000', 'invalid'].entries()) {
+        const guides = adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`
+        const geometry = `<a:prstGeom prst="${kind}"><a:avLst>${guides}</a:avLst></a:prstGeom>`
+        fontProbes += plainTextShape(firstId + index, `Preset ${kind} ${index}`, 500000, 500000, 'Star text')
+          .replace(/<a:prstGeom.*?<\/a:prstGeom>/, geometry)
+          .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+      }
+    }
+    fontProbes += plainTextShape(20900, 'Preset heart', 500000, 500000, 'Heart text')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="heart"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(20901, 'Preset lightning bolt', 500000, 500000, 'Lightning bolt text')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="lightningBolt"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    const plusCases = [
+      { width: 600000, height: 400000 },
+      { width: 600000, height: 400000, adjustment: '40000' },
+      { width: 600000, height: 400000, adjustment: 'invalid' },
+      { width: 400000, height: 600000 },
+    ]
+    for (const [index, { width, height, adjustment }] of plusCases.entries()) {
+      const guides = adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`
+      fontProbes += plainTextShape(20902 + index, `Preset plus ${index}`, 500000, 500000, 'Plus text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="plus"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const mathShapeCases = [
+      ['mathMinus', {}],
+      ['mathMinus', { adj1: '40000' }],
+      ['mathEqual', {}],
+      ['mathEqual', { adj1: '25000', adj2: '10000' }],
+      ['mathPlus', {}],
+      ['mathPlus', { adj1: '40000' }],
+    ]
+    for (const [index, [geometry, adjustments]] of mathShapeCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21200 + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Math text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const snippedRectangleCases = [
+      ['snip1Rect', { adj: '16667' }],
+      ['snip1Rect', { adj: '30000' }],
+      ['snip2DiagRect', { adj1: '0', adj2: '16667' }],
+      ['snip2DiagRect', { adj1: '25000', adj2: '10000' }],
+      ['snip2SameRect', { adj1: '16667', adj2: '0' }],
+      ['snip2SameRect', { adj1: '25000', adj2: '10000' }],
+    ]
+    for (const [index, [geometry, adjustments]] of snippedRectangleCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21220 + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Snipped rectangle text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const roundedSnippedRectangleCases = [
+      ['round1Rect', {}],
+      ['round1Rect', { adj: '30000' }],
+      ['round2DiagRect', {}],
+      ['round2DiagRect', { adj1: '25000', adj2: '10000' }],
+      ['round2SameRect', {}],
+      ['round2SameRect', { adj1: '25000', adj2: '10000' }],
+      ['snipRoundRect', {}],
+      ['snipRoundRect', { adj1: '30000', adj2: '10000' }],
+    ]
+    for (const [index, [geometry, adjustments]] of roundedSnippedRectangleCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21300 + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Rounded rectangle text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const cubeCases = [{}, { adj: '50000' }, { adj: '120000' }]
+    for (const [index, adjustments] of cubeCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21320 + index, `Preset cube ${index}`, 500000, 500000, 'Cube text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="cube"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const plaqueCases = [{}, { adj: '33333' }, { adj: '70000' }]
+    for (const [index, adjustments] of plaqueCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21330 + index, `Preset plaque ${index}`, 500000, 500000, 'Plaque text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="plaque"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const framingCases = [
+      ['frame', {}],
+      ['frame', { adj1: '70000' }],
+      ['halfFrame', {}],
+      ['halfFrame', { adj1: '50000', adj2: '80000' }],
+    ]
+    for (const [index, [geometry, adjustments]] of framingCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21340 + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Frame text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const tabShapeCases = [['cornerTabs', 600000, 400000], ['cornerTabs', 900000, 400000], ['squareTabs', 600000, 400000], ['squareTabs', 400000, 600000], ['plaqueTabs', 600000, 400000], ['plaqueTabs', 900000, 400000]]
+    for (const [index, [geometry, width, height]] of tabShapeCases.entries()) {
+      fontProbes += plainTextShape(21350 + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Tab shape text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst/></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const donutCases = [[600000, 400000, undefined], [900000, 400000, 40000], [600000, 400000, 50000]]
+    for (const [index, [width, height, adjustment]] of donutCases.entries()) {
+      const guides = adjustment === undefined ? '' : `<a:gd name="adj" fmla="val ${adjustment}"/>`
+      fontProbes += plainTextShape(21356 + index, `Preset donut ${index}`, 500000, 500000, 'Donut text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="donut"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const pieWedgeCases = [[600000, 400000], [400000, 600000]]
+    for (const [index, [width, height]] of pieWedgeCases.entries()) {
+      fontProbes += plainTextShape(21359 + index, `Preset pieWedge ${index}`, 500000, 500000, 'Pie wedge text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="pieWedge"><a:avLst/></a:prstGeom>')
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, [width, height, start, end]] of pieCases.entries()) {
+      const guides = [['adj1', start], ['adj2', end]].filter(([, value]) => value !== undefined).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21361 + index, `Preset pie ${index}`, 500000, 500000, 'Pie text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="pie"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, [width, height, start, end]] of chordCases.entries()) {
+      const guides = [['adj1', start], ['adj2', end]].filter(([, value]) => value !== undefined).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21366 + index, `Preset chord ${index}`, 500000, 500000, 'Chord text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="chord"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, [width, height, start, end]] of arcCases.entries()) {
+      const guides = [['adj1', start], ['adj2', end]].filter(([, value]) => value !== undefined).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21371 + index, `Preset arc ${index}`, 500000, 500000, 'Arc text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="arc"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [index, [width, height, start, end, thickness]] of blockArcCases.entries()) {
+      const guides = [['adj1', start], ['adj2', end], ['adj3', thickness]].filter(([, value]) => value !== undefined).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21376 + index, `Preset blockArc ${index}`, 500000, 500000, 'Block arc text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="blockArc"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const guidePolygonCases = [
+      ['homePlate', { adj: '50000' }],
+      ['homePlate', { adj: '30000' }],
+      ['homePlate', { adj: '90000' }],
+      ['nonIsoscelesTrapezoid', {}],
+      ['nonIsoscelesTrapezoid', { adj1: '80000', adj2: '10000' }],
+      ['heptagon', {}],
+      ['decagon', {}],
+      ['parallelogram', {}],
+      ['parallelogram', { adj: '70000' }],
+      ['trapezoid', {}],
+      ['trapezoid', { adj: '40000' }],
+      ['cloud', {}],
+    ]
+    for (const [index, [geometry, adjustments]] of guidePolygonCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21240 + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Guide polygon text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const mathOperatorCases = [
+      ['mathDivide', {}],
+      ['mathDivide', { adj1: '30000', adj2: '2000', adj3: '10000' }],
+      ['mathMultiply', {}],
+      ['mathMultiply', { adj1: '60000' }],
+    ]
+    for (const [index, [geometry, adjustments]] of mathOperatorCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21260 + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Math operator text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const notEqualCases = [
+      {},
+      { adj1: '30000', adj2: '4200000', adj3: '10000' },
+      { adj1: '90000', adj2: '8000000', adj3: '100000' },
+    ]
+    for (const [index, adjustments] of notEqualCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21280 + index, `Preset mathNotEqual ${index}`, 500000, 500000, 'Not-equal text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="mathNotEqual"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const leftRightArrowCases = [
+      {},
+      { adj1: '25000', adj2: '25000' },
+      { adj1: '120000', adj2: '50000' },
+      { adj1: '50000', adj2: '80000' },
+      { adj1: 'invalid', adj2: 'invalid' },
+    ]
+    for (const [index, adjustments] of leftRightArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(20910 + index, `Preset left-right arrow ${index}`, 500000, 500000, 'Arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="leftRightArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const upDownArrowCases = [
+      {},
+      { adj1: '25000', adj2: '25000' },
+      { adj1: '120000', adj2: '50000' },
+      { adj1: '50000', adj2: '80000' },
+      { adj1: 'invalid', adj2: 'invalid' },
+    ]
+    for (const [index, adjustments] of upDownArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(20920 + index, `Preset up-down arrow ${index}`, 500000, 500000, 'Arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="400000" cy="600000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="upDownArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const rightArrowCases = [
+      {},
+      { adj1: '25000', adj2: '25000' },
+      { adj1: '120000', adj2: '50000' },
+      { adj1: '50000', adj2: '180000' },
+      { adj1: 'invalid', adj2: 'invalid' },
+    ]
+    for (const [index, adjustments] of rightArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(20930 + index, `Preset right arrow ${index}`, 500000, 500000, 'Arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="rightArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const notchedRightArrowCases = [
+      {},
+      { adj1: '25000', adj2: '25000' },
+      { adj1: '120000', adj2: '50000' },
+      { adj1: '50000', adj2: '180000' },
+      { adj1: 'invalid', adj2: 'invalid' },
+    ]
+    for (const [index, adjustments] of notchedRightArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(20940 + index, `Preset notched right arrow ${index}`, 500000, 500000, 'Arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="notchedRightArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const leftArrowCases = [
+      {},
+      { adj1: '25000', adj2: '25000' },
+      { adj1: '120000', adj2: '50000' },
+      { adj1: '50000', adj2: '180000' },
+      { adj1: 'invalid', adj2: 'invalid' },
+    ]
+    for (const [index, adjustments] of leftArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(20950 + index, `Preset left arrow ${index}`, 500000, 500000, 'Arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="leftArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    for (const [geometry, firstId] of [['upArrow', 20960], ['downArrow', 20970]]) {
+      const adjustmentsByCase = [
+        {},
+        { adj1: '25000', adj2: '25000' },
+        { adj1: '120000', adj2: '50000' },
+        { adj1: '50000', adj2: '180000' },
+        { adj1: 'invalid', adj2: 'invalid' },
+      ]
+      for (const [index, adjustments] of adjustmentsByCase.entries()) {
+        const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+        fontProbes += plainTextShape(firstId + index, `Preset ${geometry} ${index}`, 500000, 500000, 'Vertical arrow text')
+          .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="400000" cy="600000"/>')
+          .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+          .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+      }
+    }
+    const bentUpArrowCases = [
+      {},
+      { adj1: '50000', adj2: '50000', adj3: '50000' },
+      { adj1: '60000', adj2: '25000', adj3: '60000' },
+      { adj1: '25000', adj2: '60000', adj3: '25000' },
+      { adj1: 'invalid', adj2: 'invalid', adj3: 'invalid' },
+    ]
+    for (const [index, adjustments] of bentUpArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(20980 + index, `Preset bent up arrow ${index}`, 500000, 500000, 'Bent arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="400000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="bentUpArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const quadArrowCases = [
+      {},
+      { adj1: '10000', adj2: '20000', adj3: '10000' },
+      { adj1: '90000', adj2: '40000', adj3: '90000' },
+      { adj1: '0', adj2: '0', adj3: '50000' },
+      { adj1: 'invalid', adj2: 'invalid', adj3: 'invalid' },
+    ]
+    for (const [index, adjustments] of quadArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(20990 + index, `Preset quad arrow ${index}`, 500000, 500000, 'Quad arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="quadArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    const leftRightUpArrowCases = [
+      {},
+      { adj1: '10000', adj2: '20000', adj3: '10000' },
+      { adj1: '90000', adj2: '40000', adj3: '90000' },
+      { adj1: 'invalid', adj2: 'invalid', adj3: 'invalid' },
+    ]
+    for (const [index, adjustments] of leftRightUpArrowCases.entries()) {
+      const guides = Object.entries(adjustments).map(([name, value]) => `<a:gd name="${name}" fmla="val ${value}"/>`).join('')
+      fontProbes += plainTextShape(21000 + index, `Preset left-right-up arrow ${index}`, 500000, 500000, 'Three-way arrow text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="leftRightUpArrow"><a:avLst>${guides}</a:avLst></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    fontProbes += plainTextShape(21004, 'Flowchart decision', 500000, 500000, 'Decision text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartDecision"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21005, 'Flowchart off-page connector', 500000, 500000, 'Off-page text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartOffpageConnector"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21006, 'Flowchart document', 500000, 500000, 'Document text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartDocument"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21007, 'Flowchart manual input', 500000, 500000, 'Manual input text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartManualInput"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21008, 'Flowchart input output', 500000, 500000, 'Input output text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartInputOutput"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21009, 'Flowchart preparation', 500000, 500000, 'Preparation text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartPreparation"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21010, 'Flowchart terminator', 500000, 500000, 'Terminator text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartTerminator"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21011, 'Flowchart predefined process', 500000, 500000, 'Predefined process text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartPredefinedProcess"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    for (const [index, geometry] of ['flowChartExtract', 'flowChartMerge'].entries()) {
+      fontProbes += plainTextShape(21012 + index, `Flowchart ${geometry}`, 500000, 500000, `${geometry} text`)
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst/></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    fontProbes += plainTextShape(21014, 'Flowchart connector', 500000, 500000, 'Connector text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartConnector"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    for (const [index, geometry] of ['flowChartProcess', 'flowChartAlternateProcess'].entries()) {
+      fontProbes += plainTextShape(21015 + index, `Flowchart ${geometry}`, 500000, 500000, `${geometry} text`)
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst/></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    fontProbes += plainTextShape(21017, 'Flowchart delay', 500000, 500000, 'Delay text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartDelay"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21018, 'Flowchart display', 500000, 500000, 'Display text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartDisplay"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21019, 'Flowchart internal storage', 500000, 500000, 'Storage text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartInternalStorage"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21020, 'Flowchart sort', 500000, 500000, 'Sort text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartSort"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    for (const [index, geometry] of ['flowChartSummingJunction', 'flowChartOr'].entries()) {
+      fontProbes += plainTextShape(21021 + index, `Flowchart ${geometry}`, 500000, 500000, `${geometry} text`)
+        .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, `<a:prstGeom prst="${geometry}"><a:avLst/></a:prstGeom>`)
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    fontProbes += plainTextShape(21023, 'Flowchart manual operation', 500000, 500000, 'Manual operation text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartManualOperation"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21024, 'Flowchart collate', 500000, 500000, 'Collate text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartCollate"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21025, 'Flowchart punched card', 500000, 500000, 'Punched card text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartPunchedCard"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21026, 'Flowchart offline storage', 500000, 500000, 'Offline storage text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartOfflineStorage"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21027, 'Flowchart online storage', 500000, 500000, 'Online storage text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartOnlineStorage"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21029, 'Flowchart punched tape', 500000, 500000, 'Punched tape text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartPunchedTape"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21030, 'Flowchart magnetic disk', 500000, 500000, 'Magnetic disk text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartMagneticDisk"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    fontProbes += plainTextShape(21031, 'Flowchart magnetic drum', 500000, 500000, 'Magnetic drum text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartMagneticDrum"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    for (const [id, name, width, height] of [[21032, 'Flowchart magnetic tape', 600000, 600000], [21033, 'Flowchart magnetic tape wide', 900000, 600000]]) {
+      fontProbes += plainTextShape(id, name, 500000, 500000, 'Magnetic tape text')
+        .replace('<a:ext cx="2600000" cy="800000"/>', `<a:ext cx="${width}" cy="${height}"/>`)
+        .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartMagneticTape"><a:avLst/></a:prstGeom>')
+        .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    }
+    fontProbes += plainTextShape(21034, 'Flowchart multidocument', 500000, 500000, 'Multidocument text')
+      .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="600000" cy="600000"/>')
+      .replace(/<a:prstGeom.*?<\/a:prstGeom>/, '<a:prstGeom prst="flowChartMultidocument"><a:avLst/></a:prstGeom>')
+      .replace('</p:spPr>', `${customGradientShape.match(/<a:ln w="63500">.*?<\/a:ln>/)[0]}</p:spPr>`)
+    for (const [index, cap] of ['flat', 'rnd', 'sq'].entries()) {
+      const line = `<a:ln w="25400" cap="${cap}"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill><a:custDash><a:ds d="250000" sp="50000"/><a:ds d="50000" sp="25000"/></a:custDash></a:ln>`
+      fontProbes += customGradientShape.replace('id="67"', `id="${10300 + index}"`).replace('Custom gradient geometry', `Custom dash cap ${index}`).replace(/<a:ln w="63500">.*?<\/a:ln>/, line)
+    }
+    for (const [index, [dash]] of presetDashCases.entries()) {
+      for (const [capIndex, cap] of ['flat', 'rnd', 'sq'].entries()) {
+        fontProbes += shape(10200 + index * 3 + capIndex, `Preset dash ${index} ${capIndex}`, index * 800000, 500000, 'ffffff')
+          .replace('prst="rect"', 'prst="line"').replace('</p:spPr>', `<a:ln w="25400" cap="${cap}"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill><a:prstDash val="${dash}"/></a:ln></p:spPr>`)
+      }
+    }
+    for (const [index, cap] of [undefined, 'flat', 'rnd', 'sq', 'invalid'].entries()) {
+      const line = `<a:ln w="25400"${cap ? ` cap="${cap}"` : ''}><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>`
+      fontProbes += shape(10000 + index, `Default line cap ${index}`, index * 800000, 500000, 'ffffff')
+        .replace('prst="rect"', 'prst="line"').replace('</p:spPr>', `${line}</p:spPr>`)
+      fontProbes += customGradientShape.replace('id="67"', `id="${10100 + index}"`).replace('Custom gradient geometry', `Custom line cap ${index}`)
+        .replace(/<a:ln w="63500">.*?<\/a:ln>/, line)
+    }
+    for (const [index, positions] of [['0', '50000', '100000'], ['0%', '50%', '100%'], ['0%', 'invalid', '100%'], ['0%', '101%', '-1'], [null, 'invalid', '100001']].entries()) {
+      const stops = positions.map((position, stop) => `<a:gs${position === null ? '' : ` pos="${position}"`}><a:srgbClr val="${['ff0000', '00ff00', '0000ff'][stop]}">${stop === 1 ? '<a:alpha val="50%"/>' : ''}</a:srgbClr></a:gs>`).join('')
+      fontProbes += shape(9900 + index, `Gradient position ${index}`, index * 800000, 1000000, 'ffffff')
+        .replace('<a:solidFill><a:srgbClr val="ffffff"/></a:solidFill>', `<a:gradFill><a:gsLst>${stops}</a:gsLst><a:lin ang="0"/></a:gradFill>`)
+    }
+    for (const [index, reference, local] of [[0, '1', ''], [1, '1', '<a:effectLst/>'], [2, '1', '<a:effectLst><a:outerShdw blurRad="254000" dist="127000" dir="5400000"><a:srgbClr val="00ff00"><a:alpha val="75%"/></a:srgbClr></a:outerShdw></a:effectLst>'], [3, '0', ''], [4, '999', ''], [5, 'invalid', ''], [6, '2', ''], [7, '3', '']]) {
+      fontProbes += shape(9800 + index, `Effect reference ${index}`, index * 800000, 1500000, 'ffffff')
+        .replace('</p:spPr>', `${local}</p:spPr><p:style><a:effectRef idx="${reference}"><a:schemeClr val="accent1"><a:alpha val="50%"/></a:schemeClr></a:effectRef></p:style>`)
+    }
+    fontProbes += plainTextShape(9799, 'Run glow', 6400000, 1500000, 'Glowing text')
+      .replace('</a:rPr>', '<a:effectLst><a:glow rad="127000"><a:srgbClr val="0000ff"/></a:glow></a:effectLst></a:rPr>')
+    for (const [index, reference, local] of [[0, '1', ''], [1, '1', '<a:ln w="12700"/>'], [2, '1', '<a:ln><a:solidFill><a:srgbClr val="00ff00"/></a:solidFill><a:prstDash val="solid"/></a:ln>'], [3, '1', '<a:ln><a:noFill/></a:ln>'], [4, '0', ''], [5, '999', ''], [6, 'invalid', ''], [7, '1', ''], [8, '1', '<a:ln w="50800" cap="sq"><a:prstDash val="solid"/><a:headEnd type="none"/></a:ln>']]) {
+      fontProbes += shape(9700 + index, `Line reference ${index}`, index * 800000, 2000000, 'ffffff')
+        .replace('</p:spPr>', `${local}</p:spPr><p:style><a:lnRef idx="${reference}"><a:schemeClr val="accent1"><a:alpha val="50%"/></a:schemeClr></a:lnRef></p:style>`)
+        .replace('prst="rect"', index >= 7 ? 'prst="line"' : 'prst="rect"')
+    }
+    for (const [index, reference, explicit] of [[0, '1'], [1, '1001'], [2, '0'], [3, '1000'], [4, '999'], [5, 'invalid'], [6, '1', 'explicit'], [7, '1', 'noFill']]) {
+      let probe = shape(9600 + index, `Fill reference ${index}`, index * 800000, 2500000, '00ff00')
+      if (!explicit) probe = probe.replace('<a:solidFill><a:srgbClr val="00ff00"/></a:solidFill>', '')
+      if (explicit === 'noFill') probe = probe.replace('<a:solidFill><a:srgbClr val="00ff00"/></a:solidFill>', '<a:noFill/>')
+      fontProbes += probe.replace('</p:spPr>', `</p:spPr><p:style><a:fillRef idx="${reference}"><a:schemeClr val="accent1"><a:alpha val="50%"/></a:schemeClr></a:fillRef></p:style>`)
+    }
+    for (const [index, [color]] of colorModelCases.entries()) {
+      fontProbes += shape(9500 + index, `Color model ${index}`, index * 800000, 3000000, '000000')
+        .replace('<a:srgbClr val="000000"/>', color)
+    }
+    for (const [index, [color, transforms]] of colorPercentageCases.entries()) {
+      fontProbes += shape(9400 + index, `Color percentage ${index}`, index * 800000, 3500000, color)
+        .replace(`<a:srgbClr val="${color}"/>`, `<a:srgbClr val="${color}">${transforms}</a:srgbClr>`)
+    }
+    for (const [index, role, local] of [[0, 'major', ''], [1, 'minor', ''], [2, 'none', ''], [3, 'invalid', ''], [4, 'major', 'run'], [5, 'major', 'paragraph'], [6, 'major', 'phClr'], [7, 'major', 'alphaMod'], [8, 'major', 'alphaOff']]) {
+      let probe = plainTextShape(9300 + index, `Font reference ${index}`, index * 1000000, 4000000, 'Reference text')
+        .replace('<p:txBody>', `<p:style><a:fontRef idx="${role}"><a:schemeClr val="accent1"/></a:fontRef></p:style><p:txBody>`)
+      if (local === 'run') probe = probe.replace('<a:rPr sz="1800">', '<a:rPr sz="1800"><a:latin typeface="Georgia"/><a:solidFill><a:srgbClr val="ff00aa"/></a:solidFill>')
+      if (local === 'paragraph') probe = probe.replace('<a:lstStyle/>', '<a:lstStyle><a:lvl1pPr><a:defRPr><a:latin typeface="Tahoma"/><a:solidFill><a:srgbClr val="008800"/></a:solidFill></a:defRPr></a:lvl1pPr></a:lstStyle>')
+      if (local === 'phClr') probe = probe.replace('<a:rPr sz="1800">', '<a:rPr sz="1800"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill>')
+      if (local === 'alphaMod' || local === 'alphaOff') {
+        probe = probe.replace('<a:schemeClr val="accent1"/>', '<a:schemeClr val="accent1"><a:alpha val="50000"/></a:schemeClr>')
+          .replace('<a:rPr sz="1800">', `<a:rPr sz="1800"><a:solidFill><a:schemeClr val="phClr">${local === 'alphaMod' ? '<a:alphaMod val="50000"/>' : '<a:tint val="50000"/><a:alphaOff val="20000"/>'}</a:schemeClr></a:solidFill>`)
+      }
+      fontProbes += probe
+    }
+    const presetDefinitionsXml = (await readFile(new URL('../app/utils/preset-shape-definitions.xml', import.meta.url), 'utf8')).replace(/^\uFEFF/, '')
+    const presetDefinitions = new DOMParser().parseFromString(presetDefinitionsXml, 'application/xml')
+    const presetDefinitionsList = Array.from(presetDefinitions.documentElement.childNodes)
+      .filter(node => node.nodeType === 1)
+    presetGeometryNames = presetDefinitionsList
+      .map(node => node.nodeName)
+    presetTextRectNames = presetDefinitionsList
+      .filter(definition => Array.from(definition.childNodes).some(node => node.nodeType === 1 && node.localName === 'rect'))
+      .map(definition => definition.nodeName)
+    if (presetGeometryNames.length !== 187) throw new Error(`Expected 187 ECMA-376 preset geometries, received ${presetGeometryNames.length}.`)
+    if (presetTextRectNames.length !== 182) throw new Error(`Expected 182 ECMA-376 preset text rectangles, received ${presetTextRectNames.length}.`)
+    fontProbes += presetGeometryNames.map((geometry, index) =>
+      plainTextShape(40000 + index, `Official preset inventory ${geometry}`, (index % 24) * 550000, 5900000 + Math.floor(index / 24) * 200000, 'x', '', geometry)
+        .replace('cx="2600000" cy="800000"', 'cx="250000" cy="120000"')
+    ).join('')
+    zip.file('ppt/slides/slide17.xml', fontSlide.replace('</p:spTree>', `${fontProbes}</p:spTree>`))
+    const mapping = 'bg1="lt1" tx1="accent1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"'
+    const notesTheme = (await zip.file('ppt/theme/theme1.xml').async('string')).replace('4472c4', '8844cc').replace('ed7d31', '228866').replace('<a:majorFont><a:latin typeface="Arial"/>', '<a:majorFont><a:latin typeface="Courier New"/>')
+    zip.file('ppt/theme/notesTheme.xml', notesTheme)
+    zip.file('ppt/notesMasters/notesMaster1.xml', `<p:notesMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(plainTextShape(9100, 'Notes body', 0, 0, 'Master text').replace('<p:nvPr/>', '<p:nvPr><p:ph type="body" idx="1"/></p:nvPr>').replace('<a:lstStyle/>', '<a:lstStyle><a:lvl1pPr><a:defRPr i="1"/></a:lvl1pPr></a:lstStyle>'))}<p:clrMap ${mapping}/><p:notesStyle><a:lvl1pPr algn="ctr"><a:defRPr sz="1800" b="1"><a:latin typeface="+mj-lt"/><a:solidFill><a:schemeClr val="tx1"/></a:solidFill></a:defRPr></a:lvl1pPr></p:notesStyle></p:notesMaster>`)
+    zip.file('ppt/notesMasters/_rels/notesMaster1.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/notesTheme.xml"/></Relationships>')
+    const bulletParagraph = (properties, text) => `<a:p><a:pPr ${properties.level ? 'lvl="1"' : ''}>${properties.xml}</a:pPr><a:r><a:t>${text}</a:t></a:r></a:p>`
+    const noteBullets = [
+      [{ xml: '<a:buSzPct val="150000"/><a:buChar char="•"/>' }, 'Character marker'],
+      [{ xml: '<a:buAutoNum type="arabicPeriod" startAt="3"/>' }, 'Third item'],
+      [{ level: 1, xml: '<a:buAutoNum type="arabicPeriod"/>' }, 'Nested first item'],
+      [{ xml: '<a:buAutoNum type="arabicPeriod"/>' }, 'Fourth item'],
+      [{ xml: '<a:buAutoNum type="alphaLcParenR" startAt="27"/>' }, 'Alphabetic item'],
+      [{ xml: '<a:buAutoNum type="romanUcPeriod" startAt="12"/>' }, 'Roman item'],
+      [{ xml: '<a:buAutoNum type="ea1ChsPeriod" startAt="12"/>' }, 'Simplified Chinese numeric item'],
+      [{ xml: '<a:buAutoNum type="ea1ChsPlain" startAt="10"/>' }, 'Chinese ten item'],
+      [{ xml: '<a:buNone/>' }, 'Chinese sequence restart'],
+      [{ xml: '<a:buAutoNum type="ea1ChsPlain" startAt="101"/>' }, 'Chinese internal zero item'],
+      [{ xml: '<a:buNone/>' }, 'Chinese sequence restart'],
+      [{ xml: '<a:buAutoNum type="ea1ChsPlain" startAt="1001"/>' }, 'Chinese section zero item'],
+      [{ xml: '<a:buAutoNum type="ea1ChtPlain" startAt="10001"/>' }, 'Traditional Chinese numeric item'],
+      [{ xml: '<a:buAutoNum type="ea1ChtPeriod" startAt="10010"/>' }, 'Traditional Chinese scaled item'],
+      [{ xml: '<a:buAutoNum type="thaiAlphaParenBoth" startAt="3"/>' }, 'Thai alphabetic item'],
+      [{ xml: '<a:buAutoNum type="thaiNumParenBoth" startAt="3"/>' }, 'Thai numeric item'],
+      [{ xml: '<a:buAutoNum type="hindiNumParenR" startAt="4"/>' }, 'Hindi numeric item'],
+      [{ xml: '<a:buAutoNum type="arabicDbPlain" startAt="5"/>' }, 'Double-byte numeric item'],
+      [{ xml: '<a:buAutoNum type="arabicDbPeriod" startAt="6"/>' }, 'Double-byte period item'],
+      [{ xml: '<a:buSzPct val="125000"/><a:buBlip><a:blip r:embed="rIdNoteBullet"/></a:buBlip>' }, 'Picture item'],
+    ].map(([properties, text]) => bulletParagraph(properties, text)).join('') + '<a:p><a:pPr><a:buNone/></a:pPr><a:r><a:rPr lang="en-US"><a:latin typeface="Courier New"/><a:ea typeface="SimSun"/><a:cs typeface="Traditional Arabic"/></a:rPr><a:t>A中文العربية</a:t></a:r></a:p>'
+    const notes = (await zip.file('ppt/notesSlides/notesSlide1.xml').async('string')).replace('<a:rPr lang="en-US"/>', '<a:rPr lang="en-US" u="sng"/>').replace('<a:rPr lang="en-US"/>', '<a:rPr lang="en-US"><a:latin typeface="Georgia"/></a:rPr>').replace('<p:notes ', '<p:notes xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ').replace('</p:txBody>', `${noteBullets}</p:txBody>`)
+    for (const [number, override] of [[17, '<a:masterClrMapping/>'], [18, `<a:overrideClrMapping ${mapping.replace('tx1="accent1"', 'tx1="accent2"')}/>`]]) {
+      const path = `ppt/notesSlides/colorNotes${number}.xml`
+      zip.file(path, notes.replace('</p:notes>', `<p:clrMapOvr>${override}</p:clrMapOvr></p:notes>`))
+      zip.file(`ppt/notesSlides/_rels/colorNotes${number}.xml.rels`, `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdMaster" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" Target="../notesMasters/notesMaster1.xml"/><Relationship Id="rIdSlide" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="../slides/slide${number}.xml"/><Relationship Id="rIdNoteBullet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/tile-background.svg"/></Relationships>`)
+      const slideRelsPath = `ppt/slides/_rels/slide${number}.xml.rels`
+      const slideRels = (await zip.file(slideRelsPath)?.async('string') || '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>').replace(/<Relationship\b[^>]*Type="[^"]*\/notesSlide"[^>]*\/>/g, '')
+      zip.file(slideRelsPath, slideRels.replace('</Relationships>', `<Relationship Id="rIdColorNotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/colorNotes${number}.xml"/></Relationships>`))
+    }
+    const types = await zip.file('[Content_Types].xml').async('string')
+    const extraTypes = [['ppt/notesMasters/notesMaster1.xml', 'presentationml.notesMaster'], ['ppt/notesSlides/colorNotes17.xml', 'presentationml.notesSlide'], ['ppt/notesSlides/colorNotes18.xml', 'presentationml.notesSlide'], ['ppt/theme/notesTheme.xml', 'theme']].map(([path, type]) => `<Override PartName="/${path}" ContentType="application/vnd.openxmlformats-officedocument.${type}+xml"/>`).join('')
+    zip.file('[Content_Types].xml', types.replace('</Types>', `${extraTypes}</Types>`))
+  }
+  if (embeddedFontTestPath) {
+    const fontData = await readFile(embeddedFontTestPath)
+    const fontSignature = fontData.subarray(0, 4).toString('latin1')
+    assert(fontSignature === '\u0000\u0001\u0000\u0000' || fontSignature === 'OTTO' || fontSignature === 'true' || fontSignature === 'typ1', 'The embedded-font fixture must be a TrueType or OpenType font.')
+    zip.file('ppt/fonts/font1.fntdata', fontData)
+    const presentation = await zip.file('ppt/presentation.xml').async('string')
+    zip.file('ppt/presentation.xml', presentation.replace('</p:presentation>', '<p:embeddedFontLst><p:embeddedFont><p:font typeface="Deckline Font Runtime Check"/><p:regular r:id="rIdFont"/></p:embeddedFont></p:embeddedFontLst></p:presentation>'))
+    const relationships = await zip.file('ppt/_rels/presentation.xml.rels').async('string')
+    zip.file('ppt/_rels/presentation.xml.rels', relationships.replace('</Relationships>', '<Relationship Id="rIdFont" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font1.fntdata"/></Relationships>'))
+    const contentTypes = await zip.file('[Content_Types].xml').async('string')
+    zip.file('[Content_Types].xml', contentTypes.replace('</Types>', '<Default Extension="fntdata" ContentType="application/x-fontdata"/></Types>'))
+  }
+  zip.file('empty-part.xml', '')
+  const masterXml = await zip.file('ppt/slideMasters/slideMaster1.xml').async('string')
+  const masterVisibilityMarker = '<p:sp><p:nvSpPr><p:cNvPr id="90000" name="Master visibility marker"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9525" cy="9525"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="ff00ff"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr></p:sp>'
+  const masterWithVisibilityMarker = masterXml.replace('<p:txStyles>', `${tree(masterVisibilityMarker)}<p:txStyles>`)
+  assert(masterWithVisibilityMarker !== masterXml, 'The master visibility fixture could not add its shape marker.')
+  zip.file('ppt/slideMasters/slideMaster1.xml', masterWithVisibilityMarker)
+  const visibilitySlideXml = await zip.file('ppt/slides/slide1.xml').async('string')
+  const slideWithMasterShapesHidden = visibilitySlideXml.replace('<p:sld ', '<p:sld showMasterSp="false" ')
+  assert(slideWithMasterShapesHidden !== visibilitySlideXml, 'The master visibility fixture could not disable master shapes on its first slide.')
+  zip.file('ppt/slides/slide1.xml', slideWithMasterShapesHidden)
+  for (const slideNumber of [1, 2]) {
+    const relsPath = `ppt/slides/_rels/slide${slideNumber}.xml.rels`
+    const slideRels = await zip.file(relsPath).async('string')
+    const slideRelsWithLayout = slideRels.replace('</Relationships>', '<Relationship Id="rIdVisibilityLayout" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>')
+    assert(slideRelsWithLayout !== slideRels, `The master visibility fixture could not link slide ${slideNumber} to its layout.`)
+    zip.file(relsPath, slideRelsWithLayout)
+  }
   await writeFile(fixturePath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
 }
 
@@ -656,17 +1695,19 @@ try {
   let id = 0
   const pending = new Map()
   const runtimeErrors = []
+  let resolveTrace
   socket.addEventListener('message', event => {
     const message = JSON.parse(event.data)
+    if (message.method === 'Tracing.tracingComplete') resolveTrace?.(message.params)
     if (message.method === 'Runtime.exceptionThrown') runtimeErrors.push(message.params.exceptionDetails.text)
     if (!message.id || !pending.has(message.id)) return
     const request = pending.get(message.id)
     pending.delete(message.id)
-    message.error ? request.reject(new Error(message.error.message)) : request.resolve(message.result)
+    message.error ? request.reject(new Error(request.method + ': ' + message.error.message)) : request.resolve(message.result)
   })
   const call = (method, params = {}) => new Promise((resolve, reject) => {
     const requestId = ++id
-    pending.set(requestId, { resolve, reject })
+    pending.set(requestId, { method, resolve, reject })
     socket.send(JSON.stringify({ id: requestId, method, params }))
   })
   closeBrowser = async () => { await call('Browser.close').catch(() => {}) }
@@ -675,7 +1716,7 @@ try {
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text)
     return result.result.value
   }
-  const state = () => evaluate(`(() => {
+  const stateExpression = `(() => {
     const currentHost = document.querySelector('.stage-shell > .slide-host')
     const underlay = document.querySelector('.slide-transition-underlay')
     const outgoingHost = document.querySelector('.slide-transition-underlay > .slide-host')
@@ -683,7 +1724,7 @@ try {
     const outgoingRect = outgoingHost?.getBoundingClientRect()
     const frame = currentHost?.querySelector('.slide-frame')
     return ({
-    now: performance.now(),
+    now: sampleTime,
     title: document.querySelector('.deck-title')?.textContent,
     slide: document.querySelector('.slide-position')?.textContent?.replace(/\\s+/g, ' ').trim(),
     transitionEffect: currentHost?.dataset.transitionEffect,
@@ -715,12 +1756,12 @@ try {
         blindsStripeSize: getComputedStyle(element).getPropertyValue('--blinds-stripe-size').trim(),
         boxShadow: getComputedStyle(element).boxShadow,
         backgroundColor: getComputedStyle(element).backgroundColor,
-        borderColor: getComputedStyle(element).borderColor,
-        borderStyle: getComputedStyle(element).borderStyle,
-        borderWidth: getComputedStyle(element).borderWidth,
+        borderColor: getComputedStyle(element.querySelector('.preset-outline path') || element)[element.querySelector('.preset-outline path') ? 'stroke' : 'borderColor'],
+        borderStyle: (() => { const path = element.querySelector('.preset-outline path'); if (!path) return getComputedStyle(element).borderStyle; const style = getComputedStyle(path); return style.stroke === 'none' ? 'none' : style.strokeDasharray === 'none' ? 'solid' : 'dashed' })(),
+        borderWidth: (() => { const path = element.querySelector('.preset-outline path'); if (!path) return getComputedStyle(element).borderWidth; const style = getComputedStyle(path); return style.stroke === 'none' ? '0px' : style.strokeWidth })(),
         lineColor: element.querySelector('.line-render line') ? getComputedStyle(element.querySelector('.line-render line')).stroke : undefined,
-        line: (() => { const line = element.querySelector('.line-render line'); return line ? { x1: Number(line.getAttribute('x1')), y1: Number(line.getAttribute('y1')), x2: Number(line.getAttribute('x2')), y2: Number(line.getAttribute('y2')), markerStart: line.getAttribute('marker-start'), markerEnd: line.getAttribute('marker-end'), headPath: element.querySelector('.line-render marker[id$="-head"] path')?.getAttribute('d'), tailPath: element.querySelector('.line-render marker[id$="-tail"] path')?.getAttribute('d') } : undefined })(),
-        customPaths: [...element.querySelectorAll('.custom-geometry path')].map(path => ({ d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, strokeWidth: getComputedStyle(path).strokeWidth })),
+        line: (() => { const line = element.querySelector('.line-render line'); const markerSize = side => { const marker = element.querySelector('.line-render marker[id$="-' + side + '"]'); return marker ? { width: Number(marker.getAttribute('markerWidth')), height: Number(marker.getAttribute('markerHeight')) } : undefined }; return line ? { x1: Number(line.getAttribute('x1')), y1: Number(line.getAttribute('y1')), x2: Number(line.getAttribute('x2')), y2: Number(line.getAttribute('y2')), markerStart: line.getAttribute('marker-start'), markerEnd: line.getAttribute('marker-end'), headPath: element.querySelector('.line-render marker[id$="-head"] path')?.getAttribute('d'), tailPath: element.querySelector('.line-render marker[id$="-tail"] path')?.getAttribute('d'), headSize: markerSize('head'), tailSize: markerSize('tail') } : undefined })(),
+        customPaths: [...element.querySelectorAll('.custom-geometry path')].map(path => { const paint = path.getAttribute('fill') || ''; const gradientId = paint.startsWith('url(#') ? paint.slice(5, -1) : ''; const gradient = gradientId ? document.getElementById(gradientId) : undefined; return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, gradientStops: [...(gradient?.querySelectorAll('stop') || [])].map(stop => Number(stop.getAttribute('stop-opacity') || 1)), stroke: getComputedStyle(path).stroke, strokeWidth: getComputedStyle(path).strokeWidth } }),
         frameRect: { left: rect.left - frame.left, top: rect.top - frame.top, width: rect.width, height: rect.height, frameWidth: frame.width, frameHeight: frame.height },
       }
     }),
@@ -731,7 +1772,8 @@ try {
     },
     paragraphs: [...(currentHost?.querySelectorAll('.text-paragraph') || [])].map(element => ({ text: element.textContent, visibility: getComputedStyle(element).visibility, opacity: getComputedStyle(element).opacity, maskImage: getComputedStyle(element).maskImage, wipeProgress: getComputedStyle(element).getPropertyValue('--wipe-progress').trim(), color: getComputedStyle(element.querySelector('.text-run') || element).color, textAlign: getComputedStyle(element).textAlign, lineHeight: element.style.lineHeight, marginLeft: element.style.marginLeft, marker: element.querySelector('.paragraph-marker')?.textContent })),
     textFrames: [...(currentHost?.querySelectorAll('.text-frame') || [])].map(element => ({ name: element.closest('.slide-element')?.title, clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, whiteSpace: getComputedStyle(element).whiteSpace, writingMode: getComputedStyle(element).writingMode, textOrientation: getComputedStyle(element).textOrientation, direction: getComputedStyle(element).direction, paragraphDirection: getComputedStyle(element.querySelector('.text-paragraph')).direction, columnCount: getComputedStyle(element).columnCount, columnGap: getComputedStyle(element).columnGap, frameWidth: element.closest('.slide-frame')?.getBoundingClientRect().width, runRects: element.closest('.slide-element')?.title?.startsWith('Two-column') ? (() => { const range = document.createRange(); range.selectNodeContents(element.querySelector('.text-run')); return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top })) })() : undefined, paragraphRects: element.closest('.slide-element')?.title === 'WordArt vertical RTL' ? [...element.querySelectorAll('.text-paragraph')].map(paragraph => { const rect = paragraph.getBoundingClientRect(); return { left: rect.left, top: rect.top } }) : undefined, borderStyle: getComputedStyle(element.closest('.slide-element')).borderStyle, borderWidth: getComputedStyle(element.closest('.slide-element')).borderWidth })),
-    textRuns: [...(currentHost?.querySelectorAll('.text-run') || [])].map(element => ({ name: element.closest('.slide-element')?.title, text: element.textContent, textShadow: getComputedStyle(element).textShadow, textStrokeColor: getComputedStyle(element).webkitTextStrokeColor, textStrokeWidth: getComputedStyle(element).webkitTextStrokeWidth, visibility: getComputedStyle(element).visibility, opacity: getComputedStyle(element).opacity, color: getComputedStyle(element).color, fontSize: getComputedStyle(element).fontSize, fontFamily: getComputedStyle(element).fontFamily, fontWeight: getComputedStyle(element).fontWeight, fontStyle: getComputedStyle(element).fontStyle, textDecorationLine: getComputedStyle(element).textDecorationLine, verticalAlign: getComputedStyle(element).verticalAlign, maskImage: getComputedStyle(element).maskImage, wipeProgress: getComputedStyle(element).getPropertyValue('--wipe-progress').trim(), start: Number(element.dataset.charStart), end: Number(element.dataset.charEnd) })),
+    textRuns: [...(currentHost?.querySelectorAll('.text-run') || [])].map(element => { const style = getComputedStyle(element); const underline = element.querySelector('.text-run-underline'); const underlineStyle = underline ? getComputedStyle(underline) : undefined; const decorationLine = [style.textDecorationLine, underlineStyle?.textDecorationLine].flatMap(line => line?.split(' ') || []).filter(line => line && line !== 'none').join(' ') || 'none'; const decorationStyle = underlineStyle?.textDecorationLine.includes('underline') ? underlineStyle : style; return { name: element.closest('.slide-element')?.title, text: element.textContent, transform: style.transform, filter: style.filter, textShadow: style.textShadow, textStrokeColor: style.webkitTextStrokeColor, textStrokeWidth: style.webkitTextStrokeWidth, visibility: style.visibility, opacity: style.opacity, color: style.color, fontSize: style.fontSize, fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontStyle: style.fontStyle, textDecorationLine: decorationLine, textDecorationColor: decorationStyle.textDecorationColor, verticalAlign: style.verticalAlign, maskImage: style.maskImage, wipeProgress: style.getPropertyValue('--wipe-progress').trim(), start: Number(element.dataset.charStart), end: Number(element.dataset.charEnd) } }),
+    underlineRuns: [...(currentHost?.querySelectorAll('.text-run') || [])].filter(element => element.textContent.trim() === 'Custom underline stroke' || element.textContent.trim() === 'Underline stroke follows outline').map(element => { const underline = element.querySelector('.text-run-underline'); const style = getComputedStyle(underline || element); const strike = getComputedStyle(element); return { name: element.closest('.slide-element')?.title, text: element.textContent, color: style.textDecorationColor, line: style.textDecorationLine, style: style.textDecorationStyle, thickness: style.textDecorationThickness, strikeLine: strike.textDecorationLine, strikeColor: strike.textDecorationColor, strikeStyle: strike.textDecorationStyle } }),
     tables: [...(currentHost?.querySelectorAll('.slide-table') || [])].map(table => ({
       cells: [...table.querySelectorAll('td')].map(cell => ({
         text: cell.textContent,
@@ -742,6 +1784,8 @@ try {
         autoFit: cell.dataset.autofit,
         clientHeight: cell.clientHeight,
         scrollHeight: cell.scrollHeight,
+        textClientHeight: cell.querySelector('.table-cell-text').clientHeight,
+        textScrollHeight: cell.querySelector('.table-cell-text').scrollHeight,
         fontSize: parseFloat(getComputedStyle(cell.querySelector('.text-run') || cell).fontSize),
         columnCount: getComputedStyle(cell.querySelector('.table-cell-text')).columnCount,
         columnGap: getComputedStyle(cell.querySelector('.table-cell-text')).columnGap,
@@ -787,7 +1831,12 @@ try {
     },
     warnings: [...document.querySelectorAll('.warning-pill')].map(element => element.textContent),
     error: document.querySelector('.error-card')?.textContent?.replace(/\\s+/g, ' ').trim(),
-  })})()`)
+    captureEndedAt: performance.now(),
+  })})()`
+  const state = () => evaluate(`new Promise(resolve => requestAnimationFrame(frameTime => {
+    const sampleTime = frameTime
+    resolve(${stateExpression})
+  }))`)
   const stateAtElapsed = async (start, elapsed) => {
     let snapshot = await state()
     while (snapshot.now - start < elapsed) {
@@ -840,8 +1889,12 @@ try {
   await call('Page.reload', { ignoreCache: true })
   let inputObjectId
   for (let attempt = 0; attempt < 50; attempt++) {
-    const input = await call('Runtime.evaluate', { expression: `document.querySelector('input[type=file]')` })
-    inputObjectId = input.result.objectId
+    try {
+      const input = await call('Runtime.evaluate', { expression: `document.querySelector('input[type=file]')` })
+      inputObjectId = input.result.objectId
+    } catch (error) {
+      if (!(error instanceof Error) || !/Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id/.test(error.message)) throw error
+    }
     if (inputObjectId) break
     await delay(100)
   }
@@ -871,13 +1924,28 @@ try {
     }
     throw new Error(`The upload error did not contain "${expected}". Last message: ${lastError || '(none)'}; state: ${JSON.stringify(lastState)}`)
   }
-  if (!grayscaleOnly && !strokeWidthOnly && !themeBackgroundOnly) {
+  if (!grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
     const corruptArchivePath = join(runtimeDir, 'damaged.pptx')
     await writeFile(corruptArchivePath, Buffer.from('not a zip archive'))
     await uploadPath(corruptArchivePath)
     assert((await waitForError('appears damaged or incomplete')).includes('Couldn’t open this presentation'), 'A damaged ZIP must display a specific upload error.')
+    const invalidXmlPath = join(runtimeDir, 'invalid-presentation-xml.pptx')
+    const invalidXmlArchive = new JSZip()
+    invalidXmlArchive.file('ppt/presentation.xml', '<p:presentation')
+    await writeFile(invalidXmlPath, Buffer.from(await invalidXmlArchive.generateAsync({ type: 'uint8array', compression: 'STORE' })))
+    await uploadPath(invalidXmlPath)
+    assert((await waitForError('ppt/presentation.xml contains invalid XML')).includes('Couldn’t open this presentation'), 'A valid ZIP with malformed presentation XML must display a specific upload error.')
+    const partialCompoundSignaturePath = join(runtimeDir, 'partial-compound-signature.pptx')
+    await writeFile(partialCompoundSignaturePath, Buffer.from([0xd0, 0xcf, 0x11, 0xe0]))
+    await uploadPath(partialCompoundSignaturePath)
+    assert((await waitForError('appears damaged or incomplete')).includes('Couldn’t open this presentation'), 'A partial compound-file signature must not be misclassified as an encrypted or legacy presentation.')
+    const oversizedFilePath = join(runtimeDir, 'oversized-file.pptx')
+    await writeFile(oversizedFilePath, Buffer.alloc(0))
+    await truncate(oversizedFilePath, 150 * 1024 * 1024 + 1)
+    await uploadPath(oversizedFilePath)
+    assert((await waitForError('larger than the 150 MB browser limit')).includes('Couldn’t open this presentation'), 'A file above the browser limit must be rejected before reading its contents.')
     const encryptedPresentationPath = join(runtimeDir, 'encrypted.pptx')
-    await writeFile(encryptedPresentationPath, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0, 0, 0, 0]))
+    await writeFile(encryptedPresentationPath, Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
     await uploadPath(encryptedPresentationPath)
     assert((await waitForError('encrypted or uses the legacy .ppt format')).includes('Couldn’t open this presentation'), 'An encrypted or legacy presentation must display a specific upload error.')
     const oversizedArchivePath = join(runtimeDir, 'oversized-archive.pptx')
@@ -890,8 +1958,14 @@ try {
     await writeFile(oversizedArchivePath, oversizedArchiveBytes)
     await uploadPath(oversizedArchivePath)
     assert((await waitForError('expands beyond the 250 MB browser safety limit')).includes('Couldn’t open this presentation'), 'A ZIP with an excessive declared expanded size must display the safety-limit error.')
+    const excessiveEntriesPath = join(runtimeDir, 'excessive-entries.pptx')
+    const excessiveEntriesArchive = new JSZip()
+    for (let index = 0; index <= 20_000; index++) excessiveEntriesArchive.file(`part-${index}.xml`, 'x')
+    await writeFile(excessiveEntriesPath, Buffer.from(await excessiveEntriesArchive.generateAsync({ type: 'uint8array', compression: 'STORE' })))
+    await uploadPath(excessiveEntriesPath)
+    assert((await waitForError('more than 20,000 package entries')).includes('Couldn’t open this presentation'), 'An archive with excessive package-part count must display the safety-limit error.')
   }
-  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !themeBackgroundOnly) {
+  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
     const latestFilePath = join(runtimeDir, 'latest-wins.pptx')
     await copyFile(fixturePath, latestFilePath)
     await evaluate(`globalThis.__decklineWorkerDelayMs = 700; globalThis.__decklineDelayNextWorkerPost = true`)
@@ -903,8 +1977,10 @@ try {
       await delay(50)
     }
     await delay(850)
-    assert(await evaluate(`document.querySelector('.deck-title')?.textContent === 'latest-wins.pptx' && !document.querySelector('.error-card')`), 'A slower stale parse must not replace the most recently selected presentation.')
+    const latestWinsState = await evaluate(`({ title: document.querySelector('.deck-title')?.textContent, loading: Boolean(document.querySelector('.loading-overlay')), error: document.querySelector('.error-card')?.textContent?.replace(/\\s+/g, ' ').trim() })`)
+    assert(latestWinsState.title === 'latest-wins.pptx' && !latestWinsState.error, `A slower stale parse must not replace the most recently selected presentation: ${JSON.stringify(latestWinsState)}`)
   }
+  captureFlow: {
   let upload
   for (let attempt = 0; attempt < 10; attempt++) {
     const currentInput = await call('Runtime.evaluate', { expression: `document.querySelector('input[type=file]')` })
@@ -928,9 +2004,133 @@ try {
       continue
     }
     initial = await state()
-    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : initial.shapes.length === 80) break
+    if (initial.shapes.some(element => element.name === 'Automatic fade')) {
+      // Capture this short automatic animation as soon as the slide mounts; later fixture assertions can outlast it.
+      await evaluate(`(() => {
+        window.__automaticFadeRepeatProbe = new Promise(resolve => {
+          const started = performance.now()
+          let firstOpacity
+          let maxOpacity = 0
+          const checkFrame = () => {
+            const element = document.querySelector('.stage-shell > .slide-host [title="Automatic fade"]')
+            const style = element && getComputedStyle(element)
+            const opacity = Number(element && getComputedStyle(element).opacity)
+            if (style?.visibility === 'visible' && opacity > 0 && opacity < 0.3 && firstOpacity === undefined) firstOpacity = opacity
+            if (firstOpacity !== undefined && style?.visibility === 'visible' && opacity > 0 && opacity < 1) {
+              maxOpacity = Math.max(maxOpacity, opacity)
+              if (maxOpacity > 0.5 && opacity < maxOpacity - 0.3) {
+                resolve({ firstOpacity, maxOpacity, opacity })
+                return
+              }
+            }
+            if (performance.now() - started > 12000) resolve(false)
+            else requestAnimationFrame(checkFrame)
+          }
+          checkFrame()
+        })
+        return true
+      })()`)
+    }
+    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : initial.shapes.length === 105) break
+  }
+  if (!captureOnly && !themeBackgroundOnly && !strokeWidthOnly && !textOutlineRangeOnly) {
+    assert(!initial.warnings.some(warning => warning.includes('beyond 30 seconds')), `Valid timing over 30 seconds must not be capped or skipped: ${JSON.stringify(initial.warnings)}`)
+    const straight = shape(initial, 'Static straight connector')
+    const inverse = shape(initial, 'Static inverse connector')
+    assert(straight?.kind === 'line' && straight.line?.x1 === 0 && straight.line.y1 === 0 && straight.line.x2 === 1000 && straight.line.y2 === 1000, `straightConnector1 must render along its stored diagonal: ${JSON.stringify(straight)}`)
+    assert(inverse?.kind === 'line' && inverse.line?.x1 === 0 && inverse.line.y1 === 1000 && inverse.line.x2 === 1000 && inverse.line.y2 === 0, `lineInv must render from lower-left to upper-right: ${JSON.stringify(inverse)}`)
+    assert(!(initial.warnings || []).some(warning => /(?:straightConnector1|lineInv) shape is simplified/.test(warning)), `Straight connector presets must not fall back to rectangle placeholders: ${JSON.stringify(initial.warnings)}`)
   }
   assert(await evaluate('globalThis.__decklineWorkerCreated === true'), 'PPTX parsing did not create a Web Worker.')
+  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !notesOnly && !performanceOnly) {
+    const modifierKeys = await evaluate(`(() => {
+      const send = options => window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...options }))
+      return [
+        send({ key: 'PageDown', ctrlKey: true }),
+        send({ key: 'ArrowRight', altKey: true }),
+        send({ key: 's', ctrlKey: true }),
+        send({ key: 'b', metaKey: true }),
+      ]
+    })()`)
+    await delay(50)
+    const modifierState = await evaluate(`({ slide: document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber, presenter: Boolean(document.querySelector('[data-presenter-view]')), blank: Boolean(document.querySelector('.screen-overlay')) })`)
+    assert(modifierKeys.every(Boolean) && modifierState.slide === '1' && !modifierState.presenter && !modifierState.blank, `Browser modifier shortcuts must not trigger slide navigation, presenter view, or screen blanking: ${JSON.stringify({ modifierKeys, modifierState })}`)
+    const altF5Started = await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', altKey: true, cancelable: true }))`)
+    await delay(50)
+    const altF5OpenedPresenter = await evaluate(`Boolean(document.querySelector('[data-presenter-view]'))`)
+    const altF5Returned = await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', altKey: true, cancelable: true }))`)
+    await delay(50)
+    assert(!altF5Started && altF5OpenedPresenter && !altF5Returned && !await evaluate(`Boolean(document.querySelector('[data-presenter-view]'))`), 'Alt+F5 must toggle Presenter View while remaining distinct from F5 and Shift+F5.')
+  }
+  if (!inputPptx) {
+    assert(!shape(initial, 'Master visibility marker'), 'A slide with showMasterSp="false" must hide master shapes.')
+    if (!captureOnly && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !notesOnly && !performanceOnly) {
+      const stateOnSlide = async number => {
+        let snapshot
+        for (let attempt = 0; attempt < 40; attempt++) {
+          snapshot = await state()
+          if (Number(snapshot.slide?.split('/')[0].trim()) === number) return snapshot
+          await delay(50)
+        }
+        return snapshot
+      }
+      await evaluate(`document.querySelector('[aria-label="Go to slide 2"]')?.click()`)
+      const visibleMaster = await stateOnSlide(2)
+      assert(shape(visibleMaster, 'Master visibility marker'), `A slide without showMasterSp must show master shapes by default: ${JSON.stringify({slide: visibleMaster.slide, shapeCount: visibleMaster.shapes.length})}`)
+      await evaluate(`document.querySelector('[aria-label="Go to slide 1"]')?.click()`)
+      const hiddenMaster = await stateOnSlide(1)
+      assert(!shape(hiddenMaster, 'Master visibility marker') && hiddenMaster.shapes.length === 105, `Returning to the slide with showMasterSp="false" must keep master shapes hidden: ${JSON.stringify({slide: hiddenMaster.slide, shapeCount: hiddenMaster.shapes.length})}`)
+      const resetFixturePath = join(runtimeDir, 'master-visibility-reset.pptx')
+      await copyFile(fixturePath, resetFixturePath)
+      await uploadPath(resetFixturePath)
+      let resetState
+      for (let attempt = 0; attempt < 100; attempt++) {
+        resetState = await state()
+        if (resetState.title === 'master-visibility-reset.pptx' && !await evaluate('Boolean(document.querySelector(".loading-overlay"))')) break
+        await delay(50)
+      }
+      assert(resetState.title === 'master-visibility-reset.pptx' && !resetState.error, `The animation fixture did not reload after master visibility verification: ${JSON.stringify({title: resetState.title, error: resetState.error})}`)
+      initial = resetState
+    }
+  }
+  if (captureOnly && inputPptx) {
+    assert(initial.slide && !initial.error, `The PPTX did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+    if (process.env.DECKLINE_VERIFY_NAVIGATION === '1') {
+      assert(initial.slide.startsWith('01 / 03'), `The navigation fixture must open on slide 1 of 3: ${initial.slide}`)
+      const press = async key => {
+        await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)} }))`)
+        await delay(100)
+        return (await state()).slide
+      }
+      for (const [key, expected] of [['PageDown', '02 / 03'], ['PageUp', '01 / 03'], ['ArrowRight', '02 / 03'], ['ArrowLeft', '01 / 03'], ['ArrowDown', '02 / 03'], ['ArrowUp', '01 / 03'], ['Home', '01 / 03'], ['End', '03 / 03']]) {
+        const actual = await press(key)
+        assert(actual?.startsWith(expected), `${key} must navigate to ${expected}: ${actual}`)
+      }
+      await press('2')
+      const numericJump = await press('Enter')
+      assert(numericJump?.startsWith('02 / 03'), `Number plus Enter must jump to slide 2: ${numericJump}`)
+    }
+    assert(process.env.DECKLINE_CAPTURE_SLIDE_PATH, 'Set DECKLINE_CAPTURE_SLIDE_PATH for the browser capture.')
+    await evaluate('document.fonts.ready.then(() => true)')
+    await delay(100)
+    const rect = await evaluate(`(() => { const { x, y, width, height } = document.querySelector('.stage-shell > .slide-host .slide-frame').getBoundingClientRect(); return { x, y, width, height } })()`)
+    assert(rect.width > 0 && rect.height > 0, `The rendered slide frame has no size: ${JSON.stringify(rect)}`)
+    const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { ...rect, scale: 1280 / rect.width } })
+    await writeFile(process.env.DECKLINE_CAPTURE_SLIDE_PATH, Buffer.from(screenshot.data, 'base64'))
+    const glowStyles = await evaluate(`(() => {
+      const shape = document.querySelector('.stage-shell > .slide-host [title="Effect reference 6"]')
+      const text = document.querySelector('.stage-shell > .slide-host [title="Run glow"] .text-run')
+      return { shapeFilter: shape ? getComputedStyle(shape).filter : null, textShadow: text ? getComputedStyle(text).textShadow : null }
+    })()`)
+    console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, shapeCount: initial.shapes.length, glowStyles }))
+    break captureFlow
+  }
+  if (embeddedFontTestPath && !inputPptx) {
+    const loadedFaces = await evaluate(`Array.from(document.fonts).map(face => ({ family: face.family, weight: face.weight, style: face.style, status: face.status }))`)
+    const fixtureFaces = loadedFaces.filter(face => face.family.replace(/^['"]|['"]$/g, '') === 'Deckline Font Runtime Check')
+    assert(fixtureFaces.length === 1 && fixtureFaces[0].weight === '400' && fixtureFaces[0].style === 'normal' && fixtureFaces[0].status === 'loaded', `The embedded TrueType font must be loaded as a usable browser FontFace: ${JSON.stringify({loadedFaces, warnings: initial.warnings})}`)
+    assert(!(initial.warnings || []).some(warning => /Deckline Font Runtime Check.*could not be loaded/i.test(warning)), 'A valid embedded-font fixture must not fall back with a font-load warning.')
+  }
   assert(/^url\(["']?blob:/.test(initial.slideBackground?.image || ''), `An embedded slide background image must resolve to a local blob URL: ${JSON.stringify({ image: initial.slideBackground?.image, error: initial.error, warnings: initial.warnings, upload })}`)
   assert(initial.slideBackground?.size.startsWith('125% 100%'), `A cropped slide background image must scale to its source rectangle: ${initial.slideBackground?.size}`)
   const backgroundLoaded = await evaluate(`new Promise(resolve => {
@@ -943,36 +2143,896 @@ try {
     image.src = source
   })`)
   assert(backgroundLoaded, 'The embedded slide background image must decode in the browser.')
-  if (themeBackgroundOnly) {
+  if (notesOnly) {
+    for (const [number, color] of [[17, 'rgb(136, 68, 204)'], [18, 'rgb(34, 136, 102)']]) {
+      await evaluate(`(() => { for (const key of '${number}') window.dispatchEvent(new KeyboardEvent('keydown', { key })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) })()`)
+      await delay(900)
+      if (number === 17) {
+        const fittingFontExpression = `['Fitting dynamic autofit', 'Fitting autofit reference'].map(name => parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="' + name + '"] .text-run')).fontSize))`
+        const fittingFonts = await evaluate(fittingFontExpression)
+        await delay(250)
+        const stableFonts = await evaluate(fittingFontExpression)
+        assert(fittingFonts[0] === fittingFonts[1] && stableFonts[0] === fittingFonts[0], `Dynamic autofit must preserve already-fitting text without repeatedly shrinking: ${JSON.stringify({ fittingFonts, stableFonts })}`)
+        const ellipseTextRect = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset ellipse text rectangle"]'); const text = host?.querySelector('.text-frame'); if (!host || !text) return null; const style = getComputedStyle(text), frame = host.getBoundingClientRect(); return [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) })()`)
+        const ellipseInset = (1 - Math.SQRT1_2) / 2
+        assert(ellipseTextRect?.every((value, index) => Math.abs(value - [ellipseInset, ellipseInset, Math.SQRT1_2, Math.SQRT1_2][index]) < 0.005), `The ECMA-376 ellipse must use its 45-degree guide text rectangle: ${JSON.stringify(ellipseTextRect)}`)
+        const presetFallbackNames = ['Preset definition circular arrow', 'Preset definition adjusted circular arrow', 'Preset definition ellipse callout', 'Preset definition funnel with adjustment']
+        const presetFallbackShapes = await evaluate(`(${JSON.stringify(presetFallbackNames)}).map(name => { const host = document.querySelector('.stage-shell > .slide-host [title="' + name + '"]'); const paths = [...(host?.querySelectorAll('.custom-geometry path') || [])].map(path => path.getAttribute('d')); const text = host?.querySelector('.text-frame'); const style = text && getComputedStyle(text), frame = host?.getBoundingClientRect(); return { name, paths, textRect: style && frame ? [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) : undefined } })`)
+        const presetFallbackState = await state()
+        const presetFallbackWarnings = presetFallbackState.warnings.filter(warning => /(?:circularArrow|wedgeEllipseCallout|funnel) (?:shape is simplified|geometry path|text rectangle)/.test(warning))
+        assert(presetFallbackShapes.slice(0, 3).every(shape => shape.paths.length > 0 && shape.paths.some(path => path !== 'M 0 0 H 1000 V 1000 H 0 Z') && shape.textRect?.every(Number.isFinite) && shape.textRect[2] > 0 && shape.textRect[3] > 0) && presetFallbackShapes[0].paths[0] !== presetFallbackShapes[1].paths[0] && presetFallbackShapes[3].paths.length > 0 && !presetFallbackWarnings.length, `Unsupported preset geometries must use ECMA-376 paths, merge user adjustments, and apply their guide text rectangles: ${JSON.stringify({ presetFallbackShapes, presetFallbackWarnings, customGeometryWarnings: presetFallbackState.warnings.filter(warning => /custom geometry/i.test(warning)) })}`)
+        if (!inputPptx) {
+          const simplifiedPresetNames = presetGeometryNames.filter(geometry => presetFallbackState.warnings.includes(`The ${geometry} shape is simplified to a rectangle.`))
+          assert(presetGeometryNames.length === 187 && !simplifiedPresetNames.length, `Official preset geometries must not silently fall back to rectangles: ${JSON.stringify({count: presetGeometryNames.length, simplifiedPresetNames})}`)
+          console.log(`Verified all ${presetGeometryNames.length} official preset geometries without rectangle fallback.`)
+          const presetRenderings = await evaluate(`(${JSON.stringify(presetGeometryNames)}).map(geometry => { const title = 'Official preset inventory ' + geometry; const host = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.getAttribute('title') === title); const outlines = [...(host?.querySelectorAll('.custom-geometry path, .preset-outline path, .line-render path, .line-render line') || [])]; return { geometry, found: Boolean(host), hasOutline: outlines.length > 0, emptyPath: outlines.some(outline => outline.localName === 'path' && !outline.getAttribute('d')?.trim()) } })`)
+          const incompletePresetRenderings = presetRenderings.filter(rendering => !rendering.found || !rendering.hasOutline || rendering.emptyPath)
+          assert(presetRenderings.length === 187 && !incompletePresetRenderings.length, `Every official preset must produce a browser vector outline: ${JSON.stringify(incompletePresetRenderings)}`)
+          console.log(`Verified browser vector output for all ${presetRenderings.length} official preset geometries.`)
+          const presetTextLayouts = await evaluate(`(${JSON.stringify(presetGeometryNames)}).map(geometry => { const title = 'Official preset inventory ' + geometry; const host = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.getAttribute('title') === title); const text = host?.querySelector('.text-frame'); const style = text && getComputedStyle(text); const bounds = text?.getBoundingClientRect(); return { geometry, found: Boolean(host), hasText: Boolean(text), position: style?.position, width: bounds?.width, height: bounds?.height, usesGenericGeometry: Boolean(host?.querySelector('.custom-geometry path')) } })`)
+          const officialTextRectNames = new Set(presetTextRectNames)
+          const invalidPresetTextLayouts = presetTextLayouts.filter(layout => !layout.found || !layout.hasText || !Number.isFinite(layout.width) || !Number.isFinite(layout.height) || layout.width <= 0 || layout.height <= 0 || (layout.usesGenericGeometry && officialTextRectNames.has(layout.geometry) && layout.position !== 'absolute'))
+          assert(presetTextLayouts.length === 187 && !invalidPresetTextLayouts.length, `Preset text frames and data-driven guide rectangles must render with valid bounds: ${JSON.stringify(invalidPresetTextLayouts)}`)
+          console.log(`Verified text-frame output for all ${presetTextLayouts.length} official preset geometries.`)
+        }
+        const polygons = await evaluate(`Array.from({ length: 23 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset polygon ' + index + '"]'); const svg = host.querySelector('.preset-outline'); const path = svg.querySelector('path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, clipped: getComputedStyle(host).clipPath, svgBeforeText: Boolean(svg.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING), textRect: [style.left, style.top, style.width, style.height].map(value => parseFloat(value)), hostRect: [host.getBoundingClientRect().width, host.getBoundingClientRect().height] } })`)
+        const polygonPaths = ['M0 1000 L500 0 L1000 1000 Z', 'M0 1000 L250 0 L1000 1000 Z', 'M0 1000 L0 0 L1000 1000 Z', 'M0 1000 L1000 0 L1000 1000 Z', 'M0 1000 L500 0 L1000 1000 Z', 'M0 1000 L0 0 L1000 1000 Z', 'M0 500 L500 0 L1000 500 L500 1000 Z', 'M0 1000 L76.92307692307692 0 H1000 L923.0769230769231 1000 Z', 'M0 500 L76.92307692307692 211.325 H923.0769230769231 L1000 500 L923.0769230769231 788.675 H76.92307692307692 Z', 'M0 0 H846.1538461538462 L1000 500 L846.1538461538462 1000 H0 L153.84615384615384 500 Z', 'M0 1000 L76.92307692307692 0 L923.0769230769231 0 L1000 1000 Z', 'M0 1000 L0 0 L1000 0 L1000 1000 Z', 'M0 1000 L153.84615384615384 0 L846.1538461538462 0 L1000 1000 Z', 'M0 1000 L500 0 L500 0 L1000 1000 Z', 'M0 1000 L76.92307692307692 0 L923.0769230769231 0 L1000 1000 Z', 'M0 292.89 L90.12 0 H909.88 L1000 292.89 V707.11 L909.88 1000 H90.12 L0 707.11 Z', 'M0 0 L0 0 H1000 L1000 0 V1000 L1000 1000 H0 L0 1000 Z', 'M0 500 L153.84615384615384 0 H846.1538461538462 L1000 500 V500 L846.1538461538462 1000 H153.84615384615384 L0 500 Z', 'M0 292.89 L90.12 0 H909.88 L1000 292.89 V707.11 L909.88 1000 H90.12 L0 707.11 Z', 'M0 366.0185185 L133.9814815 133.9814815 L366.0185185 0 H633.9814815 L866.0185185 133.9814815 L1000 366.0185185 V633.9814815 L866.0185185 866.0185185 L633.9814815 1000 H366.0185185 L133.9814815 866.0185185 L0 633.9814815 Z', 'M0.001 381.965 L500 0 L999.999 381.965 L809.016 999.997 L190.984 999.997 Z', 'M-23.081 345.492 L500 0 L1023.081 345.492 L823.282 904.508 L176.718 904.508 Z', 'M0.001 381.965 L500 0 L999.999 381.965 L809.016 999.997 L190.984 999.997 Z']
+        const polygonTextRects = [[0.25, 0.5, 0.5, 0.5], [0.125, 0.5, 0.5, 0.5], [0, 0.5, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5], [0.25, 0.5, 0.5, 0.5], [1 / 12, 7 / 12, 0.5, 1 / 3], [0.25, 0.25, 0.5, 0.5], [0.1153846154, 0.1153846154, 0.7692307692, 0.7692307692], [0.0576923077, 0.0576923077, 0.8846153846, 0.8846153846], [0.1538461538, 0, 0.6923076923, 1], [0.0512820513, 0.0512820513, 0.8974358974, 0.9487179487], [0, 0, 1, 1], [0.1025641026, 0.1025641026, 0.7948717948, 0.8974358974], [1 / 3, 1 / 3, 1 / 3, 2 / 3], [0.0512820513, 0.0512820513, 0.8974358974, 0.9487179487], [0.04506, 0.146445, 0.90988, 0.70711], [0, 0, 1, 1], [0.0769230769, 0.25, 0.8461538462, 0.5], [0.04506, 0.146445, 0.90988, 0.70711], [2894 / 21600, 2894 / 21600, (18706 - 2894) / 21600, (18706 - 2894) / 21600], [0.1909836593, 0.2360673777, 0.6180326814, 0.7639300815], [0.1767181112, 0.2135254916, 0.6465637775, 0.6909830056], [0.1909836593, 0.2360673777, 0.6180326814, 0.7639300815]]
+        const normalizedPath = path => path.replace(/-?\d+(?:\.\d+)?/g, value => {
+          const number = Number(value)
+          const rounded = Math.round((number + 4 * Number.EPSILON * Math.max(1, Math.abs(number))) * 1000) / 1000
+          return rounded.toFixed(3).replace(/\.?0+$/, '').replace(/^-0$/, '0')
+        })
+        assert(polygons.every((polygon, index) => normalizedPath(polygon.d) === normalizedPath(polygonPaths[index]) && polygon.fill === 'rgb(226, 232, 240)' && polygon.stroke.includes('url(') && polygon.clipped === 'none' && polygon.svgBeforeText && polygon.textRect.every((value, axis) => Math.abs(value / polygon.hostRect[axis % 2] - polygonTextRects[index][axis]) < 0.005)), `Preset polygons must render every outline edge, keep text above fill, and use their native text rectangle where implemented: ${JSON.stringify(polygons)}`)
+        const heart = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset heart"]'); const svg = host.querySelector('.preset-outline'); const path = svg.querySelector('path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(svg.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const heartPath = 'M500 250 C708.3333333333334 -333.3333333333333 1520.8333333333333 250 500 1000 C-520.8333333333333 250 291.66666666666663 -333.3333333333333 500 250 Z'
+        assert(normalizedPath(heart.d) === normalizedPath(heartPath) && heart.fill === 'rgb(226, 232, 240)' && heart.stroke.includes('url(') && heart.textRect.every((value, axis) => Math.abs(value - [1 / 6, 1 / 4, 2 / 3, 5 / 12][axis]) < 0.005) && heart.textAfterPath, `The ECMA-376 heart must render both guide-defined Bézier curves, its gradient outline, and its preset text rectangle: ${JSON.stringify(heart)}`)
+        const lightningBolt = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset lightning bolt"]'); const svg = host.querySelector('.preset-outline'); const path = svg.querySelector('path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(svg.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const lightningBoltPath = 'M8472 0 L12860 6080 L11050 6797 L16577 12007 L14767 12877 L21600 21600 L10012 14915 L12222 13987 L5022 9705 L7602 8382 L0 3890 Z'.replace(/(\d+)/g, value => (Number(value) * 1000 / 21600).toString())
+        assert(normalizedPath(lightningBolt.d) === normalizedPath(lightningBoltPath) && lightningBolt.fill === 'rgb(226, 232, 240)' && lightningBolt.stroke.includes('url(') && lightningBolt.textRect.every((value, axis) => Math.abs(value - [8757 / 21600, 7437 / 21600, 5160 / 21600, 6840 / 21600][axis]) < 0.005) && lightningBolt.textAfterPath, `The ECMA-376 lightning bolt must render its eleven preset points, gradient outline, and guide text rectangle: ${JSON.stringify(lightningBolt)}`)
+        const plusShapes = await evaluate(`Array.from({ length: 4 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset plus ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text), hostStyle = getComputedStyle(host); const frame = host.getBoundingClientRect(), box = text.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textBox: [(box.left - frame.left) / frame.width, (box.top - frame.top) / frame.height, box.width / frame.width, box.height / frame.height], textCss: {inline: text.getAttribute('style'), position: style.position, boxSizing: style.boxSizing, left: style.left, top: style.top, width: style.width, height: style.height, padding: style.padding}, hostCss: {inline: host.getAttribute('style'), width: hostStyle.width, height: hostStyle.height, boxSizing: hostStyle.boxSizing, border: hostStyle.borderWidth, padding: hostStyle.padding, transform: hostStyle.transform}, hostClient: [host.clientWidth, host.clientHeight], frame: [frame.width, frame.height], textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const plusPathDefault = 'M0 250 L166.667 250 L166.667 0 L833.333 0 L833.333 250 H1000 V750 H833.333 V1000 H166.667 V750 H0 Z'
+        const plusPathAdjusted = 'M0 400 L266.667 400 L266.667 0 L733.333 0 L733.333 400 H1000 V600 H733.333 V1000 H266.667 V600 H0 Z'
+        const plusPathPortrait = 'M0 166.667 L250 166.667 L250 0 L750 0 L750 166.667 H1000 V833.333 H750 V1000 H250 V833.333 H0 Z'
+        assert(plusShapes.every((shape, index) => normalizedPath(shape.d) === normalizedPath(index === 1 ? plusPathAdjusted : index === 3 ? plusPathPortrait : plusPathDefault) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - (index === 1 ? [0, 0.4, 1, 0.2][axis] : index === 3 ? [0.25, 0, 0.5, 1][axis] : [0, 0.25, 1, 0.5][axis])) < 0.005) && shape.textAfterPath), `The ECMA-376 plus must use guide-defined arms, adjustment, gradient outline, and aspect-ratio-aware text bounds: ${JSON.stringify(plusShapes)}`)
+        assert((await state()).warnings.some(warning => warning.includes('invalid plus adjustment')), 'Invalid plus adjustments must warn and use the preset default.')
+        const mathShapes = await evaluate(`['Preset mathMinus 0', 'Preset mathMinus 1', 'Preset mathEqual 2', 'Preset mathEqual 3', 'Preset mathPlus 4', 'Preset mathPlus 5'].map(title => { const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const mathPaths = [
+          'M132.55 382.4 H867.45 V617.6 H132.55 Z',
+          'M132.55 300 H867.45 V700 H132.55 Z',
+          'M132.55 206 H867.45 V441.2 H132.55 Z M132.55 558.8 H867.45 V794 H132.55 Z',
+          'M132.55 200 H867.45 V450 H132.55 Z M132.55 550 H867.45 V800 H132.55 Z',
+          'M132.55 382.4 L421.6 382.4 L421.6 132.55 L578.4 132.55 L578.4 382.4 L867.45 382.4 L867.45 617.6 L578.4 617.6 L578.4 867.45 L421.6 867.45 L421.6 617.6 L132.55 617.6 Z',
+          'M132.55 300 L366.667 300 L366.667 132.55 L633.333 132.55 L633.333 300 L867.45 300 L867.45 700 L633.333 700 L633.333 867.45 L366.667 867.45 L366.667 700 L132.55 700 Z',
+        ]
+        const mathTextRects = [[0.13255, 0.3824, 0.7349, 0.2352], [0.13255, 0.3, 0.7349, 0.4], [0.13255, 0.206, 0.7349, 0.588], [0.13255, 0.2, 0.7349, 0.6], [0.13255, 0.3824, 0.7349, 0.2352], [0.13255, 0.3, 0.7349, 0.4]]
+        assert(mathShapes.every((shape, index) => normalizedPath(shape.d) === normalizedPath(mathPaths[index]) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - mathTextRects[index][axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /math(?:Minus|Equal|Plus) shape is simplified/.test(warning)), `The ECMA-376 mathematical minus, equal, and plus presets must use their guide-defined paths and text rectangles: ${JSON.stringify(mathShapes)}`)
+        {
+        const mathOperators = await evaluate(`['Preset mathDivide 0', 'Preset mathDivide 1', 'Preset mathMultiply 2', 'Preset mathMultiply 3'].map(title => { const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const width = 600000, height = 400000, shortSide = Math.min(width, height)
+        const sx = value => value / width * 1000, sy = value => value / height * 1000
+        const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+        const divide = (rawAdj1, rawAdj2, rawAdj3) => {
+          const adj1 = Math.max(1000, Math.min(36745, rawAdj1 ?? 23520))
+          const adj3 = Math.max(1000, Math.min(Math.min((73490 + adj1) / 4, 36745 * width / height), rawAdj3 ?? 11760))
+          const adj2 = Math.max(0, Math.min(73490 - 4 * adj3 - adj1, rawAdj2 ?? 5880))
+          const dy1 = height * adj1 / 200000, gap = height * adj2 / 100000, radius = height * adj3 / 100000
+          const y3 = height / 2 - dy1, y4 = height / 2 + dy1, y1 = y3 - gap, y2 = y1 + radius, y5 = height - y1
+          const circle = centerY => `M500 ${sy(centerY - radius)} A${sx(radius)} ${sy(radius)} 0 1 1 500 ${sy(centerY + radius)} A${sx(radius)} ${sy(radius)} 0 1 1 500 ${sy(centerY - radius)} Z`
+          const bar = `M${sx(width / 2 - width * 73490 / 200000)} ${sy(y3)} H${sx(width / 2 + width * 73490 / 200000)} V${sy(y4)} H${sx(width / 2 - width * 73490 / 200000)} Z`
+          return { d: `${circle(y2)} ${circle(y5 - radius)} ${bar}`, textRect: rect(0.13255, y3 / height, 0.86745, y4 / height) }
+        }
+        const multiply = rawAdj1 => {
+          const adj1 = Math.max(0, Math.min(51965, rawAdj1 ?? 23520))
+          const angle = Math.atan2(height, width), tangent = Math.tan(angle)
+          const diagonal = Math.hypot(width, height) * (1 - 0.51965), thickness = shortSide * adj1 / 100000
+          const xM = Math.cos(angle) * diagonal / 2, yM = Math.sin(angle) * diagonal / 2
+          const dx = Math.sin(angle) * thickness / 2, dy = Math.cos(angle) * thickness / 2
+          const xA = xM - dx, yA = yM + dy, xB = xM + dx, yB = yM - dy
+          const yC = (width / 2 - xB) * tangent + yB, xD = width - xB, xE = width - xA
+          const xFE = (height / 2 - yA) / tangent, xF = xE - xFE, xL = xA + xFE
+          const yG = height - yA, yH = height - yB, yI = height - yC
+          const d = `M${sx(xA)} ${sy(yA)} L${sx(xB)} ${sy(yB)} L500 ${sy(yC)} L${sx(xD)} ${sy(yB)} L${sx(xE)} ${sy(yA)} L${sx(xF)} 500 L${sx(xE)} ${sy(yG)} L${sx(xD)} ${sy(yH)} L500 ${sy(yI)} L${sx(xB)} ${sy(yH)} L${sx(xA)} ${sy(yG)} L${sx(xL)} 500 Z`
+          return { d, textRect: rect(xA / width, yB / height, xE / width, yH / height) }
+        }
+        const expectedMathOperators = [divide(), divide(30000, 2000, 10000), multiply(), multiply(60000)]
+        assert(mathOperators.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedMathOperators[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expectedMathOperators[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /math(?:Divide|Multiply) shape is simplified/.test(warning)), `The ECMA-376 math divide and multiply presets must use their guide-defined paths, adjustment limits, and text rectangles: ${JSON.stringify(mathOperators)}`)
+        }
+        {
+        const notEqualShapes = await evaluate(`['Preset mathNotEqual 0', 'Preset mathNotEqual 1', 'Preset mathNotEqual 2'].map(title => { const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const width = 600000, height = 400000
+        const sx = value => value / width * 1000, sy = value => value / height * 1000
+        const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+        const notEqual = (rawAdj1, rawAdj2, rawAdj3) => {
+          const adj1 = Math.max(0, Math.min(50000, rawAdj1 ?? 23520))
+          const adjustedAngle = Math.max(4200000, Math.min(6600000, rawAdj2 ?? 6600000)) - 5400000
+          const adj3 = Math.max(0, Math.min(100000 - 2 * adj1, rawAdj3 ?? 11760))
+          const halfHeight = height / 2, dy1 = height * adj1 / 100000, dy2 = height * adj3 / 200000
+          const x1 = width / 2 - width * 73490 / 200000, x8 = width / 2 + width * 73490 / 200000
+          const y2 = halfHeight - dy2, y3 = halfHeight + dy2, y1 = y2 - dy1, y4 = y3 + dy1
+          const xAdj = halfHeight * Math.tan(adjustedAngle / 60000 * Math.PI / 180), length = Math.hypot(xAdj, halfHeight)
+          const barHalfWidth = length * dy1 / halfHeight / 2, x7 = width / 2 + xAdj - barHalfWidth
+          const x6 = x7 - xAdj * y1 / halfHeight, x5 = x7 - xAdj * y2 / halfHeight
+          const x4 = x7 - xAdj * y3 / halfHeight, x3 = x7 - xAdj * y4 / halfHeight
+          const rx7 = x7 - barHalfWidth, rx6 = x6 - barHalfWidth
+          const rx5 = x5 - barHalfWidth, rx4 = x4 - barHalfWidth, rx3 = x3 - barHalfWidth
+          const dx7 = dy1 * halfHeight / length, dy3 = dy1 * xAdj / length
+          const rx = adjustedAngle > 0 ? x7 + dx7 : rx7, lx = adjustedAngle > 0 ? x7 : rx7 - dx7
+          const ry = adjustedAngle > 0 ? dy3 : 0, ly = adjustedAngle > 0 ? 0 : -dy3
+          const dlx = width - rx, drx = width - lx, dly = height - ry, dry = height - ly
+          const d = `M${sx(x1)} ${sy(y1)} L${sx(x6)} ${sy(y1)} L${sx(lx)} ${sy(ly)} L${sx(rx)} ${sy(ry)} L${sx(rx6)} ${sy(y1)} L${sx(x8)} ${sy(y1)} L${sx(x8)} ${sy(y2)} L${sx(rx5)} ${sy(y2)} L${sx(rx4)} ${sy(y3)} L${sx(x8)} ${sy(y3)} L${sx(x8)} ${sy(y4)} L${sx(rx3)} ${sy(y4)} L${sx(drx)} ${sy(dry)} L${sx(dlx)} ${sy(dly)} L${sx(x3)} ${sy(y4)} L${sx(x1)} ${sy(y4)} L${sx(x1)} ${sy(y3)} L${sx(x4)} ${sy(y3)} L${sx(x5)} ${sy(y2)} L${sx(x1)} ${sy(y2)} Z`
+          return { d, textRect: rect(x1 / width, y1 / height, x8 / width, y4 / height) }
+        }
+        const expectedNotEqual = [notEqual(), notEqual(30000, 4200000, 10000), notEqual(90000, 8000000, 100000)]
+        assert(notEqualShapes.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedNotEqual[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expectedNotEqual[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /mathNotEqual shape is simplified/.test(warning)), `The ECMA-376 math not-equal preset must use its angle-dependent guide path, clamped adjustments, and matching text rectangles: ${JSON.stringify(notEqualShapes)}`)
+        }
+        const snippedRectangles = await evaluate(`['Preset snip1Rect 0', 'Preset snip1Rect 1', 'Preset snip2DiagRect 2', 'Preset snip2DiagRect 3', 'Preset snip2SameRect 4', 'Preset snip2SameRect 5'].map(title => { const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const boxWidth = 600000, boxHeight = 400000, shortSide = Math.min(boxWidth, boxHeight)
+        const sx = value => value / boxWidth * 1000, sy = value => value / boxHeight * 1000
+        const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+        const snip1Paths = [16667, 30000].map(adj => {
+          const cut = shortSide * adj / 100000
+          return 'M0 0 H' + sx(boxWidth - cut) + ' L1000 ' + sy(cut) + ' V1000 H0 Z'
+        })
+        const diagPath = (topLeftCut, bottomRightCut) => 'M' + sx(topLeftCut) + ' 0 L' + sx(boxWidth - bottomRightCut) + ' 0 L1000 ' + sy(bottomRightCut) + ' L1000 ' + sy(boxHeight - topLeftCut) + ' L' + sx(boxWidth - topLeftCut) + ' 1000 L' + sx(bottomRightCut) + ' 1000 L0 ' + sy(boxHeight - bottomRightCut) + ' L0 ' + sy(topLeftCut) + ' Z'
+        const sameSidePath = (topCut, bottomCut) => 'M' + sx(topCut) + ' 0 L' + sx(boxWidth - topCut) + ' 0 L1000 ' + sy(topCut) + ' L1000 ' + sy(boxHeight - bottomCut) + ' L' + sx(boxWidth - bottomCut) + ' 1000 L' + sx(bottomCut) + ' 1000 L0 ' + sy(boxHeight - bottomCut) + ' L0 ' + sy(topCut) + ' Z'
+        const diagCuts = [[0, 16667], [25000, 10000]].map(([a1, a2]) => [shortSide * a1 / 100000, shortSide * a2 / 100000])
+        const sameCuts = [[16667, 0], [25000, 10000]].map(([a1, a2]) => [shortSide * a1 / 100000, shortSide * a2 / 100000])
+        const snippedPaths = [...snip1Paths, ...diagCuts.map(([a1, a2]) => diagPath(a1, a2)), ...sameCuts.map(([a1, a2]) => sameSidePath(a1, a2))]
+        const snippedTextRects = [
+          ...[16667, 30000].map(adj => { const cut = shortSide * adj / 100000; return rect(0, cut / 2 / boxHeight, 1 - cut / 2 / boxWidth, 1) }),
+          ...diagCuts.map(([a1, a2]) => { const inset = Math.max(a1, a2) / 2; return rect(inset / boxWidth, inset / boxHeight, 1 - inset / boxWidth, 1 - inset / boxHeight) }),
+          ...sameCuts.map(([topCut, bottomCut]) => { const inset = Math.max(topCut, bottomCut) / 2; return rect(inset / boxWidth, topCut / 2 / boxHeight, 1 - inset / boxWidth, 1 - bottomCut / 2 / boxHeight) }),
+        ]
+        assert(snippedRectangles.every((shape, index) => normalizedPath(shape.d) === normalizedPath(snippedPaths[index]) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - snippedTextRects[index][axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /snip(?:1Rect|2DiagRect|2SameRect) shape is simplified/.test(warning)), `The ECMA-376 snipped-rectangle presets must use their adjusted corner cuts and matching text rectangles: ${JSON.stringify(snippedRectangles)}`)
+        {
+          const roundedSnippedRectangles = await evaluate(`Array.from({ length: 8 }, (_, index) => { const title = ['Preset round1Rect 0', 'Preset round1Rect 1', 'Preset round2DiagRect 2', 'Preset round2DiagRect 3', 'Preset round2SameRect 4', 'Preset round2SameRect 5', 'Preset snipRoundRect 6', 'Preset snipRoundRect 7'][index]; const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+          const width = 600000, height = 400000, shortSide = Math.min(width, height)
+          const sx = value => value / width * 1000, sy = value => value / height * 1000
+          const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+          const rounded1 = adjustment => {
+            const radius = shortSide * adjustment / 100000
+            return { d: `M0 0 L${sx(width - radius)} 0 A${sx(radius)} ${sy(radius)} 0 0 1 1000 ${sy(radius)} L1000 1000 H0 Z`, textRect: rect(0, 0, 1 - radius * 0.29289 / width, 1) }
+          }
+          const rounded2Diag = (adj1, adj2) => {
+            const radius1 = shortSide * adj1 / 100000, radius2 = shortSide * adj2 / 100000
+            const d = `M${sx(radius1)} 0 L${sx(width - radius2)} 0 A${sx(radius2)} ${sy(radius2)} 0 0 1 1000 ${sy(radius2)} L1000 ${sy(height - radius1)} A${sx(radius1)} ${sy(radius1)} 0 0 1 ${sx(width - radius1)} 1000 L${sx(radius2)} 1000 A${sx(radius2)} ${sy(radius2)} 0 0 1 0 ${sy(height - radius2)} L0 ${sy(radius1)} A${sx(radius1)} ${sy(radius1)} 0 0 1 ${sx(radius1)} 0 Z`
+            const inset = Math.max(radius1, radius2) * 0.29289
+            return { d, textRect: rect(inset / width, inset / height, 1 - inset / width, 1 - inset / height) }
+          }
+          const rounded2Same = (adj1, adj2) => {
+            const topRadius = shortSide * adj1 / 100000, bottomRadius = shortSide * adj2 / 100000
+            const d = `M${sx(topRadius)} 0 L${sx(width - topRadius)} 0 A${sx(topRadius)} ${sy(topRadius)} 0 0 1 1000 ${sy(topRadius)} L1000 ${sy(height - bottomRadius)} A${sx(bottomRadius)} ${sy(bottomRadius)} 0 0 1 ${sx(width - bottomRadius)} 1000 L${sx(bottomRadius)} 1000 A${sx(bottomRadius)} ${sy(bottomRadius)} 0 0 1 0 ${sy(height - bottomRadius)} L0 ${sy(topRadius)} A${sx(topRadius)} ${sy(topRadius)} 0 0 1 ${sx(topRadius)} 0 Z`
+            const topInset = topRadius * 0.29289, bottomInset = bottomRadius * 0.29289, sideInset = Math.max(topInset, bottomInset)
+            return { d, textRect: rect(sideInset / width, topInset / height, 1 - sideInset / width, 1 - bottomInset / height) }
+          }
+          const snipRound = (adj1, adj2) => {
+            const radius = shortSide * adj1 / 100000, cut = shortSide * adj2 / 100000
+            return { d: `M${sx(radius)} 0 L${sx(width - cut)} 0 L1000 ${sy(cut)} L1000 1000 H0 L0 ${sy(radius)} A${sx(radius)} ${sy(radius)} 0 0 1 ${sx(radius)} 0 Z`, textRect: rect(radius * 0.29289 / width, radius * 0.29289 / height, (width - cut / 2) / width, 1) }
+          }
+          const expected = [rounded1(16667), rounded1(30000), rounded2Diag(16667, 0), rounded2Diag(25000, 10000), rounded2Same(16667, 0), rounded2Same(25000, 10000), snipRound(16667, 16667), snipRound(30000, 10000)]
+          assert(roundedSnippedRectangles.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expected[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expected[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /(?:round1Rect|round2DiagRect|round2SameRect|snipRoundRect) shape is simplified/.test(warning)), `The ECMA-376 rounded and snipped rectangle presets must use guide-defined paths and matching text rectangles: ${JSON.stringify(roundedSnippedRectangles)}`)
+        }
+        {
+          const cubes = await evaluate(`Array.from({ length: 3 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset cube ' + index + '"]'); const paths = [...host.querySelectorAll('.preset-outline path')]; const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { paths: paths.map(path => path.getAttribute('d')), fill: getComputedStyle(paths[0]).fill, strokes: paths.slice(1).map(path => getComputedStyle(path).stroke), textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(paths[0].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+          const width = 600000, height = 400000, shortSide = Math.min(width, height)
+          const sx = value => value / width * 1000, sy = value => value / height * 1000
+          const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+          const expectedCubes = [25000, 50000, 100000].map(adjustment => {
+            const inset = shortSide * adjustment / 100000, right = width - inset, bottom = height - inset
+            const outline = `M0 ${sy(inset)} L${sx(inset)} 0 H1000 V${sy(bottom)} L${sx(right)} 1000 H0 Z`
+            return { paths: [outline, outline, `M0 ${sy(inset)} L${sx(right)} ${sy(inset)} L1000 0`, `M${sx(right)} ${sy(inset)} L${sx(right)} 1000`], textRect: rect(0, inset / height, right / width, 1) }
+          })
+          assert(cubes.every((cube, index) => cube.paths.length === 4 && cube.paths.every((path, pathIndex) => normalizedPath(path) === normalizedPath(expectedCubes[index].paths[pathIndex])) && cube.fill === 'rgb(226, 232, 240)' && cube.strokes.length === 3 && cube.strokes.every(stroke => stroke.includes('url(')) && cube.textRect.every((value, axis) => Math.abs(value - expectedCubes[index].textRect[axis]) < 0.005) && cube.textAfterPath) && !(await state()).warnings.some(warning => /cube shape is simplified/.test(warning)), `The ECMA-376 cube preset must preserve its clamped inset, visible faces, gradient outline, and text rectangle: ${JSON.stringify(cubes)}`)
+        }
+        {
+          const plaques = await evaluate(`Array.from({ length: 3 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset plaque ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+          const width = 600000, height = 400000, shortSide = Math.min(width, height)
+          const sx = value => value / width * 1000, sy = value => value / height * 1000
+          const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+          const expectedPlaques = [16667, 33333, 50000].map(adjustment => {
+            const radius = shortSide * adjustment / 100000, inset = radius * 0.70711
+            return { d: `M0 ${sy(radius)} A${sx(radius)} ${sy(radius)} 0 0 1 ${sx(radius)} 0 L${sx(width - radius)} 0 A${sx(radius)} ${sy(radius)} 0 0 1 1000 ${sy(radius)} L1000 ${sy(height - radius)} A${sx(radius)} ${sy(radius)} 0 0 1 ${sx(width - radius)} 1000 L${sx(radius)} 1000 A${sx(radius)} ${sy(radius)} 0 0 1 0 ${sy(height - radius)} Z`, textRect: rect(inset / width, inset / height, 1 - inset / width, 1 - inset / height) }
+          })
+          assert(plaques.every((plaque, index) => normalizedPath(plaque.d) === normalizedPath(expectedPlaques[index].d) && plaque.fill === 'rgb(226, 232, 240)' && plaque.stroke.includes('url(') && plaque.textRect.every((value, axis) => Math.abs(value - expectedPlaques[index].textRect[axis]) < 0.005) && plaque.textAfterPath) && !(await state()).warnings.some(warning => /plaque shape is simplified/.test(warning)), `The ECMA-376 plaque preset must preserve its rounded-corner guide path, clamped adjustment, gradient outline, and text rectangle: ${JSON.stringify(plaques)}`)
+        }
+        {
+          const framing = await evaluate(`Array.from({ length: 4 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset ' + (index < 2 ? 'frame' : 'halfFrame') + ' ' + index + '"]'); const paths = [...host.querySelectorAll('.preset-outline path')]; const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const box = host.getBoundingClientRect(); return { paths: paths.map(path => path.getAttribute('d')), fill: getComputedStyle(paths[0]).fill, strokes: paths.map(path => getComputedStyle(path).stroke).filter(stroke => stroke !== 'none'), centerFilled: paths[0].isPointInFill(new DOMPoint(500, 500)), borderFilled: paths[0].isPointInFill(new DOMPoint(10, 10)), textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? box.height : box.width)), textAfterPath: Boolean(paths[0].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+          const width = 600000, height = 400000, shortSide = Math.min(width, height)
+          const sx = value => value / width * 1000, sy = value => value / height * 1000
+          const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+          const expectedFrame = adjustment => {
+            const inset = shortSide * adjustment / 100000
+            const outline = `M0 0 H1000 V1000 H0 Z M${sx(inset)} ${sy(inset)} V${sy(height - inset)} H${sx(width - inset)} V${sy(inset)} Z`
+            return { paths: [outline, outline], textRect: rect(inset / width, inset / height, 1 - inset / width, 1 - inset / height) }
+          }
+          const expectedHalfFrame = (rawAdj1, rawAdj2) => {
+            const adj2 = Math.max(0, Math.min(100000 * width / shortSide, rawAdj2 ?? 33333))
+            const x1 = shortSide * adj2 / 100000
+            const maxAdj1 = 100000 * (height - height * x1 / width) / shortSide
+            const adj1 = Math.max(0, Math.min(maxAdj1, rawAdj1 ?? 33333))
+            const y1 = shortSide * adj1 / 100000
+            const x2 = width - y1 * width / height
+            const y2 = height - x1 * height / width
+            return { paths: [`M0 0 H1000 L${sx(x2)} ${sy(y1)} L${sx(x1)} ${sy(y1)} L${sx(x1)} ${sy(y2)} Z`], textRect: rect(0, 0, 1, 1) }
+          }
+          const expected = [expectedFrame(12500), expectedFrame(50000), expectedHalfFrame(), expectedHalfFrame(50000, 80000)]
+          assert(framing.every((shape, index) => shape.paths.length === expected[index].paths.length && shape.paths.every((path, pathIndex) => normalizedPath(path) === normalizedPath(expected[index].paths[pathIndex])) && shape.fill === 'rgb(226, 232, 240)' && shape.strokes.length === 1 && shape.strokes[0].includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expected[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !framing[0].centerFilled && framing[0].borderFilled && !(await state()).warnings.some(warning => /(?:frame|halfFrame) shape is simplified/.test(warning)), `The ECMA-376 frame and half-frame presets must preserve the hollow frame, aspect-aware guide limits, outlines, and text rectangles: ${JSON.stringify(framing)}`)
+        }
+        {
+        const guidePolygons = await evaluate(`['Preset homePlate 0', 'Preset homePlate 1', 'Preset homePlate 2', 'Preset nonIsoscelesTrapezoid 3', 'Preset nonIsoscelesTrapezoid 4', 'Preset heptagon 5', 'Preset decagon 6'].map(title => { const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const width = 600000, height = 400000, shortSide = Math.min(width, height)
+        const sx = value => value / width * 1000, sy = value => value / height * 1000
+        const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+        const homePlate = adjustment => {
+          const adj = Math.max(0, Math.min(50000 * width / shortSide, adjustment))
+          const cut = shortSide * adj / 100000
+          const x = sx(width - cut)
+          return { d: `M0 0 L${x} 0 L1000 500 L${x} 1000 L0 1000 Z`, textRect: rect(0, 0, (width - cut / 2) / width, 1) }
+        }
+        const nonIsoscelesTrapezoid = (adj1, adj2) => {
+          const maxAdj = 50000 * width / shortSide
+          const a1 = Math.max(0, Math.min(maxAdj, adj1)), a2 = Math.max(0, Math.min(maxAdj, adj2))
+          const leftTop = shortSide * a1 / 100000, rightTop = width - shortSide * a2 / 100000
+          const insetX1 = width / 3 * a1 / maxAdj, insetX2 = width / 3 * a2 / maxAdj
+          const insetY = height / 3 * Math.max(a1, a2) / maxAdj
+          return { d: `M0 1000 L${sx(leftTop)} 0 L${sx(rightTop)} 0 L1000 1000 Z`, textRect: rect(insetX1 / width, insetY / height, 1 - insetX2 / width, 1) }
+        }
+        const halfWidth = width / 2 * 102572 / 100000, halfHeight = height / 2 * 105210 / 100000
+        const dx1 = halfWidth * 97493 / 100000, dx2 = halfWidth * 78183 / 100000, dx3 = halfWidth * 43388 / 100000
+        const hy1 = halfHeight - halfHeight * 62349 / 100000, hy2 = halfHeight + halfHeight * 22252 / 100000, hy3 = halfHeight + halfHeight * 90097 / 100000
+        const heptagon = { d: `M${sx(width / 2 - dx1)} ${sy(hy2)} L${sx(width / 2 - dx2)} ${sy(hy1)} L500 0 L${sx(width / 2 + dx2)} ${sy(hy1)} L${sx(width / 2 + dx1)} ${sy(hy2)} L${sx(width / 2 + dx3)} ${sy(hy3)} L${sx(width / 2 - dx3)} ${sy(hy3)} Z`, textRect: rect((width / 2 - dx2) / width, hy1 / height, (width / 2 + dx2) / width, (height - hy1) / height) }
+        const decagonHalfHeight = height / 2 * 105146 / 100000
+        const ddx1 = width / 2 * Math.cos(Math.PI / 5), ddx2 = width / 2 * Math.cos(2 * Math.PI / 5)
+        const ddy1 = decagonHalfHeight * Math.sin(2 * Math.PI / 5), ddy2 = decagonHalfHeight * Math.sin(Math.PI / 5)
+        const decagon = { d: `M0 500 L${sx(width / 2 - ddx1)} ${sy(height / 2 - ddy2)} L${sx(width / 2 - ddx2)} ${sy(height / 2 - ddy1)} L${sx(width / 2 + ddx2)} ${sy(height / 2 - ddy1)} L${sx(width / 2 + ddx1)} ${sy(height / 2 - ddy2)} L1000 500 L${sx(width / 2 + ddx1)} ${sy(height / 2 + ddy2)} L${sx(width / 2 + ddx2)} ${sy(height / 2 + ddy1)} L${sx(width / 2 - ddx2)} ${sy(height / 2 + ddy1)} L${sx(width / 2 - ddx1)} ${sy(height / 2 + ddy2)} Z`, textRect: rect((width / 2 - ddx1) / width, (height / 2 - ddy2) / height, (width / 2 + ddx1) / width, (height / 2 + ddy2) / height) }
+        const guidePolygonExpected = [homePlate(50000), homePlate(30000), homePlate(90000), nonIsoscelesTrapezoid(25000, 25000), nonIsoscelesTrapezoid(80000, 10000), heptagon, decagon]
+        assert(guidePolygons.every((shape, index) => normalizedPath(shape.d) === normalizedPath(guidePolygonExpected[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - guidePolygonExpected[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /(?:homePlate|nonIsoscelesTrapezoid|heptagon|decagon) shape is simplified/.test(warning)), `The ECMA-376 home-plate, non-isosceles-trapezoid, heptagon, and decagon presets must use guide-defined paths and text rectangles: ${JSON.stringify(guidePolygons)}`)
+         const cloud = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset cloud 11"]'); const paths = [...host.querySelectorAll('.custom-geometry path')]; const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { paths: paths.map(path => ({ d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke })), textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(paths[0].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+         const cloudTextRect = [2977 / 21600, 3262 / 21600, (17087 - 2977) / 21600, (17337 - 3262) / 21600]
+         assert(cloud.paths.length === 2 && cloud.paths.every(path => path.d.includes('A') && path.stroke.includes('url(')) && cloud.paths[0].fill === 'rgb(226, 232, 240)' && cloud.paths[1].fill === 'none' && cloud.textRect.every((value, axis) => Math.abs(value - cloudTextRect[axis]) < 0.005) && cloud.textAfterPath && !(await state()).warnings.some(warning => warning.includes('cloud shape is simplified')), `The ECMA-376 cloud preset must render its two paths, open contour, and guide text rectangle: ${JSON.stringify(cloud)}`)
+        {
+          const adjustmentTextRects = await evaluate(`['Preset parallelogram 7', 'Preset parallelogram 8', 'Preset trapezoid 9', 'Preset trapezoid 10'].map(title => { const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return [parseFloat(style.left) / frame.width, parseFloat(style.top) / frame.height, parseFloat(style.width) / frame.width, parseFloat(style.height) / frame.height] })`)
+          const width = 600000, shortSide = 400000
+          const rect = (left, top, right, bottom) => [left, top, right - left, bottom - top]
+          const parallelogram = adjustment => {
+            const maxAdj = 100000 * width / shortSide
+            const inset = (1 + 5 * Math.min(maxAdj, adjustment) / maxAdj) / 12
+            return rect(inset, inset, 1 - inset, 1 - inset)
+          }
+          const trapezoid = adjustment => {
+            const maxAdj = 50000 * width / shortSide
+            const inset = Math.min(maxAdj, adjustment) / (3 * maxAdj)
+            return rect(inset, inset, 1 - inset, 1)
+          }
+          const expected = [parallelogram(25000), parallelogram(70000), trapezoid(25000), trapezoid(40000)]
+          assert(adjustmentTextRects.every((actual, index) => actual.every((value, axis) => Math.abs(value - expected[index][axis]) < 0.005)) && !(await state()).warnings.some(warning => /(?:parallelogram|trapezoid) shape is simplified/.test(warning)), `ECMA-376 parallelogram and trapezoid text rectangles must follow their adjustment guides: ${JSON.stringify(adjustmentTextRects)}`)
+        }
+        }
+        const leftRightArrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset left-right arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const expectedTabCases = [['cornerTabs', 600000, 400000], ['cornerTabs', 900000, 400000], ['squareTabs', 600000, 400000], ['squareTabs', 400000, 600000]]
+        const actualTabShapes = await evaluate("['cornerTabs', 'cornerTabs', 'squareTabs', 'squareTabs'].map((geometry, index) => { const title = 'Preset ' + geometry + ' ' + index; const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === title); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })")
+        const expectedTabShapes = expectedTabCases.map(([geometry, width, height]) => {
+          const inset = Math.hypot(width, height) / 20
+          const x = value => value / width * 1000, y = value => value / height * 1000
+          const leftInset = x(inset), topInset = y(inset), rightInset = x(width - inset), bottomInset = y(height - inset)
+          const d = geometry === 'cornerTabs'
+            ? ['M0 0 L' + leftInset + ' 0 L0 ' + topInset + ' Z', 'M0 ' + bottomInset + ' L' + leftInset + ' 1000 L0 1000 Z', 'M' + rightInset + ' 0 L1000 0 L1000 ' + topInset + ' Z', 'M1000 ' + bottomInset + ' L1000 1000 L' + rightInset + ' 1000 Z'].join(' ')
+            : ['M0 0 L' + leftInset + ' 0 L' + leftInset + ' ' + topInset + ' L0 ' + topInset + ' Z', 'M0 ' + bottomInset + ' L' + leftInset + ' ' + bottomInset + ' L' + leftInset + ' 1000 L0 1000 Z', 'M' + rightInset + ' 0 L1000 0 L1000 ' + topInset + ' L' + rightInset + ' ' + topInset + ' Z', 'M' + rightInset + ' ' + bottomInset + ' L1000 ' + bottomInset + ' L1000 1000 L' + rightInset + ' 1000 Z'].join(' ')
+          return { d, textRect: [inset / width, inset / height, 1 - 2 * inset / width, 1 - 2 * inset / height] }
+        })
+        assert(actualTabShapes.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedTabShapes[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expectedTabShapes[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /(?:cornerTabs|squareTabs) shape is simplified/.test(warning)), `The ECMA-376 corner-tabs and square-tabs presets must preserve aspect-aware tab paths, gradient outlines, and text rectangles: ${JSON.stringify(actualTabShapes)}`)
+        const actualPlaqueTabs = await evaluate("['Preset plaqueTabs 4', 'Preset plaqueTabs 5'].map(title => { const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === title); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })")
+        const expectedPlaqueTabs = [[600000, 400000], [900000, 400000]].map(([width, height]) => {
+          const inset = Math.hypot(width, height) / 20
+          const x = value => value / width * 1000, y = value => value / height * 1000
+          const leftInset = x(inset), topInset = y(inset), rightInset = x(width - inset), bottomInset = y(height - inset)
+          const d = ['M0 0 L' + leftInset + ' 0 A' + leftInset + ' ' + topInset + ' 0 0 1 0 ' + topInset + ' Z', 'M0 ' + bottomInset + ' A' + leftInset + ' ' + topInset + ' 0 0 1 ' + leftInset + ' 1000 L0 1000 Z', 'M1000 0 L1000 ' + topInset + ' A' + leftInset + ' ' + topInset + ' 0 0 1 ' + rightInset + ' 0 Z', 'M' + rightInset + ' 1000 A' + leftInset + ' ' + topInset + ' 0 0 1 1000 ' + bottomInset + ' L1000 1000 Z'].join(' ')
+          return { d, textRect: [inset / width, inset / height, 1 - 2 * inset / width, 1 - 2 * inset / height] }
+        })
+        assert(actualPlaqueTabs.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedPlaqueTabs[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expectedPlaqueTabs[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /plaqueTabs shape is simplified/.test(warning)), `The ECMA-376 plaque-tabs preset must preserve its four quarter-circle arcs, gradient outlines, and text rectangles: ${JSON.stringify(actualPlaqueTabs)}`)
+        const actualDonuts = await evaluate("Array.from({ length: 3 }, (_, index) => { const title = 'Preset donut ' + index; const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === title); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING), holeFilled: path.isPointInFill({ x: 500, y: 500 }), ringFilled: path.isPointInFill({ x: 500, y: 50 }) } })")
+        const expectedDonuts = [[600000, 400000, 25000], [900000, 400000, 40000], [600000, 400000, 50000]].map(([width, height, adjustment]) => {
+          const inset = Math.min(width, height) * adjustment / 100000
+          const innerRx = (width / 2 - inset) / width * 1000, innerRy = (height / 2 - inset) / height * 1000
+          const inner = innerRx > 0 && innerRy > 0 ? 'M' + inset / width * 1000 + ' 500 A' + innerRx + ' ' + innerRy + ' 0 0 0 500 ' + (500 + innerRy) + ' A' + innerRx + ' ' + innerRy + ' 0 0 0 ' + (1000 - inset / width * 1000) + ' 500 A' + innerRx + ' ' + innerRy + ' 0 0 0 500 ' + (500 - innerRy) + ' A' + innerRx + ' ' + innerRy + ' 0 0 0 ' + inset / width * 1000 + ' 500 Z' : ''
+          return { d: 'M0 500 A500 500 0 0 1 500 0 A500 500 0 0 1 1000 500 A500 500 0 0 1 500 1000 A500 500 0 0 1 0 500 Z ' + inner, textRect: [(1 - Math.SQRT1_2) / 2, (1 - Math.SQRT1_2) / 2, Math.SQRT1_2, Math.SQRT1_2], holeFilled: adjustment === 50000, ringFilled: true }
+        })
+        assert(actualDonuts.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedDonuts[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expectedDonuts[index].textRect[axis]) < 0.005) && shape.textAfterPath && shape.holeFilled === expectedDonuts[index].holeFilled && shape.ringFilled === expectedDonuts[index].ringFilled) && !(await state()).warnings.some(warning => /donut shape is simplified/.test(warning)), `The ECMA-376 donut preset must preserve the elliptical ring, adjustment endpoints, text rectangle, and transparent hole: ${JSON.stringify(actualDonuts)}`)
+        const actualPieWedges = await evaluate("Array.from({ length: 2 }, (_, index) => { const title = 'Preset pieWedge ' + index; const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === title); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING), centerFilled: path.isPointInFill({ x: 500, y: 500 }), cornerFilled: path.isPointInFill({ x: 100, y: 100 }) } })")
+        const pieWedgeTextInset = 1 - Math.SQRT1_2
+        assert(actualPieWedges.every(shape => normalizedPath(shape.d) === normalizedPath('M0 1000 A1000 1000 0 0 1 1000 0 L1000 1000 Z') && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - [pieWedgeTextInset, pieWedgeTextInset, Math.SQRT1_2, Math.SQRT1_2][axis]) < 0.005) && shape.textAfterPath && shape.centerFilled && !shape.cornerFilled) && !(await state()).warnings.some(warning => /pieWedge shape is simplified/.test(warning)), `The ECMA-376 pie-wedge preset must preserve its arc, lower-right text rectangle, gradient outline, and fill region at multiple aspect ratios: ${JSON.stringify(actualPieWedges)}`)
+        const fullPieTurn = 21600000
+        const piePointAtAngle = (width, height, angle) => {
+          const radians = angle * Math.PI / 10800000
+          const ellipseAngle = Math.atan2(width * Math.sin(radians), height * Math.cos(radians))
+          return [500 + 500 * Math.cos(ellipseAngle), 500 + 500 * Math.sin(ellipseAngle)]
+        }
+        const expectedPies = pieCases.map(([width, height, rawStart, rawEnd]) => {
+          const start = Math.max(0, Math.min(fullPieTurn - 1, rawStart ?? 0))
+          const end = Math.max(0, Math.min(fullPieTurn - 1, rawEnd ?? 16200000))
+          let sweep = end - start
+          if (sweep <= 0) sweep += fullPieTurn
+          const startPoint = piePointAtAngle(width, height, start)
+          const midpoint = piePointAtAngle(width, height, start + sweep / 2)
+          const inside = [500 + (midpoint[0] - 500) / 2, 500 + (midpoint[1] - 500) / 2]
+          const outsidePoint = sweep === fullPieTurn ? [100, 100] : piePointAtAngle(width, height, start + sweep / 2 + fullPieTurn / 2)
+          const outside = sweep === fullPieTurn ? outsidePoint : [500 + (outsidePoint[0] - 500) / 2, 500 + (outsidePoint[1] - 500) / 2]
+          const endPoint = piePointAtAngle(width, height, end)
+          const d = sweep === fullPieTurn
+            ? `M${startPoint[0]} ${startPoint[1]} A500 500 0 0 1 ${midpoint[0]} ${midpoint[1]} A500 500 0 0 1 ${startPoint[0]} ${startPoint[1]} L500 500 Z`
+            : `M${startPoint[0]} ${startPoint[1]} A500 500 0 ${sweep > fullPieTurn / 2 ? 1 : 0} 1 ${endPoint[0]} ${endPoint[1]} L500 500 Z`
+          return {d, inside, outside}
+        })
+        const pieProbes = JSON.stringify(expectedPies.map(({ inside, outside }) => ({ inside, outside })))
+        const actualPies = await evaluate(`(() => {
+          const probes = ${pieProbes}
+          return Array.from({ length: ${pieCases.length} }, (_, index) => {
+            const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === 'Preset pie ' + index)
+            const path = host.querySelector('.preset-outline path')
+            const text = host.querySelector('.text-frame')
+            const style = getComputedStyle(text), frame = host.getBoundingClientRect()
+            return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING), inside: path.isPointInFill({ x: probes[index].inside[0], y: probes[index].inside[1] }), outside: path.isPointInFill({ x: probes[index].outside[0], y: probes[index].outside[1] }) }
+          })
+        })()`)
+        const pieTextInset = (1 - Math.SQRT1_2) / 2
+        assert(actualPies.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedPies[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - [pieTextInset, pieTextInset, Math.SQRT1_2, Math.SQRT1_2][axis]) < 0.005) && shape.textAfterPath && shape.inside && !shape.outside) && !(await state()).warnings.some(warning => /pie shape is simplified/.test(warning)), `The ECMA-376 pie preset must preserve its adjustable ellipse arc, text rectangle, gradient outline, and sector fill at wide and tall aspect ratios: ${JSON.stringify(actualPies)}`)
+        assert((await state()).warnings.some(warning => /pie adjustment adj1 was constrained/.test(warning)) && (await state()).warnings.some(warning => /pie adjustment adj2 was constrained/.test(warning)), 'Out-of-range pie adjustments must be clamped to the official angle range and reported.')
+        const expectedChords = chordCases.map(([width, height, rawStart, rawEnd]) => {
+          const start = Math.max(0, Math.min(fullPieTurn - 1, rawStart ?? 2700000))
+          const end = Math.max(0, Math.min(fullPieTurn - 1, rawEnd ?? 16200000))
+          let sweep = end - start
+          if (sweep <= 0) sweep += fullPieTurn
+          const startPoint = piePointAtAngle(width, height, start)
+          const midpoint = piePointAtAngle(width, height, start + sweep / 2)
+          const endPoint = piePointAtAngle(width, height, end)
+          const chordMidpoint = [(startPoint[0] + endPoint[0]) / 2, (startPoint[1] + endPoint[1]) / 2]
+          const inside = sweep <= fullPieTurn / 2
+            ? [0.9 * midpoint[0] + 0.1 * chordMidpoint[0], 0.9 * midpoint[1] + 0.1 * chordMidpoint[1]]
+            : [500 + (midpoint[0] - 500) / 2, 500 + (midpoint[1] - 500) / 2]
+          const outsidePoint = sweep === fullPieTurn ? [100, 100] : piePointAtAngle(start + sweep / 2 + fullPieTurn / 2)
+          const outside = sweep === fullPieTurn ? outsidePoint
+            : sweep > fullPieTurn / 2 ? [0.9 * outsidePoint[0] + 0.1 * chordMidpoint[0], 0.9 * outsidePoint[1] + 0.1 * chordMidpoint[1]]
+              : [500 + (outsidePoint[0] - 500) / 2, 500 + (outsidePoint[1] - 500) / 2]
+          const d = sweep === fullPieTurn
+            ? `M${startPoint[0]} ${startPoint[1]} A500 500 0 0 1 ${midpoint[0]} ${midpoint[1]} A500 500 0 0 1 ${startPoint[0]} ${startPoint[1]} Z`
+            : `M${startPoint[0]} ${startPoint[1]} A500 500 0 ${sweep > fullPieTurn / 2 ? 1 : 0} 1 ${endPoint[0]} ${endPoint[1]} Z`
+          return {d, inside, outside}
+        })
+        const chordProbes = JSON.stringify(expectedChords.map(({ inside, outside }) => ({ inside, outside })))
+        const actualChords = await evaluate(`(() => {
+          const probes = ${chordProbes}
+          return Array.from({ length: ${chordCases.length} }, (_, index) => {
+            const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === 'Preset chord ' + index)
+            const path = host.querySelector('.preset-outline path')
+            const text = host.querySelector('.text-frame')
+            const style = getComputedStyle(text), frame = host.getBoundingClientRect()
+            return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING), inside: path.isPointInFill({ x: probes[index].inside[0], y: probes[index].inside[1] }), outside: path.isPointInFill({ x: probes[index].outside[0], y: probes[index].outside[1] }) }
+          })
+        })()`)
+        assert(actualChords.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedChords[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - [pieTextInset, pieTextInset, Math.SQRT1_2, Math.SQRT1_2][axis]) < 0.005) && shape.textAfterPath && shape.inside && !shape.outside) && !(await state()).warnings.some(warning => /chord shape is simplified/.test(warning)), `The ECMA-376 chord preset must preserve its adjustable ellipse arc, chord closure, text rectangle, gradient outline, and fill region: ${JSON.stringify(actualChords)}`)
+        assert((await state()).warnings.some(warning => /chord adjustment adj1 was constrained/.test(warning)) && (await state()).warnings.some(warning => /chord adjustment adj2 was constrained/.test(warning)), 'Out-of-range chord adjustments must be clamped to the official angle range and reported.')
+        const expectedArcs = arcCases.map(([width, height, rawStart, rawEnd]) => {
+          const start = Math.max(0, Math.min(fullPieTurn - 1, rawStart ?? 16200000))
+          const end = Math.max(0, Math.min(fullPieTurn - 1, rawEnd ?? 0))
+          let sweep = end - start
+          if (sweep <= 0) sweep += fullPieTurn
+          const startPoint = piePointAtAngle(width, height, start)
+          const endPoint = piePointAtAngle(width, height, end)
+          const midpoint = piePointAtAngle(width, height, start + sweep / 2)
+          const includesAngle = angle => sweep === fullPieTurn || sweep > (angle - start + fullPieTurn) % fullPieTurn
+          let left = Math.min(startPoint[0], endPoint[0]) / 1000, right = Math.max(startPoint[0], endPoint[0]) / 1000
+          let top = Math.min(startPoint[1], endPoint[1]) / 1000, bottom = Math.max(startPoint[1], endPoint[1]) / 1000
+          if (includesAngle(0)) right = 1
+          if (includesAngle(9000000)) bottom = 1
+          if (includesAngle(10800000)) left = 0
+          if (includesAngle(16200000)) top = 0
+          const openPath = sweep === fullPieTurn
+            ? `M${startPoint[0]} ${startPoint[1]} A500 500 0 0 1 ${midpoint[0]} ${midpoint[1]} A500 500 0 0 1 ${startPoint[0]} ${startPoint[1]}`
+            : `M${startPoint[0]} ${startPoint[1]} A500 500 0 ${sweep > fullPieTurn / 2 ? 1 : 0} 1 ${endPoint[0]} ${endPoint[1]}`
+          const inside = sweep === fullPieTurn ? [500, 500] : [500 + (midpoint[0] - 500) / 2, 500 + (midpoint[1] - 500) / 2]
+          const outsidePoint = sweep === fullPieTurn ? [100, 100] : piePointAtAngle(start + sweep / 2 + fullPieTurn / 2)
+          const outside = sweep === fullPieTurn ? outsidePoint : [500 + (outsidePoint[0] - 500) / 2, 500 + (outsidePoint[1] - 500) / 2]
+          return {fillPath: `${openPath} L500 500 Z`, openPath, textRect: [left, top, right - left, bottom - top], inside, outside}
+        })
+        const arcProbes = JSON.stringify(expectedArcs.map(({ inside, outside }) => ({ inside, outside })))
+        const actualArcs = await evaluate(`(() => {
+          const probes = ${arcProbes}
+          return Array.from({ length: ${arcCases.length} }, (_, index) => {
+            const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === 'Preset arc ' + index)
+            const paths = Array.from(host.querySelectorAll('.preset-outline path'))
+            const text = host.querySelector('.text-frame')
+            const style = getComputedStyle(text), frame = host.getBoundingClientRect()
+            return { fillPath: paths[0].getAttribute('d'), openPath: paths[1].getAttribute('d'), fill: getComputedStyle(paths[0]).fill, fillStroke: getComputedStyle(paths[0]).stroke, arcFill: getComputedStyle(paths[1]).fill, stroke: getComputedStyle(paths[1]).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPaths: Boolean(paths[1].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING), inside: paths[0].isPointInFill({ x: probes[index].inside[0], y: probes[index].inside[1] }), outside: paths[0].isPointInFill({ x: probes[index].outside[0], y: probes[index].outside[1] }) }
+          })
+        })()`)
+        assert(actualArcs.every((shape, index) => normalizedPath(shape.fillPath) === normalizedPath(expectedArcs[index].fillPath) && normalizedPath(shape.openPath) === normalizedPath(expectedArcs[index].openPath) && shape.fill === 'rgb(226, 232, 240)' && shape.fillStroke === 'none' && shape.arcFill === 'none' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expectedArcs[index].textRect[axis]) < 0.005) && shape.textAfterPaths && shape.inside && !shape.outside) && !(await state()).warnings.some(warning => /arc shape is simplified/.test(warning)), `The ECMA-376 arc preset must render its separately filled sector and open gradient-stroked arc, with guide-based text bounds: ${JSON.stringify(actualArcs)}`)
+        assert((await state()).warnings.some(warning => /arc adjustment adj1 was constrained/.test(warning)) && (await state()).warnings.some(warning => /arc adjustment adj2 was constrained/.test(warning)), 'Out-of-range arc adjustments must be clamped to the official angle range and reported.')
+        const expectedBlockArcs = blockArcCases.map(([width, height, rawStart, rawEnd, rawThickness]) => {
+          const start = Math.max(0, Math.min(fullPieTurn - 1, rawStart ?? 10800000))
+          const end = Math.max(0, Math.min(fullPieTurn - 1, rawEnd ?? 0))
+          const thickness = Math.max(0, Math.min(50000, rawThickness ?? 25000))
+          let sweep = end - start
+          if (sweep <= 0) sweep += fullPieTurn
+          const inset = Math.min(width, height) * thickness / 100000
+          const innerWidth = Math.max(0, width - 2 * inset), innerHeight = Math.max(0, height - 2 * inset)
+          const innerPointAtAngle = angle => {
+            const [x, y] = piePointAtAngle(innerWidth, innerHeight, angle)
+            return [500 + (x - 500) * innerWidth / width, 500 + (y - 500) * innerHeight / height]
+          }
+          const arcCommands = (from, sweepAngle, rx, ry, pointAt, direction) => {
+            const [startX, startY] = pointAt(from)
+            if (Math.abs(sweepAngle) === fullPieTurn) {
+              const [middleX, middleY] = pointAt(from + sweepAngle / 2)
+              return `A${rx} ${ry} 0 0 ${direction} ${middleX} ${middleY} A${rx} ${ry} 0 0 ${direction} ${startX} ${startY}`
+            }
+            const [endX, endY] = pointAt(from + sweepAngle)
+            return `A${rx} ${ry} 0 ${Math.abs(sweepAngle) > fullPieTurn / 2 ? 1 : 0} ${direction} ${endX} ${endY}`
+          }
+          const [outerStartX, outerStartY] = piePointAtAngle(width, height, start)
+          const [innerEndX, innerEndY] = innerPointAtAngle(end)
+          const outerArc = arcCommands(start, sweep, 500, 500, angle => piePointAtAngle(width, height, angle), 1)
+          const innerArc = arcCommands(end, -sweep, 500 * innerWidth / width, 500 * innerHeight / height, innerPointAtAngle, 0)
+          const startPoint = piePointAtAngle(width, height, start), endPoint = piePointAtAngle(width, height, end)
+          let left = Math.min(startPoint[0], endPoint[0]) / 1000, right = Math.max(startPoint[0], endPoint[0]) / 1000
+          let top = Math.min(startPoint[1], endPoint[1]) / 1000, bottom = Math.max(startPoint[1], endPoint[1]) / 1000
+          const includesAngle = angle => sweep === fullPieTurn || sweep > (angle - start + fullPieTurn) % fullPieTurn
+          if (includesAngle(0)) right = 1
+          if (includesAngle(9000000)) bottom = 1
+          if (includesAngle(10800000)) left = 0
+          if (includesAngle(16200000)) top = 0
+          const middleAngle = start + sweep / 2
+          const inside = piePointAtAngle(width - inset, height - inset, middleAngle)
+          const outside = sweep === fullPieTurn ? [500, 500] : piePointAtAngle(width - inset, height - inset, end + (fullPieTurn - sweep) / 2)
+          return {d: `M${outerStartX} ${outerStartY} ${outerArc} L${innerEndX} ${innerEndY} ${innerArc} Z`, textRect: [left, top, right - left, bottom - top], inside, outside}
+        })
+        const blockArcProbes = JSON.stringify(expectedBlockArcs.map(({ inside, outside }) => ({ inside, outside })))
+        const actualBlockArcs = await evaluate(`(() => {
+          const probes = ${blockArcProbes}
+          return Array.from({ length: ${blockArcCases.length} }, (_, index) => {
+            const host = Array.from(document.querySelectorAll('.stage-shell > .slide-host [title]')).find(node => node.getAttribute('title') === 'Preset blockArc ' + index)
+            const path = host.querySelector('.preset-outline path')
+            const text = host.querySelector('.text-frame')
+            const style = getComputedStyle(text), frame = host.getBoundingClientRect()
+            return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING), inside: path.isPointInFill({ x: probes[index].inside[0], y: probes[index].inside[1] }), outside: path.isPointInFill({ x: probes[index].outside[0], y: probes[index].outside[1] }) }
+          })
+        })()`)
+        assert(actualBlockArcs.every((shape, index) => normalizedPath(shape.d) === normalizedPath(expectedBlockArcs[index].d) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - expectedBlockArcs[index].textRect[axis]) < 0.005) && shape.textAfterPath) && !(await state()).warnings.some(warning => /blockArc shape is simplified/.test(warning)), `The ECMA-376 block-arc preset must preserve both adjustable elliptical arcs, its gradient outline, and angle-based text bounds: ${JSON.stringify(actualBlockArcs)}`)
+        assert(actualBlockArcs.slice(0, 3).every(shape => shape.inside && !shape.outside), 'Block arcs must fill the ring segment while keeping the inner hole or excluded angle transparent.')
+        assert((await state()).warnings.some(warning => /blockArc adjustment adj1 was constrained/.test(warning)) && (await state()).warnings.some(warning => /blockArc adjustment adj2 was constrained/.test(warning)) && (await state()).warnings.some(warning => /blockArc adjustment adj3 was constrained/.test(warning)), 'Out-of-range blockArc start, end, and thickness adjustments must be clamped and reported.')
+        const leftRightArrowPaths = [
+          'M0 500 L333.333 0 L333.333 250 L666.667 250 L666.667 0 L1000 500 L666.667 1000 L666.667 750 L333.333 750 L333.333 1000 Z',
+          'M0 500 L166.667 0 L166.667 375 L833.333 375 L833.333 0 L1000 500 L833.333 1000 L833.333 625 L166.667 625 L166.667 1000 Z',
+          'M0 500 L333.333 0 L333.333 0 L666.667 0 L666.667 0 L1000 500 L666.667 1000 L666.667 1000 L333.333 1000 L333.333 1000 Z',
+          'M0 500 L500 0 L500 250 L500 250 L500 0 L1000 500 L500 1000 L500 750 L500 750 L500 1000 Z',
+          'M0 500 L333.333 0 L333.333 250 L666.667 250 L666.667 0 L1000 500 L666.667 1000 L666.667 750 L333.333 750 L333.333 1000 Z',
+        ]
+        const leftRightArrowTextRects = [[1 / 6, 0.25, 2 / 3, 0.5], [1 / 24, 0.375, 11 / 12, 0.25], [1 / 3, 0, 1 / 3, 1], [0.25, 0.25, 0.5, 0.5], [1 / 6, 0.25, 2 / 3, 0.5]]
+        assert(leftRightArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(leftRightArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - leftRightArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 left-right arrow must preserve its two guide-driven adjustments, outline, and text rectangle: ${JSON.stringify(leftRightArrows)}`)
+        assert((await state()).warnings.some(warning => warning.includes('leftRightArrow adjustment adj1')) && (await state()).warnings.some(warning => warning.includes('leftRightArrow adjustment adj2')), 'Invalid left-right arrow adjustments must warn and use the preset defaults.')
+        const upDownArrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset up-down arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const upDownArrowPaths = [
+          'M500 0 L1000 333.333 L750 333.333 L750 666.667 L1000 666.667 L500 1000 L0 666.667 L250 666.667 L250 333.333 L0 333.333 Z',
+          'M500 0 L1000 166.667 L625 166.667 L625 833.333 L1000 833.333 L500 1000 L0 833.333 L375 833.333 L375 166.667 L0 166.667 Z',
+          'M500 0 L1000 333.333 L1000 333.333 L1000 666.667 L1000 666.667 L500 1000 L0 666.667 L0 666.667 L0 333.333 L0 333.333 Z',
+          'M500 0 L1000 500 L750 500 L750 500 L1000 500 L500 1000 L0 500 L250 500 L250 500 L0 500 Z',
+          'M500 0 L1000 333.333 L750 333.333 L750 666.667 L1000 666.667 L500 1000 L0 666.667 L250 666.667 L250 333.333 L0 333.333 Z',
+        ]
+        const upDownArrowTextRects = [[0.25, 1 / 6, 0.5, 2 / 3], [0.375, 1 / 24, 0.25, 11 / 12], [0, 1 / 3, 1, 1 / 3], [0.25, 0.25, 0.5, 0.5], [0.25, 1 / 6, 0.5, 2 / 3]]
+        assert(upDownArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(upDownArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - upDownArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 up-down arrow must preserve its guide-driven adjustments, outline, and text rectangle: ${JSON.stringify(upDownArrows)}`)
+        assert((await state()).warnings.some(warning => warning.includes('upDownArrow adjustment adj1')) && (await state()).warnings.some(warning => warning.includes('upDownArrow adjustment adj2')), 'Invalid up-down arrow adjustments must warn and use the preset defaults.')
+        const rightArrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset right arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const rightArrowPaths = [
+          'M0 250 L666.667 250 L666.667 0 L1000 500 L666.667 1000 L666.667 750 H0 Z',
+          'M0 375 L833.333 375 L833.333 0 L1000 500 L833.333 1000 L833.333 625 H0 Z',
+          'M0 0 L666.667 0 L666.667 0 L1000 500 L666.667 1000 L666.667 1000 H0 Z',
+          'M0 250 L0 250 L0 0 L1000 500 L0 1000 L0 750 H0 Z',
+          'M0 250 L666.667 250 L666.667 0 L1000 500 L666.667 1000 L666.667 750 H0 Z',
+        ]
+        const rightArrowTextRects = [[0, 0.25, 5 / 6, 0.5], [0, 0.375, 23 / 24, 0.25], [0, 0, 2 / 3, 1], [0, 0.25, 0.5, 0.5], [0, 0.25, 5 / 6, 0.5]]
+        assert(rightArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(rightArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - rightArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 right arrow must preserve both guide adjustments, outline, and text rectangle: ${JSON.stringify(rightArrows)}`)
+        assert((await state()).warnings.some(warning => warning.includes('rightArrow adjustment adj1')) && (await state()).warnings.some(warning => warning.includes('rightArrow adjustment adj2')), 'Invalid right-arrow adjustments must warn and use the preset defaults.')
+        const notchedRightArrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset notched right arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const notchedRightArrowPaths = [
+          'M0 250 L666.667 250 L666.667 0 L1000 500 L666.667 1000 L666.667 750 H0 L166.667 500 Z',
+          'M0 375 L833.333 375 L833.333 0 L1000 500 L833.333 1000 L833.333 625 H0 L41.667 500 Z',
+          'M0 0 L666.667 0 L666.667 0 L1000 500 L666.667 1000 L666.667 1000 H0 L333.333 500 Z',
+          'M0 250 L0 250 L0 0 L1000 500 L0 1000 L0 750 H0 L500 500 Z',
+          'M0 250 L666.667 250 L666.667 0 L1000 500 L666.667 1000 L666.667 750 H0 L166.667 500 Z',
+        ]
+        const notchedRightArrowTextRects = [[1 / 6, 0.25, 2 / 3, 0.5], [1 / 24, 0.375, 11 / 12, 0.25], [1 / 3, 0, 1 / 3, 1], [0.5, 0.25, 0, 0.5], [1 / 6, 0.25, 2 / 3, 0.5]]
+        assert(notchedRightArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(notchedRightArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - notchedRightArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 notched right arrow must preserve its guide adjustments, notch, gradient outline, and text rectangle: ${JSON.stringify(notchedRightArrows)}`)
+        assert((await state()).warnings.some(warning => warning.includes('notchedRightArrow adjustment adj1')) && (await state()).warnings.some(warning => warning.includes('notchedRightArrow adjustment adj2')), 'Invalid notched-right-arrow adjustments must warn and use the preset defaults.')
+        const leftArrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset left arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const leftArrowPaths = [
+          'M0 500 L333.333 0 L333.333 250 H1000 V750 H333.333 L333.333 1000 Z',
+          'M0 500 L166.667 0 L166.667 375 H1000 V625 H166.667 L166.667 1000 Z',
+          'M0 500 L333.333 0 L333.333 0 H1000 V1000 H333.333 L333.333 1000 Z',
+          'M0 500 L1000 0 L1000 250 H1000 V750 H1000 L1000 1000 Z',
+          'M0 500 L333.333 0 L333.333 250 H1000 V750 H333.333 L333.333 1000 Z',
+        ]
+        const leftArrowTextRects = [[1 / 6, 0.25, 5 / 6, 0.5], [1 / 24, 0.375, 23 / 24, 0.25], [1 / 3, 0, 2 / 3, 1], [0.5, 0.25, 0.5, 0.5], [1 / 6, 0.25, 5 / 6, 0.5]]
+        assert(leftArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(leftArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - leftArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 left arrow must preserve its guide adjustments, gradient outline, and text rectangle: ${JSON.stringify(leftArrows)}`)
+        assert((await state()).warnings.some(warning => warning.includes('leftArrow adjustment adj1')) && (await state()).warnings.some(warning => warning.includes('leftArrow adjustment adj2')), 'Invalid left-arrow adjustments must warn and use the preset defaults.')
+        for (const [geometry, expectedPaths, expectedTextRects] of [
+          ['upArrow', [
+            'M0 333.333 L500 0 L1000 333.333 L750 333.333 V1000 H250 V333.333 Z',
+            'M0 166.667 L500 0 L1000 166.667 L625 166.667 V1000 H375 V166.667 Z',
+            'M0 333.333 L500 0 L1000 333.333 L1000 333.333 V1000 H0 V333.333 Z',
+            'M0 1000 L500 0 L1000 1000 L750 1000 V1000 H250 V1000 Z',
+            'M0 333.333 L500 0 L1000 333.333 L750 333.333 V1000 H250 V333.333 Z',
+          ], [[0.25, 1 / 6, 0.5, 5 / 6], [0.375, 1 / 24, 0.25, 23 / 24], [0, 1 / 3, 1, 2 / 3], [0.25, 0.5, 0.5, 0.5], [0.25, 1 / 6, 0.5, 5 / 6]]],
+          ['downArrow', [
+            'M0 666.667 L250 666.667 V0 H750 V666.667 H1000 L500 1000 Z',
+            'M0 833.333 L375 833.333 V0 H625 V833.333 H1000 L500 1000 Z',
+            'M0 666.667 L0 666.667 V0 H1000 V666.667 H1000 L500 1000 Z',
+            'M0 0 L250 0 V0 H750 V0 H1000 L500 1000 Z',
+            'M0 666.667 L250 666.667 V0 H750 V666.667 H1000 L500 1000 Z',
+          ], [[0.25, 0, 0.5, 5 / 6], [0.375, 0, 0.25, 23 / 24], [0, 0, 1, 2 / 3], [0.25, 0, 0.5, 0.5], [0.25, 0, 0.5, 5 / 6]]],
+        ]) {
+          const arrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset ${geometry} ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+          assert(arrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(expectedPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - expectedTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 ${geometry} must preserve its guide adjustments, gradient outline, and text rectangle: ${JSON.stringify(arrows)}`)
+          assert((await state()).warnings.some(warning => warning.includes(`${geometry} adjustment adj1`)) && (await state()).warnings.some(warning => warning.includes(`${geometry} adjustment adj2`)), `Invalid ${geometry} adjustments must warn and use the preset defaults.`)
+        }
+        const bentUpArrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset bent up arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const bentUpArrowPaths = [
+          'M0 750 L750 750 L750 250 L666.667 250 L833.333 0 L1000 250 L916.667 250 V1000 H0 Z',
+          'M0 500 L500 500 L500 500 L333.333 500 L666.667 0 L1000 500 L833.333 500 V1000 H0 Z',
+          'M0 500 L500 500 L500 500 L666.667 500 L666.667 0 L1000 500 L833.333 500 V1000 H0 Z',
+          'M0 750 L750 750 L750 250 L333.333 250 L833.333 0 L1000 250 L916.667 250 V1000 H0 Z',
+          'M0 750 L750 750 L750 250 L666.667 250 L833.333 0 L1000 250 L916.667 250 V1000 H0 Z',
+        ]
+        const bentUpArrowTextRects = [[0, 0.75, 11 / 12, 0.25], [0, 0.5, 5 / 6, 0.5], [0, 0.5, 5 / 6, 0.5], [0, 0.75, 11 / 12, 0.25], [0, 0.75, 11 / 12, 0.25]]
+        assert(bentUpArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(bentUpArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - bentUpArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 bent-up arrow must preserve its three adjustments, guide path, gradient outline, and text rectangle: ${JSON.stringify(bentUpArrows)}`)
+        const bentUpArrowWarnings = (await state()).warnings
+        assert(['adj1', 'adj2', 'adj3'].every(name => bentUpArrowWarnings.some(warning => warning.includes(`bentUpArrow adjustment ${name}`))), 'Invalid bent-up-arrow adjustments must warn and use the preset defaults.')
+        const quadArrows = await evaluate(`Array.from({ length: 5 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset quad arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const quadArrowPaths = [
+          'M0 500 L225 275 L225 387.5 L387.5 387.5 L387.5 225 L275 225 L500 0 L725 225 L612.5 225 L612.5 387.5 L775 387.5 L775 275 L1000 500 L775 725 L775 612.5 L612.5 612.5 L612.5 775 L725 775 L500 1000 L275 775 L387.5 775 L387.5 612.5 L225 612.5 L225 725 Z',
+          'M0 500 L100 300 L100 450 L450 450 L450 100 L300 100 L500 0 L700 100 L550 100 L550 450 L900 450 L900 300 L1000 500 L900 700 L900 550 L550 550 L550 900 L700 900 L500 1000 L300 900 L450 900 L450 550 L100 550 L100 700 Z',
+          'M0 500 L100 100 L100 100 L100 100 L100 100 L100 100 L500 0 L900 100 L900 100 L900 100 L900 100 L900 100 L1000 500 L900 900 L900 900 L900 900 L900 900 L900 900 L500 1000 L100 900 L100 900 L100 900 L100 900 L100 900 Z',
+          'M0 500 L500 500 L500 500 L500 500 L500 500 L500 500 L500 0 L500 500 L500 500 L500 500 L500 500 L500 500 L1000 500 L500 500 L500 500 L500 500 L500 500 L500 500 L500 1000 L500 500 L500 500 L500 500 L500 500 L500 500 Z',
+          'M0 500 L225 275 L225 387.5 L387.5 387.5 L387.5 225 L275 225 L500 0 L725 225 L612.5 225 L612.5 387.5 L775 387.5 L775 275 L1000 500 L775 725 L775 612.5 L612.5 612.5 L612.5 775 L725 775 L500 1000 L275 775 L387.5 775 L387.5 612.5 L225 612.5 L225 725 Z',
+        ]
+        const quadArrowTextRects = [[0.1125, 0.3875, 0.775, 0.225], [0.025, 0.45, 0.95, 0.1], [0.1, 0.1, 0.8, 0.8], [0, 0.5, 1, 0], [0.1125, 0.3875, 0.775, 0.225]]
+        assert(quadArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(quadArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - quadArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 quad arrow must preserve all four heads, guide adjustments, gradient outline, and center text rectangle: ${JSON.stringify(quadArrows)}`)
+        const quadArrowWarnings = (await state()).warnings
+        assert(['adj1', 'adj2', 'adj3'].every(name => quadArrowWarnings.some(warning => warning.includes(`quadArrow adjustment ${name}`))), 'Invalid quad-arrow adjustments must warn and use the preset defaults.')
+        const leftRightUpArrows = await evaluate(`Array.from({ length: 4 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset left-right-up arrow ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const leftRightUpArrowPaths = [
+          'M0 750 L250 500 L250 625 L375 625 L375 250 L250 250 L500 0 L750 250 L625 250 L625 625 L750 625 L750 500 L1000 750 L750 1000 L750 875 L250 875 L250 1000 Z',
+          'M0 800 L100 600 L100 750 L450 750 L450 100 L300 100 L500 0 L700 100 L550 100 L550 750 L900 750 L900 600 L1000 800 L900 1000 L900 850 L100 850 L100 1000 Z',
+          'M0 600 L100 200 L100 200 L100 200 L100 100 L100 100 L500 0 L900 100 L900 100 L900 200 L900 200 L900 200 L1000 600 L900 1000 L900 1000 L100 1000 L100 1000 Z',
+          'M0 750 L250 500 L250 625 L375 625 L375 250 L250 250 L500 0 L750 250 L625 250 L625 625 L750 625 L750 500 L1000 750 L750 1000 L750 875 L250 875 L250 1000 Z',
+        ]
+        const leftRightUpArrowTextRects = [[0.125, 0.625, 0.75, 0.25], [0.025, 0.75, 0.95, 0.1], [0.1, 0.2, 0.8, 0.8], [0.125, 0.625, 0.75, 0.25]]
+        assert(leftRightUpArrows.every((arrow, index) => normalizedPath(arrow.d) === normalizedPath(leftRightUpArrowPaths[index]) && arrow.fill === 'rgb(226, 232, 240)' && arrow.stroke.includes('url(') && arrow.textRect.every((value, axis) => Math.abs(value - leftRightUpArrowTextRects[index][axis]) < 0.005) && arrow.textAfterPath), `The ECMA-376 left-right-up arrow must preserve all three directions, coupled guide limits, gradient outline, and text rectangle: ${JSON.stringify(leftRightUpArrows)}`)
+        const leftRightUpArrowWarnings = (await state()).warnings
+        assert(['adj1', 'adj2', 'adj3'].every(name => leftRightUpArrowWarnings.some(warning => warning.includes(`leftRightUpArrow adjustment ${name}`))), 'Invalid left-right-up-arrow adjustments must warn and use the preset defaults.')
+        const flowChartDecision = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart decision"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartDecision.d) === 'M0 500 L500 0 L1000 500 L500 1000 Z' && flowChartDecision.fill === 'rgb(226, 232, 240)' && flowChartDecision.stroke.includes('url(') && flowChartDecision.textRect.every((value, axis) => Math.abs(value - [0.25, 0.25, 0.5, 0.5][axis]) < 0.005) && flowChartDecision.textAfterPath, `The ECMA-376 flowchart decision must retain its diamond path, inset text, and gradient outline: ${JSON.stringify(flowChartDecision)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartDecision shape is simplified')), 'The flowchart decision must not be downgraded to a rectangle.')
+        const flowChartOffpageConnector = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart off-page connector"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartOffpageConnector.d) === 'M0 0 H1000 V800 L500 1000 L0 800 Z' && flowChartOffpageConnector.fill === 'rgb(226, 232, 240)' && flowChartOffpageConnector.stroke.includes('url(') && flowChartOffpageConnector.textRect.every((value, axis) => Math.abs(value - [0, 0, 1, 0.8][axis]) < 0.005) && flowChartOffpageConnector.textAfterPath, `The ECMA-376 flowchart off-page connector must preserve its pentagonal path, inset text, and gradient outline: ${JSON.stringify(flowChartOffpageConnector)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartOffpageConnector shape is simplified')), 'The flowchart off-page connector must not be downgraded to a rectangle.')
+        const flowChartDocument = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart document"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartDocument.d) === 'M0 0 H1000 V801.944 C500 801.944 500 1107.5 0 933.889 Z' && flowChartDocument.fill === 'rgb(226, 232, 240)' && flowChartDocument.stroke.includes('url(') && flowChartDocument.textRect.every((value, axis) => Math.abs(value - [0, 0, 1, 17322 / 21600][axis]) < 0.005) && flowChartDocument.textAfterPath, `The ECMA-376 flowchart document must retain its curved bottom, text rectangle, and gradient outline: ${JSON.stringify(flowChartDocument)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartDocument shape is simplified')), 'The flowchart document must not be downgraded to a rectangle.')
+        const flowChartManualInput = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart manual input"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartManualInput.d) === 'M0 200 L1000 0 V1000 H0 Z' && flowChartManualInput.fill === 'rgb(226, 232, 240)' && flowChartManualInput.stroke.includes('url(') && flowChartManualInput.textRect.every((value, axis) => Math.abs(value - [0, 0.2, 1, 0.8][axis]) < 0.005) && flowChartManualInput.textAfterPath, `The ECMA-376 manual input shape must preserve its sloped top, text rectangle, and gradient outline: ${JSON.stringify(flowChartManualInput)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartManualInput shape is simplified')), 'The flowchart manual input must not be downgraded to a rectangle.')
+        const flowChartInputOutput = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart input output"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartInputOutput.d) === 'M0 1000 L200 0 H1000 L800 1000 Z' && flowChartInputOutput.fill === 'rgb(226, 232, 240)' && flowChartInputOutput.stroke.includes('url(') && flowChartInputOutput.textRect.every((value, axis) => Math.abs(value - [0.2, 0, 0.6, 1][axis]) < 0.005) && flowChartInputOutput.textAfterPath, `The ECMA-376 input/output shape must preserve its slanted sides, text rectangle, and gradient outline: ${JSON.stringify(flowChartInputOutput)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartInputOutput shape is simplified')), 'The flowchart input/output shape must not be downgraded to a rectangle.')
+        const flowChartPreparation = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart preparation"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartPreparation.d) === 'M0 500 L200 0 H800 L1000 500 L800 1000 H200 Z' && flowChartPreparation.fill === 'rgb(226, 232, 240)' && flowChartPreparation.stroke.includes('url(') && flowChartPreparation.textRect.every((value, axis) => Math.abs(value - [0.2, 0, 0.6, 1][axis]) < 0.005) && flowChartPreparation.textAfterPath, `The ECMA-376 preparation shape must preserve its 20%-inset hexagon, text rectangle, and gradient outline: ${JSON.stringify(flowChartPreparation)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartPreparation shape is simplified')), 'The flowchart preparation shape must not be downgraded to a rectangle.')
+        const flowChartTerminator = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart terminator"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartTerminator.d) === 'M160.88 0 H839.12 A160.88 500 0 0 1 1000 500 L160.88 1000 A160.88 500 0 0 1 0 500 Z' && flowChartTerminator.fill === 'rgb(226, 232, 240)' && flowChartTerminator.stroke.includes('url(') && flowChartTerminator.textRect.every((value, axis) => Math.abs(value - [1018 / 21600, 3163 / 21600, 19564 / 21600, 15274 / 21600][axis]) < 0.005) && flowChartTerminator.textAfterPath, `The ECMA-376 terminator must preserve both elliptical arcs, its text rectangle, and gradient outline: ${JSON.stringify(flowChartTerminator)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartTerminator shape is simplified')), 'The flowchart terminator must not be downgraded to a rectangle.')
+        const flowChartPredefinedProcess = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart predefined process"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartPredefinedProcess.d) === 'M0 0 H1000 V1000 H0 Z M125 0 V1000 M875 0 V1000' && flowChartPredefinedProcess.fill === 'rgb(226, 232, 240)' && flowChartPredefinedProcess.stroke.includes('url(') && flowChartPredefinedProcess.textRect.every((value, axis) => Math.abs(value - [0.125, 0, 0.75, 1][axis]) < 0.005) && flowChartPredefinedProcess.textAfterPath, `The ECMA-376 predefined process must render both inner dividers, its text bounds, and gradient outline: ${JSON.stringify(flowChartPredefinedProcess)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartPredefinedProcess shape is simplified')), 'The predefined process must not be downgraded to a rectangle.')
+        const flowChartExtractMerge = await evaluate(`Array.from(['flowChartExtract', 'flowChartMerge'], geometry => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart ' + geometry + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { geometry, d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const flowChartExtractMergePaths = ['M0 1000 L500 0 L1000 1000 Z', 'M0 0 L1000 0 L500 1000 Z']
+        const flowChartExtractMergeTextRects = [[0.25, 0.5, 0.5, 0.5], [0.25, 0, 0.5, 0.5]]
+        assert(flowChartExtractMerge.every((shape, index) => normalizedPath(shape.d) === normalizedPath(flowChartExtractMergePaths[index]) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - flowChartExtractMergeTextRects[index][axis]) < 0.005) && shape.textAfterPath), `The ECMA-376 extract/merge pair must preserve opposite triangle directions and matching text bounds: ${JSON.stringify(flowChartExtractMerge)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartExtract shape is simplified') || warning.includes('flowChartMerge shape is simplified')), 'The flowchart extract/merge shapes must not be downgraded to rectangles.')
+        const flowChartConnector = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart connector"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(host).backgroundColor, stroke: getComputedStyle(path).stroke, radius: getComputedStyle(host).borderTopLeftRadius, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const connectorInset = (1 - Math.SQRT1_2) / 2
+        assert(normalizedPath(flowChartConnector.d) === 'M0 500 A500 500 0 1 0 1000 500 A500 500 0 1 0 0 500 Z' && flowChartConnector.fill === 'rgb(226, 232, 240)' && flowChartConnector.stroke.includes('url(') && flowChartConnector.radius === '50%' && flowChartConnector.textRect.every((value, axis) => Math.abs(value - [connectorInset, connectorInset, Math.SQRT1_2, Math.SQRT1_2][axis]) < 0.005) && flowChartConnector.textAfterPath, `The ECMA-376 flowchart connector must render as an ellipse with its guide text bounds and gradient outline: ${JSON.stringify(flowChartConnector)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartConnector shape is simplified')), 'The flowchart connector must not be downgraded to a rectangle.')
+        const flowChartProcesses = await evaluate(`Array.from(['flowChartProcess', 'flowChartAlternateProcess'], geometry => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart ' + geometry + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { geometry, d: path.getAttribute('d'), fill: getComputedStyle(host).backgroundColor, stroke: getComputedStyle(path).stroke, radius: getComputedStyle(host).borderTopLeftRadius, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const alternateInset = 0.16667 * 0.29289
+        const alternateProcessPath = 'M0 166.67 A166.67 166.67 0 0 1 166.67 0 H833.33 A166.67 166.67 0 0 1 1000 166.67 V833.33 A166.67 166.67 0 0 1 833.33 1000 H166.67 A166.67 166.67 0 0 1 0 833.33 Z'
+        assert(normalizedPath(flowChartProcesses[0].d) === 'M0 0 H1000 V1000 H0 Z' && normalizedPath(flowChartProcesses[1].d) === normalizedPath(alternateProcessPath) && flowChartProcesses.every(shape => shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textAfterPath), `The ECMA-376 flowchart process pair must preserve the rectangle and rounded-rectangle outlines with gradient strokes: ${JSON.stringify(flowChartProcesses)}`)
+        assert(flowChartProcesses[1].textRect.every((value, axis) => Math.abs(value - [alternateInset, alternateInset, 1 - 2 * alternateInset, 1 - 2 * alternateInset][axis]) < 0.005), `The alternate process text rectangle must match the rounded-corner guides: ${JSON.stringify(flowChartProcesses[1])}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartProcess shape is simplified') || warning.includes('flowChartAlternateProcess shape is simplified')), 'The flowchart process pair must not be downgraded to rectangles.')
+        const flowChartDelay = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart delay"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(host).backgroundColor, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const delayInset = (1 - Math.SQRT1_2) / 2
+        assert(normalizedPath(flowChartDelay.d) === 'M0 0 H500 A500 500 0 0 1 500 1000 H0 Z' && flowChartDelay.fill === 'rgb(226, 232, 240)' && flowChartDelay.stroke.includes('url(') && flowChartDelay.textRect.every((value, axis) => Math.abs(value - [0, delayInset, (1 + Math.SQRT1_2) / 2, Math.SQRT1_2][axis]) < 0.005) && flowChartDelay.textAfterPath, `The ECMA-376 delay shape must preserve its semicircular end, guide text rectangle, and gradient outline: ${JSON.stringify(flowChartDelay)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartDelay shape is simplified')), 'The flowchart delay must not be downgraded to a rectangle.')
+        const flowChartDisplay = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart display"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(host).backgroundColor, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const displayInset = 1 / 6
+        const displayPath = `M0 500 L${1000 * displayInset} 0 H${1000 * (1 - displayInset)} A${1000 * displayInset} 500 0 0 1 ${1000 * (1 - displayInset)} 1000 L${1000 * displayInset} 1000 Z`
+        assert(normalizedPath(flowChartDisplay.d) === normalizedPath(displayPath) && flowChartDisplay.fill === 'rgb(226, 232, 240)' && flowChartDisplay.stroke.includes('url(') && flowChartDisplay.textRect.every((value, axis) => Math.abs(value - [displayInset, 0, 2 / 3, 1][axis]) < 0.005) && flowChartDisplay.textAfterPath, `The ECMA-376 display shape must preserve its sloped left side, elliptical end, text rectangle, and gradient outline: ${JSON.stringify(flowChartDisplay)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartDisplay shape is simplified')), 'The flowchart display must not be downgraded to a rectangle.')
+        const flowChartInternalStorage = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart internal storage"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(host).backgroundColor, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartInternalStorage.d) === 'M0 0 H1000 V1000 H0 Z M125 0 V1000 M0 125 H1000' && flowChartInternalStorage.fill === 'rgb(226, 232, 240)' && flowChartInternalStorage.stroke.includes('url(') && flowChartInternalStorage.textRect.every((value, axis) => Math.abs(value - [0.125, 0.125, 0.875, 0.875][axis]) < 0.005) && flowChartInternalStorage.textAfterPath, `The ECMA-376 internal storage shape must preserve its border, crossed dividers, text bounds, and gradient outline: ${JSON.stringify(flowChartInternalStorage)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartInternalStorage shape is simplified')), 'The flowchart internal storage must not be downgraded to a rectangle.')
+        const flowChartSort = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart sort"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartSort.d) === 'M0 500 L500 0 L1000 500 L500 1000 Z M0 500 H1000' && flowChartSort.fill === 'rgb(226, 232, 240)' && flowChartSort.stroke.includes('url(') && flowChartSort.textRect.every((value, axis) => Math.abs(value - [0.25, 0.25, 0.5, 0.5][axis]) < 0.005) && flowChartSort.textAfterPath, `The ECMA-376 sort shape must preserve the diamond, center divider, text bounds, and gradient outline: ${JSON.stringify(flowChartSort)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartSort shape is simplified')), 'The flowchart sort must not be downgraded to a rectangle.')
+        const flowChartJunctions = await evaluate(`Array.from(['flowChartSummingJunction', 'flowChartOr'], geometry => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart ' + geometry + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { geometry, d: path.getAttribute('d'), fill: getComputedStyle(host).backgroundColor, stroke: getComputedStyle(path).stroke, radius: getComputedStyle(host).borderTopLeftRadius, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })`)
+        const junctionInset = (1 - Math.SQRT1_2) / 2
+        const ellipsePath = 'M0 500 A500 500 0 1 0 1000 500 A500 500 0 1 0 0 500 Z'
+        const junctionPaths = [`${ellipsePath} M${junctionInset * 1000} ${junctionInset * 1000} L${(1 - junctionInset) * 1000} ${(1 - junctionInset) * 1000} M${(1 - junctionInset) * 1000} ${junctionInset * 1000} L${junctionInset * 1000} ${(1 - junctionInset) * 1000}`, `${ellipsePath} M500 0 V1000 M0 500 H1000`]
+        assert(flowChartJunctions.every((shape, index) => normalizedPath(shape.d) === normalizedPath(junctionPaths[index]) && shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.radius === '50%' && shape.textRect.every((value, axis) => Math.abs(value - [junctionInset, junctionInset, Math.SQRT1_2, Math.SQRT1_2][axis]) < 0.005) && shape.textAfterPath), `The ECMA-376 summing junction and OR pair must preserve their ellipse outlines, distinct inner crosses, text bounds, and gradient strokes: ${JSON.stringify(flowChartJunctions)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartSummingJunction shape is simplified') || warning.includes('flowChartOr shape is simplified')), 'The summing junction and OR symbols must not be downgraded to rectangles.')
+        const flowChartManualOperation = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart manual operation"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartManualOperation.d) === 'M0 0 H1000 L800 1000 L200 1000 Z' && flowChartManualOperation.fill === 'rgb(226, 232, 240)' && flowChartManualOperation.stroke.includes('url(') && flowChartManualOperation.textRect.every((value, axis) => Math.abs(value - [0.2, 0, 0.6, 1][axis]) < 0.005) && flowChartManualOperation.textAfterPath, `The ECMA-376 manual operation shape must preserve its trapezoid path, centered text bounds, and gradient outline: ${JSON.stringify(flowChartManualOperation)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartManualOperation shape is simplified')), 'The manual operation symbol must not be downgraded to a rectangle.')
+        const flowChartCollate = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart collate"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartCollate.d) === 'M0 0 H1000 L500 500 L1000 1000 H0 L500 500 Z' && flowChartCollate.fill === 'rgb(226, 232, 240)' && flowChartCollate.stroke.includes('url(') && flowChartCollate.textRect.every((value, axis) => Math.abs(value - [0.25, 0.25, 0.5, 0.5][axis]) < 0.005) && flowChartCollate.textAfterPath, `The ECMA-376 collate shape must preserve its opposing triangles, centered text rectangle, and gradient outline: ${JSON.stringify(flowChartCollate)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartCollate shape is simplified')), 'The collate symbol must not be downgraded to a rectangle.')
+        const flowChartPunchedCard = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart punched card"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartPunchedCard.d) === 'M0 200 L200 0 H1000 V1000 H0 Z' && flowChartPunchedCard.fill === 'rgb(226, 232, 240)' && flowChartPunchedCard.stroke.includes('url(') && flowChartPunchedCard.textRect.every((value, axis) => Math.abs(value - [0, 0.2, 1, 0.8][axis]) < 0.005) && flowChartPunchedCard.textAfterPath, `The ECMA-376 punched-card shape must preserve its clipped corner, text inset, and gradient outline: ${JSON.stringify(flowChartPunchedCard)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartPunchedCard shape is simplified')), 'The punched-card symbol must not be downgraded to a rectangle.')
+        const flowChartOfflineStorage = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart offline storage"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartOfflineStorage.d) === 'M0 0 H1000 L500 1000 Z M400 800 H600' && flowChartOfflineStorage.fill === 'rgb(226, 232, 240)' && flowChartOfflineStorage.stroke.includes('url(') && flowChartOfflineStorage.textRect.every((value, axis) => Math.abs(value - [0.25, 0, 0.5, 0.5][axis]) < 0.005) && flowChartOfflineStorage.textAfterPath, `The ECMA-376 offline-storage shape must preserve its triangular outline, internal bar, text bounds, and gradient stroke: ${JSON.stringify(flowChartOfflineStorage)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartOfflineStorage shape is simplified')), 'The offline-storage symbol must not be downgraded to a rectangle.')
+        const flowChartOnlineStorage = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart online storage"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const onlineStorageInset = 1000 / 6
+        assert(normalizedPath(flowChartOnlineStorage.d) === normalizedPath(`M${onlineStorageInset} 0 H1000 A${onlineStorageInset} 500 0 0 0 1000 1000 L${onlineStorageInset} 1000 A${onlineStorageInset} 500 0 0 1 ${onlineStorageInset} 0 Z`) && flowChartOnlineStorage.fill === 'rgb(226, 232, 240)' && flowChartOnlineStorage.stroke.includes('url(') && flowChartOnlineStorage.textRect.every((value, axis) => Math.abs(value - [1 / 6, 0, 2 / 3, 1][axis]) < 0.005) && flowChartOnlineStorage.textAfterPath, `The ECMA-376 online-storage shape must preserve both signed half-ellipses, text bounds, and gradient stroke: ${JSON.stringify(flowChartOnlineStorage)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartOnlineStorage shape is simplified')), 'The online-storage symbol must not be downgraded to a rectangle.')
+        const flowChartPunchedTape = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart punched tape"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(normalizedPath(flowChartPunchedTape.d) === normalizedPath('M0 100 A250 100 0 0 0 500 100 A250 100 0 0 1 1000 100 L1000 900 A250 100 0 0 0 500 900 A250 100 0 0 1 0 900 Z') && flowChartPunchedTape.fill === 'rgb(226, 232, 240)' && flowChartPunchedTape.stroke.includes('url(') && flowChartPunchedTape.textRect.every((value, axis) => Math.abs(value - [0, 1 / 5, 1, 3 / 5][axis]) < 0.005) && flowChartPunchedTape.textAfterPath, `The ECMA-376 punched-tape shape must preserve its signed wave arcs, text bounds, and gradient stroke: ${JSON.stringify(flowChartPunchedTape)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartPunchedTape shape is simplified')), 'The punched-tape symbol must not be downgraded to a rectangle.')
+        const flowChartMagneticDisk = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart magnetic disk"]'); const paths = [...host.querySelectorAll('.preset-outline path')]; const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { paths: paths.map(path => ({ d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke })), textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(paths[0].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        assert(flowChartMagneticDisk.paths.length === 3 && normalizedPath(flowChartMagneticDisk.paths[0].d) === normalizedPath('M0 166.6667 A500 166.6667 0 0 1 1000 166.6667 L1000 833.3333 A500 166.6667 0 0 1 0 833.3333 Z') && normalizedPath(flowChartMagneticDisk.paths[1].d) === normalizedPath(flowChartMagneticDisk.paths[0].d) && normalizedPath(flowChartMagneticDisk.paths[2].d) === normalizedPath('M1000 166.6667 A500 166.6667 0 0 1 0 166.6667') && flowChartMagneticDisk.paths[0].fill === 'rgb(226, 232, 240)' && flowChartMagneticDisk.paths[0].stroke === 'none' && flowChartMagneticDisk.paths.slice(1).every(path => path.fill === 'none' && path.stroke.includes('url(')) && flowChartMagneticDisk.textRect.every((value, axis) => Math.abs(value - [0, 1 / 3, 1, 1 / 2][axis]) < 0.005) && flowChartMagneticDisk.textAfterPath, `The ECMA-376 magnetic-disk shape must separate its filled body, outer stroke, internal ellipse, and text bounds: ${JSON.stringify(flowChartMagneticDisk)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartMagneticDisk shape is simplified')), 'The magnetic-disk symbol must not be downgraded to a rectangle.')
+        const flowChartMagneticDrum = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart magnetic drum"]'); const paths = [...host.querySelectorAll('.preset-outline path')]; const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { paths: paths.map(path => ({ d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke })), textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(paths[0].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const magneticDrumInset = 1000 / 6
+        assert(flowChartMagneticDrum.paths.length === 3 && normalizedPath(flowChartMagneticDrum.paths[0].d) === normalizedPath(`M${magneticDrumInset} 0 H${1000 - magneticDrumInset} A${magneticDrumInset} 500 0 0 1 ${1000 - magneticDrumInset} 1000 L${magneticDrumInset} 1000 A${magneticDrumInset} 500 0 0 1 ${magneticDrumInset} 0 Z`) && normalizedPath(flowChartMagneticDrum.paths[1].d) === normalizedPath(flowChartMagneticDrum.paths[0].d) && normalizedPath(flowChartMagneticDrum.paths[2].d) === normalizedPath(`M${1000 - magneticDrumInset} 1000 A${magneticDrumInset} 500 0 0 1 ${1000 - magneticDrumInset} 0`) && flowChartMagneticDrum.paths[0].fill === 'rgb(226, 232, 240)' && flowChartMagneticDrum.paths[0].stroke === 'none' && flowChartMagneticDrum.paths.slice(1).every(path => path.fill === 'none' && path.stroke.includes('url(')) && flowChartMagneticDrum.textRect.every((value, axis) => Math.abs(value - [1 / 6, 0, 2 / 3, 1][axis]) < 0.005) && flowChartMagneticDrum.textAfterPath, `The ECMA-376 magnetic-drum shape must separate its filled body, outer stroke, internal ellipse, and text bounds: ${JSON.stringify(flowChartMagneticDrum)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartMagneticDrum shape is simplified')), 'The magnetic-drum symbol must not be downgraded to a rectangle.')
+        const magneticTapeInset = (1 - Math.SQRT1_2) / 2
+        const flowChartMagneticTapes = await evaluate(`(() => ['Flowchart magnetic tape', 'Flowchart magnetic tape wide'].map(title => { const host = document.querySelector('.stage-shell > .slide-host [title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { title, width: host.getBoundingClientRect().width, height: host.getBoundingClientRect().height, d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(path.ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } }))()`)
+        const squareTapeEnd = 500 + 500 * Math.SQRT1_2
+        const wideTapeAngle = Math.atan2(2, 3)
+        const wideTapeEndX = 500 + 500 * Math.cos(wideTapeAngle), wideTapeEndY = 500 + 500 * Math.sin(wideTapeAngle)
+        const squareTapePath = `M500 1000 A500 500 0 0 1 0 500 A500 500 0 0 1 500 0 A500 500 0 0 1 1000 500 A500 500 0 0 1 ${squareTapeEnd} ${squareTapeEnd} L1000 ${squareTapeEnd} L1000 1000 Z`
+        const wideTapePath = `M500 1000 A500 500 0 0 1 0 500 A500 500 0 0 1 500 0 A500 500 0 0 1 1000 500 A500 500 0 0 1 ${wideTapeEndX} ${wideTapeEndY} L1000 ${wideTapeEndY} L1000 1000 Z`
+        assert(flowChartMagneticTapes.length === 2 && normalizedPath(flowChartMagneticTapes[0].d) === normalizedPath(squareTapePath) && normalizedPath(flowChartMagneticTapes[1].d) === normalizedPath(wideTapePath) && flowChartMagneticTapes.every(shape => shape.fill === 'rgb(226, 232, 240)' && shape.stroke.includes('url(') && shape.textRect.every((value, axis) => Math.abs(value - [magneticTapeInset, magneticTapeInset, Math.SQRT1_2, Math.SQRT1_2][axis]) < 0.005) && shape.textAfterPath), `The ECMA-376 magnetic-tape preset must use its three-quarter ellipse, aspect-derived tail angle, guide text rectangle, and gradient stroke: ${JSON.stringify(flowChartMagneticTapes)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartMagneticTape shape is simplified')), 'The magnetic-tape symbol must not be downgraded to a rectangle.')
+        const flowChartMultidocument = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host [title="Flowchart multidocument"]'); const paths = [...host.querySelectorAll('.preset-outline path')]; const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { paths: paths.map(path => ({ d: path.getAttribute('d'), fill: getComputedStyle(path).fill, stroke: getComputedStyle(path).stroke })), textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)), textAfterPath: Boolean(paths[0].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) } })()`)
+        const multidocumentScale = 1000 / 21600
+        const multidocumentUnit = value => value * multidocumentScale
+        const multidocumentPoint = (x, y) => `${multidocumentUnit(x)} ${multidocumentUnit(y)}`
+        const multidocumentFillPath = `M0 ${multidocumentUnit(20782)} C${multidocumentPoint(9298, 23542)} ${multidocumentPoint(9298, 18022)} ${multidocumentPoint(18595, 18022)} L${multidocumentPoint(18595, 3675)} H0 Z M${multidocumentPoint(1532, 3675)} L${multidocumentPoint(1532, 1815)} L${multidocumentPoint(20000, 1815)} L${multidocumentPoint(20000, 16252)} C${multidocumentPoint(19298, 16252)} ${multidocumentPoint(18595, 16352)} ${multidocumentPoint(18595, 16352)} L${multidocumentPoint(18595, 3675)} Z M${multidocumentPoint(2972, 1815)} L${multidocumentPoint(2972, 0)} H1000 L1000 ${multidocumentUnit(14392)} C${multidocumentPoint(20800, 14392)} ${multidocumentPoint(20000, 14467)} ${multidocumentPoint(20000, 14467)} L${multidocumentPoint(20000, 1815)} Z`
+        const multidocumentDetailPaths = [`M${multidocumentPoint(0, 3675)} L${multidocumentPoint(18595, 3675)} L${multidocumentPoint(18595, 18022)} C${multidocumentPoint(9298, 18022)} ${multidocumentPoint(9298, 23542)} ${multidocumentPoint(0, 20782)} Z`, `M${multidocumentPoint(1532, 3675)} L${multidocumentPoint(1532, 1815)} L${multidocumentPoint(20000, 1815)} L${multidocumentPoint(20000, 16252)} C${multidocumentPoint(19298, 16252)} ${multidocumentPoint(18595, 16352)} ${multidocumentPoint(18595, 16352)}`, `M${multidocumentPoint(2972, 1815)} L${multidocumentPoint(2972, 0)} L${multidocumentPoint(21600, 0)} L${multidocumentPoint(21600, 14392)} C${multidocumentPoint(20800, 14392)} ${multidocumentPoint(20000, 14467)} ${multidocumentPoint(20000, 14467)}`]
+        assert(flowChartMultidocument.paths.length === 4 && normalizedPath(flowChartMultidocument.paths[0].d) === normalizedPath(multidocumentFillPath) && flowChartMultidocument.paths.slice(1).every((path, index) => normalizedPath(path.d) === normalizedPath(multidocumentDetailPaths[index]) && path.fill === 'none' && path.stroke.includes('url(')) && flowChartMultidocument.paths[0].fill === 'rgb(226, 232, 240)' && flowChartMultidocument.paths[0].stroke === 'none' && flowChartMultidocument.textRect.every((value, axis) => Math.abs(value - [0, 3675 / 21600, 18595 / 21600, (20782 - 3675) / 21600][axis]) < 0.005) && flowChartMultidocument.textAfterPath, `The ECMA-376 multidocument shape must preserve all three filled sheets, visible outlines, and guide text rectangle: ${JSON.stringify(flowChartMultidocument)}`)
+        assert(!(await state()).warnings.some(warning => warning.includes('flowChartMultidocument shape is simplified')), 'The multidocument symbol must not be downgraded to a rectangle.')
+        const stars = await evaluate(`Array.from({ length: 4 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset star5 ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) } })`)
+        const starPaths = ['M0.001 381.965 L381.968 381.968 L500 0 L618.032 381.968 L999.999 381.965 L690.98 618.031 L809.016 999.997 L500 763.927 L190.984 999.997 L309.02 618.031 Z', 'M0.001 381.965 L314.59 284.458 L500 0 L685.41 284.458 L999.999 381.965 L799.999 655.277 L809.016 999.997 L500 884.456 L190.984 999.997 L200.001 655.277 Z', 'M-23.081 345.492 L338.359 297.746 L500 0 L661.641 297.746 L1023.081 345.492 L761.541 577.254 L823.282 904.508 L500 750 L176.718 904.508 L238.459 577.254 Z', 'M0.001 381.965 L381.968 381.968 L500 0 L618.032 381.968 L999.999 381.965 L690.98 618.031 L809.016 999.997 L500 763.927 L190.984 999.997 L309.02 618.031 Z']
+        const starTextRects = [[0.309020404, 0.3819677291, 0.381959192, 0.3819590295], [0.2000006346, 0.2844575245, 0.5999987308, 0.5999984755], [0.238459458, 0.2977457514, 0.523081084, 0.4522542486], [0.309020404, 0.3819677291, 0.381959192, 0.3819590295]]
+        assert(stars.every((star, index) => normalizedPath(star.d) === normalizedPath(starPaths[index]) && star.fill === 'rgb(226, 232, 240)' && star.textRect.every((value, axis) => Math.abs(value - starTextRects[index][axis]) < 0.005)), `Five-point stars must render all ten vertices, honor adjustments, and use the guide text rectangle: ${JSON.stringify(stars)}`)
+        assert((await state()).warnings.some(warning => warning.includes('invalid star5 adjustment')), 'Invalid star5 adjustments must warn and use the default.')
+        const moreStars = await evaluate(`Array.from({ length: 7 }, (_, index) => { const title = 'Preset ' + (index < 4 ? 'star6' : 'star8') + ' ' + index; const host = document.querySelector('[title="' + title + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) } })`)
+        const moreStarPaths = ['M0 250 L333.331 249.996 L500 0 L666.669 249.996 L1000 250 L833.339 500 L1000 750 L666.669 750.004 L500 1000 L333.331 750.004 L0 750 L166.661 500 Z', 'M0 250 L326.795 240.192 L500 0 L673.205 240.192 L1000 250 L846.41 500 L1000 750 L673.205 759.808 L500 1000 L326.795 759.808 L0 750 L153.59 500 Z', 'M-62.917 250 L337.5 283.494 L500 0 L662.5 283.494 L1062.917 250 L825 500 L1062.917 750 L662.5 716.506 L500 1000 L337.5 716.506 L-62.917 750 L175 500 Z', 'M0 250 L333.331 249.996 L500 0 L666.669 249.996 L1000 250 L833.339 500 L1000 750 L666.669 750.004 L500 1000 L333.331 750.004 L0 750 L166.661 500 Z', 'M0 500 L153.545 356.495 L146.447 146.447 L356.495 153.545 L500 0 L643.505 153.545 L853.553 146.447 L846.455 356.495 L1000 500 L846.455 643.505 L853.553 853.553 L643.505 846.455 L500 1000 L356.495 846.455 L146.447 853.553 L153.545 643.505 Z', 'M0 500 L315.224 423.464 L146.447 146.447 L423.464 315.224 L500 0 L576.536 315.224 L853.553 146.447 L684.776 423.464 L1000 500 L684.776 576.536 L853.553 853.553 L576.536 684.776 L500 1000 L423.464 684.776 L146.447 853.553 L315.224 576.536 Z', 'M0 500 L153.545 356.495 L146.447 146.447 L356.495 153.545 L500 0 L643.505 153.545 L853.553 146.447 L846.455 356.495 L1000 500 L846.455 643.505 L853.553 853.553 L643.505 846.455 L500 1000 L356.495 846.455 L146.447 853.553 L153.545 643.505 Z']
+        const moreStarTextRects = [[0.166661204, 0.2499957864, 0.666677592, 0.5000084271], [0.15359, 0.2401923789, 0.69282, 0.5196152423], [0.175, 0.2834936491, 0.65, 0.4330127019], [0.166661204, 0.2499957864, 0.666677592, 0.5000084271], [0.153545, 0.153545, 0.69291, 0.69291], [0.315224, 0.315224, 0.369552, 0.369552], [0.153545, 0.153545, 0.69291, 0.69291]]
+        assert(moreStars.every((star, index) => normalizedPath(star.d) === normalizedPath(moreStarPaths[index]) && star.fill === 'rgb(226, 232, 240)' && star.textRect.every((value, axis) => Math.abs(value - moreStarTextRects[index][axis]) < 0.005)), `Six- and eight-point stars must render their guide-defined vertices and text rectangles: ${JSON.stringify(moreStars)}`)
+        assert((await state()).warnings.some(warning => warning.includes('invalid star6 adjustment')) && (await state()).warnings.some(warning => warning.includes('invalid star8 adjustment')), 'Invalid star6/star8 adjustments must warn and use defaults.')
+        const fourStars = await evaluate(`Array.from({ length: 3 }, (_, index) => { const host = document.querySelector('[title="Preset star4 ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) } })`)
+        const fourStarPaths = ['M0 500 L411.612 411.612 L500 0 L588.388 411.612 L1000 500 L588.388 588.388 L500 1000 L411.612 588.388 Z', 'M0 500 L323.223 323.223 L500 0 L676.777 323.223 L1000 500 L676.777 676.777 L500 1000 L323.223 676.777 Z', 'M0 500 L411.612 411.612 L500 0 L588.388 411.612 L1000 500 L588.388 588.388 L500 1000 L411.612 588.388 Z']
+        const fourStarTextRects = [[0.4116116524, 0.4116116524, 0.1767766953, 0.1767766953], [0.3232233047, 0.3232233047, 0.3535533906, 0.3535533906], [0.4116116524, 0.4116116524, 0.1767766953, 0.1767766953]]
+        assert(fourStars.every((star, index) => normalizedPath(star.d) === normalizedPath(fourStarPaths[index]) && star.fill === 'rgb(226, 232, 240)' && star.textRect.every((value, axis) => Math.abs(value - fourStarTextRects[index][axis]) < 0.005)), `Four-point stars must honor adjustments and use the guide text rectangle: ${JSON.stringify(fourStars)}`)
+        assert((await state()).warnings.some(warning => warning.includes('invalid star4 adjustment')), 'Invalid star4 adjustments must warn and use the default.')
+        const sevenStars = await evaluate(`Array.from({ length: 4 }, (_, index) => { const host = document.querySelector('[title="Preset star7 ' + index + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) } })`)
+        const sevenStarPaths = [
+          'M-0.003 643.107 L153.988 445.044 L99.031 198.063 L346.012 198.063 L500.000 0.000 L653.988 198.063 L900.969 198.063 L846.012 445.044 L1000.003 643.107 L777.479 753.024 L722.520 1000.005 L500.000 890.087 L277.480 1000.005 L222.521 753.024 Z',
+          'M-0.003 643.107 L299.999 479.227 L99.031 198.063 L410.992 336.468 L500.000 0.000 L589.008 336.468 L900.969 198.063 L700.001 479.227 L1000.003 643.107 L660.388 657.245 L722.520 1000.005 L500.000 736.470 L277.480 1000.005 L339.612 657.245 Z',
+          'M-36.211 611.260 L231.894 444.370 L69.994 188.255 L380.683 274.758 L500.000 0.000 L619.317 274.758 L930.007 188.255 L768.106 444.370 L1036.212 611.260 L715.003 655.873 L738.634 950.485 L500.000 750.000 L261.366 950.485 L284.997 655.873 Z',
+          'M-0.003 643.107 L153.988 445.044 L99.031 198.063 L346.012 198.063 L500.000 0.000 L653.988 198.063 L900.969 198.063 L846.012 445.044 L1000.003 643.107 L777.479 753.024 L722.520 1000.005 L500.000 890.087 L277.480 1000.005 L222.521 753.024 Z',
+        ]
+        const sevenStarTextRects = [
+          [0.2225212016, 0.1980634751, 0.7774787984 - 0.2225212016, 0.7530235046 - 0.1980634751],
+          [0.3396122665, 0.3364678926, 0.6603877335 - 0.3396122665, 0.6572447658 - 0.3364678926],
+          [0.28499675, 0.2747575, 0.71500325 - 0.28499675, 0.6558725 - 0.2747575],
+          [0.2225212016, 0.1980634751, 0.7774787984 - 0.2225212016, 0.7530235046 - 0.1980634751],
+        ]
+        assert(sevenStars.every((star, index) => normalizedPath(star.d) === normalizedPath(sevenStarPaths[index]) && star.fill === 'rgb(226, 232, 240)' && star.textRect.every((value, axis) => Math.abs(value - sevenStarTextRects[index][axis]) < 0.005)), `Seven-point stars must follow preset guides and adjustments: ${JSON.stringify(sevenStars)}`)
+        assert((await state()).warnings.some(warning => warning.includes('invalid star7 adjustment')), 'Invalid star7 adjustments must warn and use the default.')
+        const advancedStars = await evaluate(`Array.from({ length: 7 }, (_, index) => { const kind = index < 4 ? 'star10' : 'star12'; const position = index < 4 ? index : index - 4; const host = document.querySelector('[title="Preset ' + kind + ' ' + position + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) } })`)
+        const advancedStarPaths = [
+          'M-0.001 345.490 L138.192 249.995 L190.981 95.490 L361.801 95.486 L500.000 0.000 L638.199 95.486 L809.019 95.490 L861.808 249.995 L1000.001 345.490 L947.217 500.000 L1000.001 654.510 L861.808 750.005 L809.019 904.510 L638.199 904.514 L500.000 1000.000 L361.801 904.514 L190.981 904.510 L138.192 750.005 L-0.001 654.510 L52.783 500.000 Z',
+          'M-0.001 345.490 L244.804 323.663 L190.981 95.490 L402.523 214.682 L500.000 0.000 L597.477 214.682 L809.019 95.490 L755.196 323.663 L1000.001 345.490 L815.438 500.000 L1000.001 654.510 L755.196 676.337 L809.019 904.510 L597.477 785.318 L500.000 1000.000 L402.523 785.318 L190.981 904.510 L244.804 676.337 L-0.001 654.510 L184.562 500.000 Z',
+          'M-46.859 345.490 L267.407 353.053 L162.021 95.490 L411.157 262.235 L500.000 0.000 L588.843 262.235 L837.979 95.490 L732.593 353.053 L1046.860 345.490 L787.500 500.000 L1046.860 654.510 L732.593 646.948 L837.979 904.510 L588.843 737.765 L500.000 1000.000 L411.157 737.765 L162.021 904.510 L267.407 646.948 L-46.859 654.510 L212.500 500.000 Z',
+          'M-0.001 345.490 L138.192 249.995 L190.981 95.490 L361.801 95.486 L500.000 0.000 L638.199 95.486 L809.019 95.490 L861.808 249.995 L1000.001 345.490 L947.217 500.000 L1000.001 654.510 L861.808 750.005 L809.019 904.510 L638.199 904.514 L500.000 1000.000 L361.801 904.514 L190.981 904.510 L138.192 750.005 L-0.001 654.510 L52.783 500.000 Z',
+          'M0.000 500.000 L137.778 402.943 L66.987 250.000 L234.835 234.835 L250.000 66.987 L402.943 137.778 L500.000 0.000 L597.057 137.778 L750.000 66.987 L765.165 234.835 L933.013 250.000 L862.222 402.943 L1000.000 500.000 L862.222 597.057 L933.013 750.000 L765.165 765.165 L750.000 933.013 L597.057 862.222 L500.000 1000.000 L402.943 862.222 L250.000 933.013 L234.835 765.165 L66.987 750.000 L137.778 597.057 Z',
+          'M0.000 500.000 L306.815 448.236 L66.987 250.000 L358.579 358.579 L250.000 66.987 L448.236 306.815 L500.000 0.000 L551.764 306.815 L750.000 66.987 L641.421 358.579 L933.013 250.000 L693.185 448.236 L1000.000 500.000 L693.185 551.764 L933.013 750.000 L641.421 641.421 L750.000 933.013 L551.764 693.185 L500.000 1000.000 L448.236 693.185 L250.000 933.013 L358.579 641.421 L66.987 750.000 L306.815 551.764 Z',
+          'M0.000 500.000 L137.778 402.943 L66.987 250.000 L234.835 234.835 L250.000 66.987 L402.943 137.778 L500.000 0.000 L597.057 137.778 L750.000 66.987 L765.165 234.835 L933.013 250.000 L862.222 402.943 L1000.000 500.000 L862.222 597.057 L933.013 750.000 L765.165 765.165 L750.000 933.013 L597.057 862.222 L500.000 1000.000 L402.943 862.222 L250.000 933.013 L234.835 765.165 L66.987 750.000 L137.778 597.057 Z',
+        ]
+        const advancedStarTextRects = [
+          [0.1381921129, 0.2499952793, 0.8618078871 - 0.1381921129, 0.7500047207 - 0.2499952793],
+          [0.2448043492, 0.323663, 0.7551956508 - 0.2448043492, 0.676337 - 0.323663],
+          [0.26740675, 0.3530525, 0.73259325 - 0.26740675, 0.6469475 - 0.3530525],
+          [0.1381921129, 0.2499952793, 0.8618078871 - 0.1381921129, 0.7500047207 - 0.2499952793],
+          [0.2348349571, 0.2348349571, 0.7651650429 - 0.2348349571, 0.7651650429 - 0.2348349571],
+          [0.3585786438, 0.3585786438, 0.6414213562 - 0.3585786438, 0.6414213562 - 0.3585786438],
+          [0.2348349571, 0.2348349571, 0.7651650429 - 0.2348349571, 0.7651650429 - 0.2348349571],
+        ]
+        assert(advancedStars.every((star, index) => normalizedPath(star.d) === normalizedPath(advancedStarPaths[index]) && star.fill === 'rgb(226, 232, 240)' && star.textRect.every((value, axis) => Math.abs(value - advancedStarTextRects[index][axis]) < 0.005)), `Ten- and twelve-point stars must follow their guide paths, adjustments, and text rectangles: ${JSON.stringify(advancedStars)}`)
+        assert((await state()).warnings.some(warning => warning.includes('invalid star10 adjustment')) && (await state()).warnings.some(warning => warning.includes('invalid star12 adjustment')), 'Invalid star10/star12 adjustments must warn and use defaults.')
+        const highPointStars = await evaluate(`Array.from({ length: 9 }, (_, index) => { const kind = ['star16', 'star24', 'star32'][Math.floor(index / 3)]; const position = index % 3; const host = document.querySelector('[title="Preset ' + kind + ' ' + position + '"]'); const path = host.querySelector('.preset-outline path'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return { d: path.getAttribute('d'), fill: getComputedStyle(path).fill, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? frame.height : frame.width)) } })`)
+        const highPointCounts = [32, 32, 32, 48, 48, 48, 64, 64, 64]
+        const highPointPrefixes = ['M0 500 L132.204 426.841 L38.06 308.66', 'M0 500 L128.21 451.051 L17.037 370.59', 'M0 500 L126.808 463.243 L9.605 402.455']
+        const defaultHighPointTextRect = [0.2348349571, 0.2348349571, 0.5303300858, 0.5303300858]
+        const adjustedHighPointTextRect = [0.3232233047, 0.3232233047, 0.3535533906, 0.3535533906]
+        assert(highPointStars.every((star, index) => (star.d.match(/ L/g) || []).length + 1 === highPointCounts[index] && star.fill === 'rgb(226, 232, 240)' && star.textRect.every((value, axis) => Math.abs(value - (index % 3 === 1 ? adjustedHighPointTextRect : defaultHighPointTextRect)[axis]) < 0.005) && (index % 3 !== 0 || normalizedPath(star.d).startsWith(normalizedPath(highPointPrefixes[Math.floor(index / 3)]))) && (index % 3 !== 1 || star.d !== highPointStars[index - 1].d) && (index % 3 !== 2 || star.d === highPointStars[index - 2].d)), `Sixteen-, twenty-four-, and thirty-two-point stars must follow their preset guides, adjustments, and text rectangles: ${JSON.stringify(highPointStars)}`)
+        const highPointWarnings = (await state()).warnings
+        assert(['star16', 'star24', 'star32'].every(kind => highPointWarnings.some(warning => warning.includes(`invalid ${kind} adjustment`))), 'Invalid star16/star24/star32 adjustments must warn and use their defaults.')
+        assert((await state()).warnings.some(warning => warning.includes('invalid triangle adjustment')), 'Invalid triangle adjustments must warn.')
+        assert((await state()).warnings.some(warning => warning.includes('invalid trapezoid adjustment')), 'Invalid trapezoid adjustments must warn.')
+        assert((await state()).warnings.some(warning => warning.includes('invalid octagon adjustment')), 'Invalid octagon adjustments must warn.')
+        assert((await state()).warnings.some(warning => warning.includes('pentagon adjustment hf could not be evaluated')), 'Invalid pentagon hf guide values must warn.')
+        assert((await state()).warnings.some(warning => warning.includes('pentagon adjustment vf could not be evaluated')), 'Invalid pentagon vf guide values must warn.')
+        const rounded = await evaluate(`Array.from({ length: 7 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Round rectangle adjustment ' + index + '"]'); const path = host.querySelector('.preset-outline path'); return { radius: getComputedStyle(host).borderTopLeftRadius, d: path.getAttribute('d'), width: parseFloat(getComputedStyle(path).strokeWidth) * window.devicePixelRatio } })`)
+        assert(rounded.every((outline, index) => { const radius = [0.16667, 0, 0.25, 0.5, 0.5, 0, 0.16667][index]; if (Math.abs(outline.width - 1) > 0.01) return false; if (!radius) return outline.d === 'M0 0 H1000 V1000 H0 Z' && outline.radius === '0%'; const arc = outline.d.match(/^M0 ([\d.]+) A([\d.]+) ([\d.]+)/); const css = outline.radius.match(/[\d.]+/g).map(Number); return arc && Math.abs(Number(arc[1]) - radius * 1000) < 0.01 && Math.abs(Number(arc[2]) - radius * 500) < 0.01 && Math.abs(Number(arc[3]) - radius * 1000) < 0.01 && Math.abs(css[0] - radius * 50) < 0.01 && Math.abs(css[1] - radius * 100) < 0.01 }), `Round rectangles must use circular corners based on the short side, honor adjustments and clamp their bounds: ${JSON.stringify(rounded)}`)
+        assert((await state()).warnings.some(warning => warning.includes('invalid roundRect adjustment')), 'Invalid round rectangle adjustments must report the default fallback.')
+        const roundedText = await evaluate(`Array.from({ length: 7 }, (_, index) => { const host = document.querySelector('.stage-shell > .slide-host [title="Round rectangle adjustment ' + index + '"]'); const text = host.querySelector('.text-frame'); const style = getComputedStyle(text); const frame = host.getBoundingClientRect(); return [style.left, style.top, style.width, style.height].map(value => parseFloat(value)).map((value, part) => value / (part % 2 ? frame.height : frame.width)) })`)
+        assert(roundedText.every((rect, index) => { const radius = [0.16667, 0, 0.25, 0.5, 0.5, 0, 0.16667][index] * 0.29289; return Math.abs(rect[0] - radius / 2) < 0.005 && Math.abs(rect[1] - radius) < 0.005 && Math.abs(rect[2] - (1 - radius)) < 0.01 && Math.abs(rect[3] - (1 - 2 * radius)) < 0.01 }), `Rounded-rectangle text insets must follow the preset rectangle guides and the adjusted corner radius: ${JSON.stringify(roundedText)}`)
+        const presetOutlines = await evaluate(`['rect', 'ellipse'].map(kind => { const host = document.querySelector('.stage-shell > .slide-host [title="Preset gradient outline ' + kind + '"]'); const path = host.querySelector('.preset-outline path'); const style = getComputedStyle(path); const gradient = host.querySelector('.preset-outline linearGradient'); return { stroke: style.stroke, id: gradient.id, stops: [...gradient.querySelectorAll('stop')].map(stop => [stop.getAttribute('offset'), stop.getAttribute('stop-color')]), ratios: style.strokeDasharray.split(/[ ,]+/).map(value => parseFloat(value) / parseFloat(style.strokeWidth)), path: path.getAttribute('d') } })`)
+        assert(presetOutlines.every(outline => outline.stroke.includes('#' + outline.id) && JSON.stringify(outline.stops) === JSON.stringify([['0%', '#ffff00'], ['100%', '#000000']]) && outline.ratios.length === 2 && Math.abs(outline.ratios[0] - 2.5) < 0.01 && Math.abs(outline.ratios[1] - 0.5) < 0.01) && presetOutlines[0].path === 'M0 0 H1000 V1000 H0 Z' && presetOutlines[1].path.includes('A500 500'), `Rectangles and ellipses must retain gradient stroke references and custom dash spacing: ${JSON.stringify(presetOutlines)}`)
+        const omittedFills = await evaluate(`Array.from({ length: 4 }, (_, index) => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Omitted line fill ' + index + '"] .custom-geometry path')); return { color: style.stroke, width: parseFloat(style.strokeWidth) } })`)
+        assert(omittedFills[0].color === 'rgb(0, 0, 0)' && Math.abs(omittedFills[0].width * (await evaluate('window.devicePixelRatio')) - 1) < 0.01 && omittedFills[1].color === 'rgb(0, 0, 0)' && omittedFills[1].width > 0 && omittedFills[2].color === 'none' && omittedFills[3].color === 'rgb(68, 114, 196)', `Omitted line fills must retain solid strokes beneath theme inheritance and explicit noFill: ${JSON.stringify(omittedFills)}`)
+        assert((await state()).warnings.some(warning => warning.includes('line without fill properties')), 'Unresolved implicit line colors must report the black fallback.')
+        const hairlineExpression = `Array.from({ length: 4 }, (_, index) => ['line', 'rect', 'ellipse', 'custom'].map(kind => { const host = document.querySelector('.stage-shell > .slide-host [title="Hairline ' + kind + ' ' + index + '"]'); const style = getComputedStyle(host.querySelector(kind === 'line' ? '.line-render > line' : kind === 'custom' ? '.custom-geometry path' : '.preset-outline path')); return style.stroke === 'none' ? 0 : parseFloat(style.strokeWidth) }))`
+        for (const dpr of [1, 2, 1]) {
+          await call('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: dpr, mobile: false })
+          // CDP's DPR override does not emit resolution-query changes; exercise the resize fallback.
+          await evaluate(`window.dispatchEvent(new Event('resize'))`)
+          await delay(200)
+          const widths = await evaluate(hairlineExpression)
+          assert([0, 1].every(index => widths[index].every(width => Math.abs(width * dpr - 1) < 0.01)) && widths[2].every(width => width === 0) && widths[3].every(width => width > 0), `Filled zero/missing-width outlines must use one device pixel and noFill suppresses lines at DPR ${dpr}: ${JSON.stringify(widths)}`)
+        }
+        await call('Emulation.clearDeviceMetricsOverride')
+        await delay(200)
+        const customDashes = await evaluate(`Array.from({ length: 3 }, (_, index) => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Custom dash cap ' + index + '"] .custom-geometry path')); return { cap: style.strokeLinecap, ratios: style.strokeDasharray.split(/[ ,]+/).filter(Boolean).map(value => parseFloat(value) / parseFloat(style.strokeWidth)) } })`)
+        assert(customDashes.every((dash, index) => dash.cap === ['butt', 'round', 'square'][index] && dash.ratios.every((ratio, part) => Math.abs(ratio - (index === 1 ? [1.5, 1.5, 0, 0.75] : [2.5, 0.5, 0.5, 0.25])[part]) < 0.01)), `Custom dashes must compensate round caps, retain square/flat lengths, and preserve each dash-space period: ${JSON.stringify(customDashes)}`)
+        assert((await state()).warnings.some(warning => warning.includes('Custom round-cap dashes shorter')), 'Sub-width custom round dashes must report their SVG approximation.')
+        const dashes = await evaluate(`Array.from({ length: ${presetDashCases.length} }, (_, index) => Array.from({ length: 3 }, (_, capIndex) => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Preset dash ' + index + ' ' + capIndex + '"] .line-render > line')); return { cap: style.strokeLinecap, ratios: style.strokeDasharray.split(/[ ,]+/).filter(Boolean).map(value => parseFloat(value) / parseFloat(style.strokeWidth)) } }))`)
+        assert(dashes.every((variants, index) => variants.every((dash, capIndex) => dash.cap === ['butt', 'round', 'square'][capIndex] && dash.ratios.length === presetDashCases[index][1].length && dash.ratios.every((ratio, part) => Math.abs(ratio - (presetDashCases[index][1][part] + (capIndex ? (part % 2 ? 1 : -1) : 0))) < 0.01))), `Preset dashes must preserve explicit caps and compensate SVG cap lengths: ${JSON.stringify(dashes)}`)
+        const caps = await evaluate(`Array.from({ length: 5 }, (_, index) => ['Default', 'Custom'].map(type => getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="' + type + ' line cap ' + index + '"] ' + (type === 'Default' ? '.line-render > line' : '.custom-geometry path'))).strokeLinecap))`)
+        assert(caps.every((pair, index) => pair.every(cap => cap === ['butt', 'butt', 'round', 'square', 'butt'][index])), `Office omitted/explicit caps must agree for lines and custom paths: ${JSON.stringify(caps)}`)
+        assert((await state()).warnings.some(warning => warning.includes('unsupported invalid line cap')), 'Invalid line caps must report their fallback.')
+        const gradients = await evaluate(`Array.from({ length: 5 }, (_, index) => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Gradient position ' + index + '"]')); return { image: style.backgroundImage, color: style.backgroundColor } })`)
+        assert(gradients[0].image === gradients[1].image && gradients[1].image.includes('rgba(0, 255, 0, 0.5) 50%') && gradients[2].image.includes('rgb(255, 0, 0) 0%') && gradients[2].image.includes('rgb(0, 0, 255) 100%') && !gradients[2].image.includes('0, 255, 0') && gradients[3].image === 'none' && gradients[3].color === 'rgb(255, 0, 0)' && gradients[4].image === 'none' && gradients[4].color === 'rgba(0, 0, 0, 0)', `Gradient positions must accept both percentage encodings and skip missing/invalid/out-of-range stops: ${JSON.stringify(gradients)}`)
+        assert((await state()).warnings.some(warning => warning.includes('gradient stop with an invalid or missing position')), 'Malformed gradient stop positions must report their fallback.')
+        const fonts = await evaluate(`Array.from({ length: 8 }, (_, index) => getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Supplemental font ' + index + '"] .text-run')).fontFamily.toLowerCase())`)
+        const expected = ['simsun', 'microsoft jhenghei', 'yu gothic', 'malgun gothic', 'traditional arabic', 'david', 'simhei', 'georgia']
+        assert(fonts.every((font, index) => font.startsWith(expected[index]) || font.startsWith('"' + expected[index] + '"')), `Supplemental fonts must resolve language, inherited major/minor roles, and explicit font overrides: ${JSON.stringify(fonts)}`)
+        const references = await evaluate(`Array.from({ length: 9 }, (_, index) => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Font reference ' + index + '"] .text-run')); return { font: style.fontFamily.toLowerCase(), color: style.color } })`)
+        for (const [index, font, color] of [[0, 'courier new', 'rgb(68, 114, 196)'], [1, 'arial', 'rgb(68, 114, 196)'], [2, 'arial', 'rgb(68, 114, 196)'], [3, 'arial', undefined], [4, 'georgia', 'rgb(255, 0, 170)'], [5, 'tahoma', 'rgb(0, 136, 0)'], [6, 'courier new', 'rgb(68, 114, 196)'], [7, 'courier new', 'rgba(68, 114, 196, 0.25)'], [8, 'courier new', 'rgba(162, 185, 226, 0.7)']]) {
+          assert(references[index].font.includes(font) && (!color || references[index].color === color), `Shape fontRef must supply font/color defaults beneath local formatting and resolve phClr: ${JSON.stringify({ index, result: references[index] })}`)
+        }
+        assert((await state()).warnings.some(warning => warning.includes('invalid shape fontRef')), 'Malformed font references must report their fallback.')
+        const colors = await evaluate(`Array.from({ length: ${colorPercentageCases.length} }, (_, index) => getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Color percentage ' + index + '"]')).backgroundColor)`)
+        assert(colors.every((color, index) => color === colorPercentageCases[index][2]), `Color percentages must preserve integer/string equivalence, tint direction, signed offsets, clamp order, and >100% modulation: ${JSON.stringify(colors)}`)
+        const modelColors = await evaluate(`Array.from({ length: ${colorModelCases.length} }, (_, index) => getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Color model ' + index + '"]')).backgroundColor)`)
+        assert(modelColors.every((color, index) => color === colorModelCases[index][1]), `HSL percentages and linear scRGB must resolve to sRGB: ${JSON.stringify(modelColors)}`)
+        const referenceFills = await evaluate(`Array.from({ length: 8 }, (_, index) => getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Fill reference ' + index + '"]')).backgroundColor)`)
+        assert(referenceFills.join('|') === ['rgba(68, 114, 196, 0.5)', 'rgba(68, 114, 196, 0.5)', 'rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)', 'rgb(0, 255, 0)', 'rgba(0, 0, 0, 0)'].join('|'), `Theme fillRef must resolve style/background indices, phClr alpha, invalid indices, and explicit overrides: ${JSON.stringify(referenceFills)}`)
+        assert((await state()).warnings.some(warning => warning.includes('shape fillRef')), 'Invalid shape fillRef indices must warn.')
+        const referenceLines = await evaluate(`Array.from({ length: 7 }, (_, index) => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Line reference ' + index + '"] .preset-outline path')); return { color: style.stroke, width: style.stroke === 'none' ? 0 : parseFloat(style.strokeWidth), dash: style.strokeDasharray === 'none' ? 'solid' : 'dashed' } })`)
+        assert(referenceLines[0].color === 'rgba(68, 114, 196, 0.5)' && referenceLines[0].width > 0 && referenceLines[0].dash === 'dashed' && referenceLines[1].color === referenceLines[0].color && referenceLines[1].width <= referenceLines[0].width && referenceLines[1].dash === 'dashed' && referenceLines[2].color === 'rgb(0, 255, 0)' && referenceLines[2].dash === 'solid' && referenceLines.slice(3).every(line => line.width === 0), `lnRef must inherit theme lines and merge local width/fill/dash/noFill overrides: ${JSON.stringify(referenceLines)}`)
+        assert((await state()).warnings.some(warning => warning.includes('shape lnRef')), 'Invalid shape lnRef indices must warn.')
+        const referenceEffects = await evaluate(`Array.from({ length: 8 }, (_, index) => getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Effect reference ' + index + '"]')).boxShadow)`)
+        const themeShadowPixels = [...referenceEffects[0].matchAll(/([-+0-9.eE]+)px/g)].map(match => Number(match[1]))
+        const localShadowPixels = [...referenceEffects[2].matchAll(/([-+0-9.eE]+)px/g)].map(match => Number(match[1]))
+        assert(referenceEffects[0].includes('rgba(68, 114, 196, 0.25)') && themeShadowPixels[0] > 0 && themeShadowPixels[1] === 0 && referenceEffects[2].includes('rgba(0, 255, 0, 0.75)') && Math.abs(localShadowPixels[0]) < 0.001 && localShadowPixels[1] > 0 && Math.abs(localShadowPixels[2] / themeShadowPixels[2] - 2) < 0.01 && [1, 3, 4, 5, 6].every(index => referenceEffects[index] === 'none') && referenceEffects[7].includes('inset') && referenceEffects[7].includes('rgba(68, 114, 196, 0.5)'), `effectRef must resolve phClr/alpha and local effect-list overrides, including supported inner shadows: ${JSON.stringify(referenceEffects)}`)
+        const inheritedLine = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host [title="Inherited line placeholder"]'); return { kind: element?.dataset.elementKind, path: element?.querySelector('.line-render path')?.getAttribute('d') } })()`)
+        assert(inheritedLine.kind === 'line' && inheritedLine.path?.includes('L 250 0 L 250 1000') && inheritedLine.path.endsWith('L 1000 1000'), `A slide placeholder without local geometry must inherit and render its layout connector path: ${JSON.stringify(inheritedLine)}`)
+         const themeGlow = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Effect reference 6"]')).filter`)
+         assert(themeGlow.includes('drop-shadow(') && themeGlow.includes('rgb(255, 0, 0)'), `Theme glow must render its resolved color as a CSS glow approximation: ${themeGlow}`)
+         const runGlow = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Run glow"] .text-run')).textShadow`)
+         assert(runGlow.includes('rgb(0, 0, 255)'), `Run-level glow must compose with the text shadow style: ${runGlow}`)
+        const effectWarnings = (await state()).warnings
+         assert(effectWarnings.some(warning => warning.includes('shape effectRef')) && effectWarnings.some(warning => warning.includes('not been calibrated against Office/WPS')) && !effectWarnings.some(warning => warning.includes('shape glow effect is not rendered')), 'Invalid effect references must warn and supported theme glow must report its approximation.')
+        const svgLines = await evaluate(`[7, 8].map(index => { const host = document.querySelector('.stage-shell > .slide-host [title="Line reference ' + index + '"]'); const line = host.querySelector('.line-render > line'); const style = getComputedStyle(line); return { width: parseFloat(style.strokeWidth), cap: style.strokeLinecap, dash: style.strokeDasharray, marker: Boolean(host.querySelector('marker')) } })`)
+        assert(svgLines[0].width > 0 && svgLines[0].width < 1 && svgLines[0].dash.split(/[ ,]+/).filter(Boolean).every((value, index) => Math.abs(parseFloat(value) / svgLines[0].width - [3, 4][index]) < 0.01) && svgLines[0].cap === 'round' && svgLines[0].dash !== 'none' && svgLines[0].marker && svgLines[1].cap === 'square' && svgLines[1].dash === 'none' && !svgLines[1].marker && Math.abs(svgLines[1].width / svgLines[0].width - 2) < 0.01, `Theme line cap/endings must inherit and local width/cap/dash/endings override independently: ${JSON.stringify(svgLines)}`)
+      }
+      if (number === 17) await evaluate(`document.querySelector('[data-tool=speaker]').click()`)
+      const notes = await evaluate(`(() => { const panel = document.querySelector('[data-presenter-notes]'); const run = panel?.querySelector('span'); const style = run && getComputedStyle(run); return { text: panel?.textContent, color: style?.color, weight: style?.fontWeight, italic: style?.fontStyle, size: style?.fontSize, underline: style?.textDecorationLine, align: run && getComputedStyle(run.parentElement).textAlign } })()`)
+      assert(notes.text?.includes('Introduce the main point.\nPause for questions.') && notes.color === color && notes.weight === '700' && notes.italic === 'italic' && notes.size === '24px' && notes.underline.includes('underline') && notes.align === 'center', `Notes must inherit master typography and their own theme/color map: ${JSON.stringify({ number, notes })}`)
+      const fonts = await evaluate(`Array.from(document.querySelectorAll('[data-presenter-notes] > p')).slice(0, 2).map(paragraph => getComputedStyle(paragraph.querySelector('span')).fontFamily.toLowerCase())`)
+      assert(fonts[0]?.includes('courier new') && fonts[1]?.includes('georgia'), `Unspecified local fonts must preserve inherited major-theme fonts; explicit run fonts must win: ${JSON.stringify(fonts)}`)
+      const mixed = await evaluate(`(() => { const run = document.querySelector('[data-presenter-notes] > p:last-child > span'); return { language: run?.getAttribute('lang'), segments: [...(run?.children || [])].map(segment => ({ text: segment.textContent, font: getComputedStyle(segment).fontFamily.toLowerCase() })) } })()`)
+      assert(mixed.language === 'en-US' && mixed.segments.map(segment => segment.text).join('|') === 'A|中文|العربية' && mixed.segments[0].font.includes('courier new') && mixed.segments[1].font.includes('simsun') && mixed.segments[2].font.includes('traditional arabic'), `Mixed-script notes must select Latin/EA/CS fonts independently and preserve language: ${JSON.stringify(mixed)}`)
+      const bullets = await evaluate(`(() => { const panel = document.querySelector('[data-presenter-notes]'); const markers = [...panel.querySelectorAll('.note-bullet')]; const image = panel.querySelector('.note-picture-bullet'); return { markers: markers.map(marker => marker.textContent), characterSize: getComputedStyle(markers[0]).fontSize, imageUrl: image?.getAttribute('src'), imageSize: image && getComputedStyle(image).width, decoded: image?.complete && image?.naturalWidth > 0 } })()`)
+      assert(bullets.markers.join('|') === '•|3.|1.|4.|aa)|XII.|十二.|十|一百零一|一千零一|一萬零一|一萬零一十.|(ค)|(๓)|४)|５|６．' && bullets.characterSize === '36px' && bullets.imageUrl?.startsWith('blob:') && bullets.imageSize === '30px' && bullets.decoded, `Note bullets must preserve Chinese, Thai, Hindi, and double-byte numbering: ${JSON.stringify(bullets)}`)
+    }
+    assert(runtimeErrors.length === 0, `Notes browser exceptions: ${runtimeErrors.join('; ')}`)
+    console.log('Speaker-note rich text, master colors/defaults, character/number/picture bullets verified.')
+  } else if (textOutlineRangeOnly) {
+    assert(initial.slide && !initial.error && initial.shapes.length === 105, `The text-outline-range fixture did not render: ${JSON.stringify({ upload, slide: initial.slide, shapeCount: initial.shapes.length, runtimeErrors })}`)
+    const readOutlineWidths = snapshot => Object.fromEntries(snapshot.textRuns.filter(run => run.name === 'Text outline range').map(run => [run.text, Number.parseFloat(run.textStrokeWidth)]))
+    const readOutlineShadows = snapshot => Object.fromEntries(snapshot.textRuns.filter(run => run.name === 'Text outline range').map(run => [run.text, run.textShadow]))
+    const initialWidths = readOutlineWidths(initial)
+    const initialShadows = readOutlineShadows(initial)
+    assert(initialWidths.Test > 0 && initialWidths.ran > 0 && initialWidths.ge > 0 && !initial.warnings.some(warning => warning.includes('text outline') && warning.includes('text range')), `Complete static outlines must remain visible before the character-range trigger: ${JSON.stringify({ initialWidths, warnings: initial.warnings })}`)
+    assert(initialShadows.Test !== 'none' && initialShadows.ran !== 'none' && initialShadows.ge !== 'none', `Complete static shadows must remain visible before the character-range trigger: ${JSON.stringify(initialShadows)}`)
+    const triggerStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale emphasis"]').click(); return started })()`)
+    const during = await stateAtElapsed(triggerStartedAt, 100)
+    const duringWidths = readOutlineWidths(during)
+    const duringShadows = readOutlineShadows(during)
+    assert(duringWidths.Test > 0 && duringWidths.ran === 0 && duringWidths.ge > 0, `p:set and discrete p:anim must affect only their selected text ranges before the first animation completes: ${JSON.stringify(duringWidths)}`)
+    assert(duringShadows.Test !== 'none' && duringShadows.ran === 'none' && duringShadows.ge !== 'none', `Text-shadow p:set must affect only its selected range before the discrete animation completes: ${JSON.stringify(duringShadows)}`)
+    const complete = await stateAtElapsed(triggerStartedAt, 350)
+    const completeWidths = readOutlineWidths(complete)
+    const completeShadows = readOutlineShadows(complete)
+    assert(completeWidths.Test === 0 && completeWidths.ran === 0 && completeWidths.ge > 0 && runtimeErrors.length === 0, `p:anim and p:set must hold range-local outline changes without runtime errors: ${JSON.stringify({ completeWidths, runtimeErrors, warnings: complete.warnings })}`)
+    assert(completeShadows.Test === 'none' && completeShadows.ran === 'none' && completeShadows.ge !== 'none', `Text-shadow p:anim and p:set must hold only their range-local changes: ${JSON.stringify(completeShadows)}`)
+    console.log('Character-range text outline and text-shadow p:anim/p:set verification passed.')
+  } else if (themeBackgroundOnly) {
     assert(initial.slide && !initial.error, `The theme-background fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
     for (const [number, color] of [[2, 'rgb(255, 0, 255)'], [3, 'rgb(0, 255, 0)']]) {
       await evaluate(`(() => { for (const key of '${number}') window.dispatchEvent(new KeyboardEvent('keydown', { key })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) })()`)
       await delay(900)
       assert((await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-frame')).backgroundColor`)) === color, `Theme background style ${number === 2 ? 1001 : 1} with phClr replacement must render as ${color}.`)
     }
-    console.log('Theme background style references verified.')
+    for (const [number, background, accent1, accent2, text] of [
+      [4, 'rgb(0, 0, 0)', 'rgb(237, 125, 49)', 'rgb(68, 114, 196)', 'rgb(255, 255, 255)'],
+      [5, 'rgb(238, 236, 225)', 'rgb(112, 173, 71)', 'rgb(68, 114, 196)', 'rgb(31, 73, 125)'],
+      [6, 'rgb(165, 165, 165)', 'rgb(255, 192, 0)', 'rgb(91, 155, 213)', 'rgb(0, 0, 0)'],
+      [7, 'rgb(165, 165, 165)', 'rgb(255, 192, 0)', 'rgb(91, 155, 213)', 'rgb(0, 0, 0)'],
+    ]) {
+      await evaluate(`(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: '${number}' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) })()`)
+      await delay(100)
+      const snapshot = await state()
+      const backgroundColor = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-frame')).backgroundColor`)
+      assert(backgroundColor === background && shape(snapshot, 'Color map accent1')?.backgroundColor === accent1 && shape(snapshot, 'Color map accent2')?.backgroundColor === accent2 && snapshot.textRuns.find(run => run.text === 'Color map text')?.color === text, `Slide ${number} must resolve its master/layout/slide color map in backgrounds, shapes and text: ${JSON.stringify({ backgroundColor, snapshot })}`)
+      if (number === 5) {
+        for (const [name, expected] of [['Chart map override', ['#ed7d31', '#4472c4']], ['Chart map inherited', ['#70ad47', '#4472c4']], ['Chart map palette', ['#ed7d31', '#4472c4']]]) {
+          const fills = await evaluate(`Array.from(document.querySelectorAll('.stage-shell > .slide-host [title="${name}"] .chart-bar')).map(bar => bar.getAttribute('fill'))`)
+          assert(fills.length === 6 && fills.every((fill, index) => fill === expected[index % 2]), `${name} must resolve raw-theme mapping for explicit fills and palette defaults: ${JSON.stringify(fills)}`)
+        }
+        await evaluate(`document.querySelector('.stage-shell').click()`)
+        await delay(500)
+        assert(shape(await state(), 'Color map accent1')?.backgroundColor === accent2, 'Scheme-color animation endpoints must use the slide color map.')
+      }
+      if (number === 7) assert(snapshot.warnings.some(warning => warning.includes('invalid color-map target')) && snapshot.warnings.some(warning => warning.includes('incomplete color map')), 'Invalid/incomplete mappings must report their fallback.')
+    }
+    assert(runtimeErrors.length === 0, `Theme/color-map browser exceptions: ${runtimeErrors.join('; ')}`)
+    console.log('Theme backgrounds and master/layout/slide/chart color mappings verified.')
   } else if (strokeWidthOnly) {
     assert(initial.slide && !initial.error, `The stroke-weight fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
-    const baseStrokeWidth = Number.parseFloat(shape(initial, 'Stroke weight animation').borderWidth)
-    const formulaBaseWidth = Number.parseFloat(shape(initial, 'Stroke weight formula').borderWidth)
+    const gradientOpacityExpression = `['Stroke weight animation', 'Stroke weight set', 'Stroke weight formula', 'Custom gradient geometry'].map(name => { const host = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.title === name); const path = host.querySelector('.preset-outline path, .custom-geometry path'); return { opacity: Number(getComputedStyle(path).strokeOpacity), stroke: getComputedStyle(path).stroke, stopOpacity: host.querySelector('linearGradient stop')?.getAttribute('stop-opacity') } })`
+    assert((await evaluate(gradientOpacityExpression)).every(outline => outline.opacity === 1), 'Gradient stroke opacity must start at its document value.')
+    const documentStrokeWidth = element => Number.parseFloat(element.borderWidth) / element.frameRect.frameWidth
+    const baseStrokeWidth = documentStrokeWidth(shape(initial, 'Stroke weight animation'))
+    const formulaBaseWidth = documentStrokeWidth(shape(initial, 'Stroke weight formula'))
     const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host [title="Scale emphasis"]').click(); return started })()`)
     const during = await stateAtElapsed(clickStartedAt, 100)
-    const animatedWidth = Number.parseFloat(shape(during, 'Stroke weight animation').borderWidth)
-    const formulaWidth = Number.parseFloat(shape(during, 'Stroke weight formula').borderWidth)
-    const setWidth = Number.parseFloat(shape(during, 'Stroke weight set').borderWidth)
+    const gradientDuring = await evaluate(gradientOpacityExpression)
+    assert([0, 2, 3].every(index => gradientDuring[index].opacity > (index === 0 ? 0.25 : 0.5) && gradientDuring[index].opacity < 1) && gradientDuring[1].opacity === 0.2, `Gradient stroke opacity must interpolate and apply p:set independently: ${JSON.stringify(gradientDuring)}`)
+    const animatedWidth = documentStrokeWidth(shape(during, 'Stroke weight animation'))
+    const formulaWidth = documentStrokeWidth(shape(during, 'Stroke weight formula'))
+    const setWidth = documentStrokeWidth(shape(during, 'Stroke weight set'))
     assert(baseStrokeWidth > 0 && animatedWidth > baseStrokeWidth && animatedWidth < baseStrokeWidth * 2 && formulaWidth > formulaBaseWidth * 1.2 && formulaWidth < formulaBaseWidth * 2 && Math.abs(setWidth / baseStrokeWidth - 3) < 0.05, `stroke.weight must interpolate as an EMU width, apply formula samples, and hold p:set: ${JSON.stringify({ baseStrokeWidth, animatedWidth, formulaBaseWidth, formulaWidth, setWidth, shape: shape(during, 'Stroke weight animation'), warnings: initial.warnings.filter(warning => /stroke|animation/i.test(warning)), runtimeErrors })}`)
     await delay(300)
     const complete = await state()
-    assert(Math.abs(Number.parseFloat(shape(complete, 'Stroke weight animation').borderWidth) / baseStrokeWidth - 2) < 0.05 && Math.abs(Number.parseFloat(shape(complete, 'Stroke weight formula').borderWidth) / formulaBaseWidth - 1) < 0.05 && Math.abs(Number.parseFloat(shape(complete, 'Stroke weight set').borderWidth) / baseStrokeWidth - 3) < 0.05, `stroke.weight animation and p:set must hold their final widths, while the formula returns to its base width: ${JSON.stringify(complete.shapes.filter(element => element.name.startsWith('Stroke weight')))}`)
+    const gradientComplete = await evaluate(gradientOpacityExpression)
+    assert(gradientComplete.every((outline, index) => Math.abs(outline.opacity - [0.25, 0.2, 0.5, 0.5][index]) < 0.001 && outline.stroke.includes('url(')) && gradientComplete.slice(0, 3).every(outline => outline.stopOpacity === '0.5'), `Gradient opacity must hold while retaining color-stop alpha: ${JSON.stringify(gradientComplete)}`)
+    assert(Math.abs(documentStrokeWidth(shape(complete, 'Stroke weight animation')) / baseStrokeWidth - 2) < 0.05 && Math.abs(documentStrokeWidth(shape(complete, 'Stroke weight formula')) / formulaBaseWidth - 1) < 0.05 && Math.abs(documentStrokeWidth(shape(complete, 'Stroke weight set')) / baseStrokeWidth - 3) < 0.05, `stroke.weight animation and p:set must hold their final widths, while the formula returns to its base width: ${JSON.stringify(complete.shapes.filter(element => element.name.startsWith('Stroke weight')))}`)
     assert(!complete.warnings.some(warning => warning.includes('stroke.weight') && warning.includes('skipped')), `Valid stroke.weight fixtures must not be skipped: ${JSON.stringify(complete.warnings)}`)
-    console.log('stroke.weight animation and p:set verification passed.')
+    console.log('stroke.weight and gradient stroke.opacity animation and p:set verification passed.')
   } else if (grayscaleOnly) {
     assert(initial.slide && !initial.error, `The grayscale fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
     await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
     await delay(850)
     const grayscaleSlide = await state()
-    assert(grayscaleSlide.slide?.startsWith('03 / 67'), `The grayscale test slide must open: ${grayscaleSlide.slide}`)
-    assert(grayscaleSlide.warnings.some(warning => warning.includes('imageData.chromakey color animation cannot be rendered because picture color-key transparency is not implemented yet')), `An imageData.chromakey color animation must be skipped with a specific rendering warning: ${JSON.stringify(grayscaleSlide.warnings)}`)
+    assert(grayscaleSlide.slide?.startsWith('03 / 68'), `The grayscale test slide must open: ${grayscaleSlide.slide}`)
+    assert(grayscaleSlide.warnings.some(warning => warning.includes('PowerPoint does not support imageData.chromakey as a p:animClr target')), `An imageData.chromakey p:animClr target must be skipped with a PowerPoint compatibility warning: ${JSON.stringify(grayscaleSlide.warnings)}`)
     await evaluate(`(() => {
       const stage = document.querySelector('.stage-shell')
       stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 501, pointerType: 'touch', clientX: 400, clientY: 300 }))
@@ -980,10 +3040,18 @@ try {
     })()`)
     await delay(80)
     const afterPointerCancel = await state()
-    assert(afterPointerCancel.slide?.startsWith('03 / 67'), `A cancelled horizontal touch gesture must not advance the presentation: ${afterPointerCancel.slide}`)
+    assert(afterPointerCancel.slide?.startsWith('03 / 68'), `A cancelled horizontal touch gesture must not advance the presentation: ${afterPointerCancel.slide}`)
     await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Grayscale direct"]')?.click()`)
     await delay(80)
     const grayscaleDuring = await state()
+    const pictureGlowFilter = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Grayscale direct"]')).filter`)
+    const pictureInnerShadow = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Grayscale direct"] .picture-inner-shadow')).boxShadow`)
+    assert(pictureInnerShadow.includes('inset') && pictureInnerShadow.includes('255, 255, 0')
+      && grayscaleDuring.warnings.some(warning => warning.includes('inner shadow is approximated')),
+    `Picture inner shadows must render above the image as an inset box-shadow and report their approximation: ${JSON.stringify({pictureInnerShadow, warnings: grayscaleDuring.warnings})}`)
+    assert(pictureGlowFilter.includes('rgb(255, 0, 255)') && pictureGlowFilter.includes('rgb(0, 255, 255)')
+      && grayscaleDuring.warnings.some(warning => warning.includes('Multiple picture glows use layered CSS drop-shadows')),
+    `Picture effectDag glows must render in order and warn that layered drop-shadows are approximate: ${JSON.stringify({pictureGlowFilter, warnings: grayscaleDuring.warnings})}`)
     assert(shape(grayscaleDuring, 'Grayscale direct').imageFilter === 'none' && shape(grayscaleDuring, 'Grayscale keyframes').imageFilter === 'none' && shape(grayscaleDuring, 'Grayscale p:set').imageFilter === 'grayscale(1)', `Discrete imageData.grayscale animations must honor from/keyframe starts and the immediate p:set value: ${JSON.stringify({ filters: grayscaleDuring.shapes.filter(element => element.name.startsWith('Grayscale ')).map(element => [element.name, element.imageFilter]), warnings: grayscaleDuring.warnings.filter(warning => warning.toLowerCase().includes('grayscale')) })}`)
     const cropDirectDuring = shape(grayscaleDuring, 'Crop direct').imageCropStyle
     const cropKeyframesDuring = shape(grayscaleDuring, 'Crop keyframes').imageCropStyle
@@ -1007,7 +3075,99 @@ try {
     assert(Number(shape(grayscaleComplete, 'Image gain').imageTone?.gain?.slope) === 2, `imageData.gain must hold its final value: ${JSON.stringify(shape(grayscaleComplete, 'Image gain').imageTone)}`)
     assert(Math.abs(Number(shape(grayscaleComplete, 'Image blacklevel').imageTone?.blacklevel?.intercept) - 0.2) < 0.001, `imageData.blacklevel must hold its final keyframe: ${JSON.stringify(shape(grayscaleComplete, 'Image blacklevel').imageTone)}`)
     assert(Number(shape(grayscaleComplete, 'Image gamma').imageTone?.gamma?.exponent) === 2, `imageData.gamma p:set must hold its final exponent: ${JSON.stringify(shape(grayscaleComplete, 'Image gamma').imageTone)}`)
-    console.log('Image grayscale, picture crop, image tone, and cancelled touch gesture verification passed.')
+    assert(await evaluate(`getComputedStyle(document.querySelector('.stage-shell')).touchAction`) === 'none', 'The slide stage must route touch pan and zoom gestures to its swipe and pinch handlers.')
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+    await delay(900)
+    assert((await state()).slide?.startsWith('04 / 68'), 'The touch gesture fixture must start on slide 4.')
+    await evaluate(`(() => {
+      const stage = document.querySelector('.stage-shell')
+      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 502, pointerType: 'touch', clientX: 400, clientY: 300 }))
+      stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 502, pointerType: 'touch', clientX: 320, clientY: 300 }))
+    })()`)
+    await delay(900)
+    assert((await state()).slide?.startsWith('05 / 68'), 'A leftward touch swipe must advance one slide.')
+    await evaluate(`(() => {
+      const stage = document.querySelector('.stage-shell')
+      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 503, pointerType: 'touch', clientX: 400, clientY: 300 }))
+      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: 500, clientY: 300 }))
+      stage.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: 550, clientY: 300 }))
+      stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: 550, clientY: 300 }))
+      stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 503, pointerType: 'touch', clientX: 400, clientY: 300 }))
+    })()`)
+    await delay(40)
+    const pinched = await state()
+    assert(pinched.zoomTransform.startsWith('matrix(1.5') && pinched.slide?.startsWith('05 / 68'), `A two-finger pinch must update zoom without advancing the slide: ${JSON.stringify({ slide: pinched.slide, transform: pinched.zoomTransform })}`)
+    await evaluate('(() => { const stage = document.querySelector(".stage-shell"); stage.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 505, pointerType: "touch", clientX: 400, clientY: 300 })); stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 505, pointerType: "touch", clientX: 350, clientY: 270 })); stage.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 505, pointerType: "touch", clientX: 350, clientY: 270 })) })()')
+    await delay(40)
+    const zoomPan = await evaluate('document.querySelector(".stage-shell > .slide-host")?.style.translate')
+    const panned = await state()
+    assert(zoomPan === '-50px -30px' && panned.zoomTransform.startsWith('matrix(1.5') && panned.slide?.startsWith('05 / 68'), `Dragging at increased zoom must pan the slide without changing its scale or slide: ${JSON.stringify({ slide: panned.slide, transform: panned.zoomTransform, zoomPan })}`)
+    await evaluate(`document.querySelector('[aria-label="Zoom out"]').click(); document.querySelector('[aria-label="Zoom out"]').click()`)
+    await delay(40)
+    assert((await state()).zoomTransform.startsWith('matrix(1,'), 'The touch gesture check must restore the default zoom.')
+    const restoredPan = await evaluate('document.querySelector(".stage-shell > .slide-host")?.style.translate')
+    assert(restoredPan === '0px' || restoredPan === '0px 0px', 'Returning to 100% zoom must recenter the slide: ' + JSON.stringify(restoredPan))
+    console.log('Image grayscale, picture crop, image tone, and touch swipe/pinch/pan verification passed.')
+  } else if (performanceOnly) {
+    assert(initial.shapes.length === 105 && !initial.error, `The performance fixture must render before sampling: ${JSON.stringify({ shapeCount: initial.shapes?.length, error: initial.error, warnings: initial.warnings, runtimeErrors })}`)
+    assert(process.env.DECKLINE_PERFORMANCE_PATH, 'Set DECKLINE_PERFORMANCE_PATH to retain the measurement JSON.')
+    await call('Performance.enable')
+    const traceCompleted = new Promise(resolve => { resolveTrace = resolve })
+    await call('Tracing.start', { categories: 'devtools.timeline,toplevel', transferMode: 'ReturnAsStream' })
+    const before = Object.fromEntries((await call('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]))
+    const sample = await evaluate(`new Promise(resolve => {
+      const intervals = [], longTasks = [];
+      const observer = PerformanceObserver.supportedEntryTypes.includes('longtask') ? new PerformanceObserver(list => longTasks.push(...list.getEntries().map(entry => entry.duration))) : undefined;
+      observer?.observe({ type: 'longtask' });
+      let start, previous;
+      const frame = timestamp => {
+        console.timeStamp('deckline-performance-frame');
+        if (start === undefined) { start = timestamp; document.querySelector('.stage-shell').click(); }
+        if (previous !== undefined) intervals.push(timestamp - previous);
+        previous = timestamp;
+        if (timestamp - start < 2000) return requestAnimationFrame(frame);
+        observer?.disconnect();
+        resolve({ intervalsMs: intervals, longTasksMs: longTasks, elapsedMs: timestamp - start, longTaskSupported: Boolean(observer), dpr: devicePixelRatio, userAgent: navigator.userAgent, viewport: { width: innerWidth, height: innerHeight } });
+      };
+      requestAnimationFrame(frame);
+    })`)
+    const after = Object.fromEntries((await call('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]))
+    await call('Tracing.end')
+    const { stream } = await traceCompleted
+    assert(stream, 'Tracing must return a readable stream.')
+    let traceJson = ''
+    for (;;) {
+      const chunk = await call('IO.read', { handle: stream, size: 262144 })
+      traceJson += chunk.base64Encoded ? Buffer.from(chunk.data, 'base64').toString('utf8') : chunk.data
+      if (chunk.eof) break
+    }
+    await call('IO.close', { handle: stream })
+    resolveTrace = undefined
+    const tracePath = process.env.DECKLINE_PERFORMANCE_PATH + '.trace.json'
+    await writeFile(tracePath, traceJson)
+    const events = JSON.parse(traceJson).traceEvents
+    const markers = events.filter(event => event.name === 'TimeStamp' && event.args?.data?.message === 'deckline-performance-frame').sort((a, b) => a.ts - b.ts)
+    assert(markers.length === sample.intervalsMs.length + 1, 'Every sampled RAF callback must have a trace marker.')
+    const tasks = events.filter(event => event.ph === 'X' && /RunTask$/.test(event.name) && event.pid === markers[0].pid && event.tid === markers[0].tid && event.dur > 0).sort((a, b) => a.ts - b.ts)
+    assert(tasks.length > 0, 'The trace must contain renderer main-thread task durations.')
+    const merged = []
+    for (const task of tasks) {
+      const last = merged.at(-1)
+      if (last && task.ts <= last[1]) last[1] = Math.max(last[1], task.ts + task.dur)
+      else merged.push([task.ts, task.ts + task.dur])
+    }
+    const frameTaskMs = markers.slice(1).map((marker, index) => merged.reduce((sum, [start, end]) => sum + Math.max(0, Math.min(end, marker.ts) - Math.max(start, markers[index].ts)), 0) / 1000)
+    assert(frameTaskMs.every((duration, index) => Number.isFinite(duration) && duration >= 0 && duration <= (markers[index + 1].ts - markers[index].ts) / 1000 + 0.001), 'Merged main-thread task occupancy must not exceed its frame interval.')
+    await call('Performance.disable')
+    assert(sample.intervalsMs.length > 0 && sample.intervalsMs.every(value => Number.isFinite(value) && value > 0), 'Frame sampling must produce valid intervals.')
+    const sorted = [...sample.intervalsMs].sort((a, b) => a - b)
+    const metricsMs = Object.fromEntries(['ScriptDuration', 'LayoutDuration', 'RecalcStyleDuration', 'TaskDuration'].map(name => [name, Number.isFinite(after[name]) && Number.isFinite(before[name]) ? (after[name] - before[name]) * 1000 : null]))
+    const summary = { frames: sorted.length, medianIntervalMs: sorted[Math.floor(sorted.length / 2)], p95IntervalMs: sorted[Math.ceil(sorted.length * 0.95) - 1], maxIntervalMs: sorted.at(-1), longTasks: sample.longTasksMs.length, metricsMs }
+    const taskTimes = [...frameTaskMs].sort((a, b) => a - b)
+    summary.frameTasks = { p95Ms: taskTimes[Math.ceil(taskTimes.length * 0.95) - 1], maxMs: taskTimes.at(-1), intervalsOver16Ms: taskTimes.filter(value => value > 16).length }
+    const report = { capturedAt: new Date().toISOString(), baseUrl, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'unspecified', browserFlags: ['--headless=new', '--disable-gpu'], fixture: 'First slide, 105 rendered shapes, first animation step, two seconds', tracePath, summary, sample, frameTaskMs, limitations: ['RAF intervals describe scheduling cadence, not per-frame CPU/render time.', 'Trace task durations measure main-thread occupied wall time between RAF callback markers, not GPU paint/compositor time or CPU-only execution.', 'Tracing adds measurement overhead; compare only identically instrumented runs.', 'This sample does not establish Office/WPS fidelity, all-file performance, or cross-browser performance.'] }
+    await writeFile(process.env.DECKLINE_PERFORMANCE_PATH, JSON.stringify(report, null, 2) + '\n')
+    console.log(JSON.stringify({ performanceReport: process.env.DECKLINE_PERFORMANCE_PATH, ...summary }))
   } else if (captureOnly) {
     assert(initial.slide && !initial.error, `The PPTX did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
     const textLayout = await evaluate(`(() => [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].map(shape => {
@@ -1023,25 +3183,52 @@ try {
     await writeFile(process.env.DECKLINE_CAPTURE_SLIDE_PATH, Buffer.from(screenshot.data, 'base64'))
     console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, hostFrame: initial.hostFrame, shapes: initial.shapes, paragraphs: initial.paragraphs, textRuns: initial.textRuns, textLayout }))
   } else {
-  assert(initial.shapes.length === 80, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
-  const textOverflow = await evaluate(`(() => {
+  assert(initial.shapes.length === 105, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+  const boundConnectorPath = await evaluate(`[...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === 'Bound straight connector')?.querySelector('.line-render path')?.getAttribute('d') || ''`)
+  assert(boundConnectorPath === 'M 26.3158 142.8571 L 947.3684 857.1429', `Preset connection sites must use their indices and the rotated target transform: ${boundConnectorPath}`)
+  assert(initial.warnings.includes('Only rotation animations currently accumulate repeated values; this animation repeats without accumulation.'), 'A repeated non-rotation behavior with accumulate="always" must warn when its values are not accumulated.')
+  assert(initial.warnings.some(warning => warning.includes('line arrow size p:set') && warning.includes('unsupported value'))
+    && initial.warnings.some(warning => warning.includes('line arrow size animation') && warning.includes('unsupported string values')),
+    `Invalid arrow size values must be skipped with warnings: ${JSON.stringify(initial.warnings)}`)
+  const appearanceInitial = shape(await state(), 'Appearance toggles')
+  const appearanceDashInitial = await evaluate(`(() => { const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Appearance toggles"] .preset-outline path'); if (!path) return []; const style = getComputedStyle(path); const width = Number.parseFloat(style.strokeWidth); return style.strokeDasharray.split(/[ ,]+/).filter(Boolean).map(value => Number.parseFloat(value) / width) })()`)
+  assert(appearanceInitial?.backgroundColor === 'rgba(0, 0, 0, 0)' && appearanceInitial.borderStyle === 'none' && appearanceInitial.boxShadow === 'none',
+    `p:set must turn off a shape's static fill, stroke, and shadow: ${JSON.stringify(appearanceInitial)}`)
+  assert(appearanceDashInitial.length === 2 && Math.abs(appearanceDashInitial[0] - 8) < 0.05 && Math.abs(appearanceDashInitial[1] - 3) < 0.05,
+    `stroke.dashstyle p:set must apply longDash to the static stroke: ${JSON.stringify(appearanceDashInitial)}`)
+  const textOverflowExpression = `(() => {
     const clip = document.querySelector('.stage-shell > .slide-host [title="Picture bullet"] .text-frame')
     const ellipsis = document.querySelector('.stage-shell > .slide-host [title="Autofit reference"] .text-frame')
     const clippedStyle = getComputedStyle(clip)
     const ellipsisStyle = getComputedStyle(ellipsis)
     const run = clip.querySelector('.text-run')
-    return { horizontal: clippedStyle.overflowX, vertical: clippedStyle.overflowY, textLength: run.textContent.length, whiteSpace: clippedStyle.whiteSpace, ellipsisVertical: ellipsisStyle.overflowY }
-  })()`)
+    const ellipsisRun = ellipsis.querySelector('.text-run')
+    const range = document.createRange()
+    range.selectNodeContents(ellipsisRun)
+    const ellipsisBox = ellipsis.getBoundingClientRect()
+    const contentBottom = ellipsisBox.bottom - Number.parseFloat(ellipsisStyle.paddingBottom)
+    const visibleEllipsisLines = new Set([...range.getClientRects()].filter(rect => rect.bottom <= contentBottom + 0.5).map(rect => Math.round(rect.top))).size
+    return { horizontal: clippedStyle.overflowX, vertical: clippedStyle.overflowY, textLength: run.textContent.length, whiteSpace: clippedStyle.whiteSpace, ellipsisVertical: ellipsisStyle.overflowY, ellipsisDisplay: ellipsisStyle.display, ellipsisOrient: ellipsisStyle.webkitBoxOrient, ellipsisLines: ellipsisStyle.webkitLineClamp, visibleEllipsisLines, ellipsisTextLength: ellipsisRun.textContent.length }
+  })()`
+  let textOverflow
+  for (let attempt = 0; attempt < 40; attempt++) {
+    textOverflow = await evaluate(textOverflowExpression)
+    if (Number(textOverflow.ellipsisLines) >= 1) break
+    await delay(25)
+  }
   assert(textOverflow.horizontal === 'clip' && textOverflow.vertical === 'clip'
-    && textOverflow.textLength > 100 && textOverflow.whiteSpace === 'nowrap' && ['clip', 'hidden'].includes(textOverflow.ellipsisVertical)
-    && initial.warnings.some(warning => warning.includes('vertOverflow="ellipsis"')),
-    `DrawingML text overflow must clip at the text frame and warn when ellipsis is approximated: ${JSON.stringify({ textOverflow, warnings: initial.warnings })}`)
+    && textOverflow.textLength > 100 && textOverflow.whiteSpace === 'nowrap'
+    && textOverflow.ellipsisVertical === 'hidden' && textOverflow.ellipsisDisplay === 'flow-root'
+    && textOverflow.ellipsisOrient === 'vertical' && Number(textOverflow.ellipsisLines) >= 1
+    && textOverflow.visibleEllipsisLines === Number(textOverflow.ellipsisLines) && textOverflow.ellipsisTextLength > 300
+    && !initial.warnings.some(warning => warning.includes('vertOverflow="ellipsis"')),
+    `DrawingML vertical ellipsis must clamp overflowing text to its measured visible line count: ${JSON.stringify({ textOverflow, warnings: initial.warnings })}`)
   const initialThumbnailWindow = await evaluate(`(() => {
     const list = document.querySelector('.thumb-list')
     const items = [...(list?.querySelectorAll('.thumb-button') || [])]
     return { total: Number(document.querySelector('.slide-count')?.textContent), rendered: items.length, first: Number(items[0]?.dataset.thumbnailIndex), last: Number(items.at(-1)?.dataset.thumbnailIndex) }
   })()`)
-  assert(initialThumbnailWindow.total === 67 && initialThumbnailWindow.rendered > 0 && initialThumbnailWindow.rendered < initialThumbnailWindow.total,
+  assert(initialThumbnailWindow.total === 68 && initialThumbnailWindow.rendered > 0 && initialThumbnailWindow.rendered < initialThumbnailWindow.total,
     `The slide sidebar must render a bounded thumbnail window: ${JSON.stringify(initialThumbnailWindow)}`)
   const autofitMetrics = await evaluate(`(() => {
     const fit = document.querySelector('.stage-shell > .slide-host .slide-element[title="Normal autofit"]')
@@ -1077,11 +3264,36 @@ try {
     && renderedLine.markerStart === 'url(#pptx-line-42-head)' && renderedLine.markerEnd === 'url(#pptx-line-42-tail)'
     && renderedLine.headPath === 'M0 0L10 5L0 10Z' && renderedLine.tailPath === 'M0 5L5 0L10 5L5 10Z',
     `A DrawingML line must preserve its diagonal endpoints and sized head/tail markers: ${JSON.stringify(renderedLine)}`)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Appearance toggles"]')?.click()`)
+  await delay(50)
+  const arrowSet = shape(await state(), 'Stroke color')
+  assert(arrowSet?.line?.headPath === 'M0 0L6 5L0 10M4 0L10 5L4 10'
+    && Math.abs(arrowSet.line.headSize.width - 8.4) < 0.02 && Math.abs(arrowSet.line.headSize.height - 4.2) < 0.02
+    && Math.abs(arrowSet.line.tailSize.width - 8.4) < 0.02 && Math.abs(arrowSet.line.tailSize.height - 4.2) < 0.02,
+    `Line arrow p:set must apply arrow type, start width, and end length before delayed p:anim values: ${JSON.stringify(arrowSet?.line)}`)
+  await delay(450)
+  const arrowSizeDuring = shape(await state(), 'Stroke color')
+  assert(Math.abs(arrowSizeDuring?.line?.headSize.width - 4.2) < 0.02 && Math.abs(arrowSizeDuring?.line?.tailSize.height - 6) < 0.02,
+    `Discrete p:anim direct values and keyframes must update arrow length and width during playback: ${JSON.stringify(arrowSizeDuring?.line)}`)
+  await delay(250)
+  const afterAppearanceClick = await state()
+  const appearanceEnabled = shape(afterAppearanceClick, 'Appearance toggles')
+  const appearanceDashEnabled = await evaluate(`(() => { const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Appearance toggles"] .preset-outline path'); if (!path) return []; const style = getComputedStyle(path); const width = Number.parseFloat(style.strokeWidth); return style.strokeDasharray.split(/[ ,]+/).filter(Boolean).map(value => Number.parseFloat(value) / width) })()`)
+  const arrowEnabled = shape(afterAppearanceClick, 'Stroke color')
+  assert(appearanceEnabled?.backgroundColor === 'rgb(244, 63, 94)' && appearanceEnabled.borderColor === 'rgb(37, 99, 235)' && Number.parseFloat(appearanceEnabled.borderWidth) > 0 && appearanceEnabled.boxShadow !== 'none',
+    `Discrete p:anim must turn the static fill, stroke, and shadow back on: ${JSON.stringify(appearanceEnabled)}`)
+  assert(appearanceDashEnabled.length === 4 && appearanceDashEnabled.every((value, index) => Math.abs(value - [4, 3, 1, 3][index]) < 0.05),
+    `Discrete stroke.dashstyle p:anim keyframes must end at dashDot: ${JSON.stringify(appearanceDashEnabled)}`)
+  assert(arrowEnabled?.line?.headPath === 'M0 0L10 5L0 10',
+    `Discrete stroke.startArrow p:anim keyframes must end at the open marker: ${JSON.stringify(arrowEnabled?.line)}`)
+  assert(Math.abs(arrowEnabled?.line?.headSize.width - 8.4) < 0.02 && Math.abs(arrowEnabled?.line?.headSize.height - 4.2) < 0.02
+    && Math.abs(arrowEnabled?.line?.tailSize.width - 8.4) < 0.02 && Math.abs(arrowEnabled?.line?.tailSize.height - 8.4) < 0.02,
+    `Discrete arrow length and width animations must hold their final marker dimensions: ${JSON.stringify(arrowEnabled?.line)}`)
   assert(shape(initial, 'Slide entrance and exit').visibility === 'hidden', 'A slide-filter entrance must start off-stage and hidden before its trigger.')
   const customGeometry = shape(initial, 'Custom geometry').customPaths[0]
   assert(customGeometry?.d.startsWith('M') && customGeometry.d.includes('C') && customGeometry.fill === 'rgb(163, 230, 53)' && customGeometry.stroke === 'rgb(22, 101, 52)' && Number.parseFloat(customGeometry.strokeWidth) > 0, `Custom geometry cubic paths must preserve their path, fill, and outline: ${JSON.stringify(customGeometry)}`)
   const customGeometryDash = await evaluate(`(() => { const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom geometry"] .custom-geometry path'); const style = path && getComputedStyle(path); const width = Number.parseFloat(style?.strokeWidth || '0'); return { dashRatios: (style?.strokeDasharray || '').split(/[ ,]+/).filter(Boolean).map(value => Number.parseFloat(value) / width), cap: style?.strokeLinecap } })()`)
-  assert(customGeometryDash.dashRatios.length === 4 && [2.5, 0.5, 0.5, 0.25].every((ratio, index) => Math.abs(customGeometryDash.dashRatios[index] - ratio) < 0.02)
+  assert(customGeometryDash.dashRatios.length === 4 && [1.5, 1.5, 0, 0.75].every((ratio, index) => Math.abs(customGeometryDash.dashRatios[index] - ratio) < 0.02)
     && customGeometryDash.cap === 'round'
     && !initial.warnings.some(warning => warning.includes('Custom dash ratios on preset shape outlines')),
     `DrawingML custom dash ratios and rounded caps must render on custom SVG geometry: ${JSON.stringify({ ...customGeometryDash, warnings: initial.warnings })}`)
@@ -1089,6 +3301,8 @@ try {
   assert(customQuadratic?.d.includes('Q') && customQuadratic.fill === 'none' && customQuadratic.stroke === 'rgb(22, 101, 52)', `Custom geometry must preserve a second quadratic path and its no-fill mode: ${JSON.stringify(customQuadratic)}`)
   const customArc = shape(initial, 'Custom geometry').customPaths[2]
   assert(customArc?.d.includes('A 400 250 0 0 1 900') && customArc.fill === 'none' && customArc.stroke === 'rgb(22, 101, 52)', `DrawingML arcTo must render as a clockwise SVG ellipse arc: ${JSON.stringify(customArc)}`)
+  const customNegativeArc = shape(initial, 'Custom geometry').customPaths[6]
+  assert(customNegativeArc?.d.includes('A 400 250 0 0 0 900') && customNegativeArc.fill === 'none', `DrawingML arcTo must preserve valid negative sweep angles and map their direction to SVG: ${JSON.stringify(customNegativeArc)}`)
   const guideDrivenPath = shape(initial, 'Custom geometry').customPaths[3]
   assert(guideDrivenPath?.d.includes('M 250 750 L 750 750 L 750 250 Z'), `Custom geometry points must resolve chained guides, adjustment values, and standard formulas: ${JSON.stringify(guideDrivenPath)}`)
   const guideFormulaPath = shape(initial, 'Custom geometry').customPaths[4]
@@ -1111,6 +3325,161 @@ try {
     && Math.abs(customTextRectMetrics.invalid.right - 1) < 0.01 && Math.abs(customTextRectMetrics.invalid.bottom - 1) < 0.01
     && initial.warnings.some(warning => warning.includes('custom geometry text rectangle has invalid bounds')),
   `Custom geometry text rectangles must resolve guide-based bounds and fall back safely when invalid: ${JSON.stringify({ customTextRectMetrics, warnings: initial.warnings })}`)
+  const brackets = await evaluate(`Array.from([['leftBracket', 0], ['rightBracket', 1], ['rightBracket', 2], ['leftBracket', 3], ['rightBracket', 4], ['bracketPair', 5], ['bracketPair', 6], ['bracketPair', 7]], ([kind, index]) => {
+    const host = document.querySelector('.stage-shell > .slide-host .slide-element[title="Preset ' + kind + ' ' + index + '"]')
+    if (!host) return null
+    const paths = [...host.querySelectorAll('.preset-outline path')]
+    const text = host.querySelector('.text-frame'), style = getComputedStyle(text), box = host.getBoundingClientRect()
+    return { paths: paths.map(path => path.getAttribute('d')), fill: getComputedStyle(paths[0]).fill, stroke: getComputedStyle(paths[1]).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? box.height : box.width)), textAfterPath: Boolean(paths[0].ownerSVGElement.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) }
+  })`)
+  const bracketCases = [
+    ['leftBracket', 8_333, 2_600_000, 800_000],
+    ['rightBracket', 8_333, 2_600_000, 800_000],
+    ['rightBracket', 25_000, 2_600_000, 800_000],
+    ['leftBracket', 50_000, 2_600_000, 800_000],
+    ['rightBracket', 100_000, 800_000, 2_600_000],
+    ['bracketPair', 16_667, 2_600_000, 800_000],
+    ['bracketPair', 40_000, 2_600_000, 800_000],
+    ['bracketPair', 50_000, 2_600_000, 800_000],
+  ]
+  const bracketInset = Math.SQRT1_2
+  assert(brackets.length === bracketCases.length && brackets.every((bracket, index) => {
+    if (!bracket) return false
+    const [kind, adjustment, width, height] = bracketCases[index]
+    let fillPath, outline, left, top, right, bottom
+    if (kind === 'bracketPair') {
+      const inset = Math.min(width, height) * adjustment / 100_000 * 29_289 / 100_000
+      const x = inset / width * 1000, y = inset / height * 1000
+      const oppositeX = 1000 - x, oppositeY = 1000 - y
+      fillPath = `M0 ${y} A${x} ${y} 0 0 1 ${x} 0 L${oppositeX} 0 A${x} ${y} 0 0 1 1000 ${y} L1000 ${oppositeY} A${x} ${y} 0 0 1 ${oppositeX} 1000 L${x} 1000 A${x} ${y} 0 0 1 0 ${oppositeY} Z`
+      outline = `M${x} 1000 A${x} ${y} 0 0 1 0 ${oppositeY} L0 ${y} A${x} ${y} 0 0 1 ${x} 0 M${oppositeX} 0 A${x} ${y} 0 0 1 1000 ${y} L1000 ${oppositeY} A${x} ${y} 0 0 1 ${oppositeX} 1000`
+      left = inset / width
+      top = inset / height
+      right = 1 - left
+      bottom = 1 - top
+    } else {
+      const y1 = Math.min(width, height) * adjustment / 100_000 / height
+      const curveHeight = y1 * 1000, lowerCurveStart = 1000 - curveHeight
+      outline = kind === 'rightBracket'
+        ? `M0 0 A1000 ${curveHeight} 0 0 1 1000 ${curveHeight} L1000 ${lowerCurveStart} A1000 ${curveHeight} 0 0 1 0 1000`
+        : `M1000 1000 A1000 ${curveHeight} 0 0 1 0 ${lowerCurveStart} L0 ${curveHeight} A1000 ${curveHeight} 0 0 1 1000 0`
+      fillPath = `${outline} Z`
+      left = kind === 'leftBracket' ? 1 - bracketInset : 0
+      top = y1 * (1 - bracketInset)
+      right = kind === 'leftBracket' ? 1 : bracketInset
+      bottom = 1 - y1 * (1 + bracketInset)
+    }
+    const expectedTextRect = [left, top, right - left, bottom - top]
+    return bracket.paths.length === 2 && bracket.paths[0] === fillPath
+      && bracket.paths[1] === outline && bracket.fill === 'rgb(226, 232, 240)'
+      && bracket.stroke.includes('url(') && bracket.textAfterPath
+      && bracket.textRect.every((value, part) => Math.abs(value - expectedTextRect[part]) < 0.005)
+  }) && initial.warnings.some(warning => warning.includes('leftBracket adjustment was constrained'))
+    && initial.warnings.some(warning => warning.includes('bracketPair adjustment was constrained'))
+    && !initial.warnings.some(warning => warning.includes('rightBracket adjustment was constrained')),
+  `Left/right/pair bracket presets must render both ECMA-376 paths and guide-based text rectangles with the defined adjustment limits: ${JSON.stringify({ brackets, warnings: initial.warnings })}`)
+  const bracePairCases = [
+    {adjustment: 8_333, width: 2_600_000, height: 800_000},
+    {adjustment: 20_000, width: 1_600_000, height: 1_600_000},
+    {adjustment: 25_000, width: 800_000, height: 2_600_000},
+    {adjustment: 25_000, width: 2_600_000, height: 800_000},
+  ]
+  const bracePairs = await evaluate(`Array.from({ length: 4 }, (_, index) => {
+    const host = document.querySelector('.stage-shell > .slide-host .slide-element[title="Preset bracePair ' + index + '"]')
+    const svg = host.querySelector('.preset-outline'), paths = [...svg.querySelectorAll('path')]
+    const text = host.querySelector('.text-frame'), style = getComputedStyle(text), rect = host.getBoundingClientRect()
+    return { paths: paths.map(path => path.getAttribute('d')), fill: getComputedStyle(paths[0]).fill, stroke: getComputedStyle(paths[1]).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? rect.height : rect.width)), textAfterPath: Boolean(svg.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) }
+  })`)
+  const expectedBracePairPaths = (width, height, adjustment) => {
+    const shortSide = Math.min(width, height)
+    const radius = shortSide * adjustment / 100_000
+    const x2 = shortSide * adjustment / 50_000
+    const x3 = width - x2, x4 = width - radius
+    const y2 = height / 2 - radius, y3 = height / 2 + radius, y4 = height - radius
+    const point = ([x, y]) => `${Number((x / width * 1000).toFixed(6))} ${Number((y / height * 1000).toFixed(6))}`
+    const build = outline => {
+      let current = [0, 0]
+      const move = (x, y) => { current = [x, y]; return `M${point(current)}` }
+      const line = (x, y) => { current = [x, y]; return `L${point(current)}` }
+      const arc = (startAngle, sweepAngle) => {
+        if (!(radius > 0)) return ''
+        const start = startAngle * Math.PI / 180, end = (startAngle + sweepAngle) * Math.PI / 180
+        const centerX = current[0] - radius * Math.cos(start), centerY = current[1] - radius * Math.sin(start)
+        current = [centerX + radius * Math.cos(end), centerY + radius * Math.sin(end)]
+        return `A${Number((radius / width * 1000).toFixed(6))} ${Number((radius / height * 1000).toFixed(6))} 0 ${Math.abs(sweepAngle) > 180 ? 1 : 0} ${sweepAngle >= 0 ? 1 : 0} ${point(current)}`
+      }
+      const left = [move(x2, height), arc(90, 90), line(radius, y3), arc(0, -90), arc(90, -90), line(radius, radius), arc(180, 90)]
+      const right = [move(x3, 0), arc(270, 90), line(x4, y2), arc(180, -90), arc(270, -90), line(x4, y4), arc(0, 90)]
+      return (outline ? [...left, ...right] : [...left, `L${point([x3, 0])}`, ...right.slice(1), 'Z']).filter(Boolean).join(' ')
+    }
+    return [build(false), build(true)]
+  }
+  const normalizeBracePath = path => path.replace(/-?\d+(?:\.\d+)?/g, value => {
+    const number = Number(value)
+    const rounded = Math.round((number + 4 * Number.EPSILON * Math.max(1, Math.abs(number))) * 1000) / 1000
+    return rounded.toFixed(3).replace(/\.?0+$/, '').replace(/^-0$/, '0')
+  })
+  assert(bracePairs.length === bracePairCases.length && bracePairs.every((brace, index) => {
+    const {adjustment, width, height} = bracePairCases[index]
+    const radius = Math.min(width, height) * adjustment / 100_000
+    const topInset = radius * 29_289 / 100_000, sideInset = radius + topInset
+    const textRect = [sideInset / width, sideInset / height, 1 - 2 * sideInset / width, 1 - (sideInset + topInset) / height]
+    return brace.paths.length === 2 && brace.paths.every((path, part) => normalizeBracePath(path) === normalizeBracePath(expectedBracePairPaths(width, height, adjustment)[part]))
+      && brace.fill === 'rgb(226, 232, 240)' && brace.stroke.includes('url(') && brace.textAfterPath
+      && brace.textRect.every((value, part) => Math.abs(value - textRect[part]) < 0.005)
+  }) && initial.warnings.some(warning => warning.includes('bracePair adjustment was constrained')),
+  `The ECMA-376 bracePair must render both guide-driven paths, preserve gradient outline layering and text bounds across aspect ratios, and clamp invalid adjustments: ${JSON.stringify({ bracePairs, warnings: initial.warnings })}`)
+  const singleBraceCases = [
+    {kind: 'leftBrace', adjustment1: 8_333, adjustment2: 50_000, width: 2_600_000, height: 800_000},
+    {kind: 'rightBrace', adjustment1: 12_500, adjustment2: 25_000, width: 2_600_000, height: 800_000},
+    {kind: 'leftBrace', adjustment1: 25_000, adjustment2: 50_000, width: 2_600_000, height: 800_000},
+    {kind: 'rightBrace', adjustment1: 30_000, adjustment2: 50_000, width: 800_000, height: 2_600_000},
+    {kind: 'leftBrace', adjustment1: 0, adjustment2: 100_000, width: 2_600_000, height: 800_000},
+  ]
+  const singleBraces = await evaluate(`Array.from([['leftBrace', 0], ['rightBrace', 1], ['leftBrace', 2], ['rightBrace', 3], ['leftBrace', 4]], ([kind, index]) => {
+    const host = document.querySelector('.stage-shell > .slide-host .slide-element[title="Preset ' + kind + ' ' + index + '"]')
+    const svg = host.querySelector('.preset-outline'), paths = [...svg.querySelectorAll('path')]
+    const text = host.querySelector('.text-frame'), style = getComputedStyle(text), rect = host.getBoundingClientRect()
+    return { paths: paths.map(path => path.getAttribute('d')), fill: getComputedStyle(paths[0]).fill, stroke: getComputedStyle(paths[1]).stroke, textRect: [style.left, style.top, style.width, style.height].map((value, part) => parseFloat(value) / (part % 2 ? rect.height : rect.width)), textAfterPath: Boolean(svg.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING) }
+  })`)
+  const expectedSingleBracePaths = ({kind, adjustment1, adjustment2, width, height}) => {
+    const shortSide = Math.min(width, height), radiusY = shortSide * adjustment1 / 100_000
+    const radiusX = width / 2, middleX = width / 2
+    const y3 = height * adjustment2 / 100_000, y2 = y3 - radiusY, y4 = height - radiusY
+    const point = ([x, y]) => `${Number((x / width * 1000).toFixed(6))} ${Number((y / height * 1000).toFixed(6))}`
+    const build = closed => {
+      let current = [0, 0]
+      const move = (x, y) => { current = [x, y]; return `M${point(current)}` }
+      const line = (x, y) => { current = [x, y]; return `L${point(current)}` }
+      const arc = (startAngle, sweepAngle) => {
+        if (!(radiusX > 0) || !(radiusY > 0)) return ''
+        const start = startAngle * Math.PI / 180, end = (startAngle + sweepAngle) * Math.PI / 180
+        const centerX = current[0] - radiusX * Math.cos(start), centerY = current[1] - radiusY * Math.sin(start)
+        current = [centerX + radiusX * Math.cos(end), centerY + radiusY * Math.sin(end)]
+        return `A${Number((radiusX / width * 1000).toFixed(6))} ${Number((radiusY / height * 1000).toFixed(6))} 0 ${Math.abs(sweepAngle) > 180 ? 1 : 0} ${sweepAngle >= 0 ? 1 : 0} ${point(current)}`
+      }
+      const commands = kind === 'leftBrace'
+        ? [move(width, height), arc(90, 90), line(middleX, y3 - radiusY), arc(0, -90), arc(90, -90), line(middleX, radiusY), arc(180, 90)]
+        : [move(0, 0), arc(270, 90), line(middleX, y2), arc(180, -90), arc(270, -90), line(middleX, y4), arc(0, 90)]
+      if (closed) commands.push('Z')
+      return commands.filter(Boolean).join(' ')
+    }
+    return [build(true), build(false)]
+  }
+  assert(singleBraces.length === singleBraceCases.length && singleBraces.every((brace, index) => {
+    const value = singleBraceCases[index]
+    const radiusY = Math.min(value.width, value.height) * value.adjustment1 / 100_000
+    const horizontalInset = value.width / 2 * Math.SQRT1_2
+    const top = radiusY * (1 - Math.SQRT1_2) / value.height
+    const textRect = [value.kind === 'leftBrace' ? 1 - horizontalInset / value.width : 0, top, horizontalInset / value.width, 1 - 2 * top]
+    return brace.paths.length === 2 && brace.paths.every((path, part) => normalizeBracePath(path) === normalizeBracePath(expectedSingleBracePaths(value)[part]))
+      && brace.fill === 'rgb(226, 232, 240)' && brace.stroke.includes('url(') && brace.textAfterPath
+      && brace.textRect.every((item, part) => Math.abs(item - textRect[part]) < 0.005)
+  }) && initial.warnings.some(warning => warning.includes('leftBrace adjustment adj1 was constrained'))
+    && initial.warnings.some(warning => warning.includes('leftBrace adjustment adj2 was constrained'))
+    && initial.warnings.some(warning => warning.includes('rightBrace adjustment adj1 was constrained'))
+    && !initial.warnings.some(warning => warning.includes('rightBrace adjustment adj2 was constrained')),
+  `The ECMA-376 leftBrace/rightBrace must render both guide-driven paths, preserve gradient outline layering and text bounds across aspect ratios, and clamp dependent adjustments: ${JSON.stringify({ singleBraces, warnings: initial.warnings })}`)
   const customGradientMetrics = await evaluate(`(() => {
     const path = document.querySelector('.stage-shell > .slide-host .slide-element[title="Custom gradient geometry"] .custom-geometry path')
     const read = property => {
@@ -1145,11 +3514,13 @@ try {
   const staticStrikethroughRuns = initial.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
   const staticStrikeStyles = await evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Text range opacity"] .text-run') || [])].filter(run => run.textContent.trim()).map(run => getComputedStyle(run).textDecorationStyle))()`)
   assert(staticStrikethroughRuns.length > 0 && staticStrikethroughRuns.every(run => run.textDecorationLine.includes('line-through')) && staticStrikeStyles.length === staticStrikethroughRuns.length && staticStrikeStyles.every(style => style === 'double'), `DrawingML a:rPr strike="dblStrike" must render as a double CSS line-through across text-run segmentation: ${JSON.stringify({ runs: staticStrikethroughRuns, styles: staticStrikeStyles })}`)
-  const textUnderlineStyles = await evaluate(`(() => Object.fromEntries([...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Opacity formula targets"] .text-run') || [])].filter(run => run.textContent.trim()).map(run => [run.textContent.trim(), getComputedStyle(run).textDecorationStyle])))()`)
-  assert(textUnderlineStyles.Run === 'dotted' && textUnderlineStyles.Dash === 'dashed' && textUnderlineStyles.Wave === 'wavy' && textUnderlineStyles.Pair === 'double' && textUnderlineStyles.Word === 'solid' && textUnderlineStyles.Mix === 'dotted', `DrawingML underline styles must map to CSS patterns and keep underline precedence when one element combines different underline/strike styles: ${JSON.stringify(textUnderlineStyles)}`)
-  assert(initial.warnings.some(warning => warning.includes('underline value "words" is approximated')) && initial.warnings.some(warning => warning.includes('different underline and strikethrough styles')), `Unrepresentable underline variants and conflicting CSS decoration styles must be reported: ${JSON.stringify(initial.warnings)}`)
+  const textUnderlineStyles = await evaluate(`(() => Object.fromEntries([...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Opacity formula targets"] .text-run') || [])].filter(run => run.textContent.trim()).map(run => [run.textContent.trim(), { underline: getComputedStyle(run.querySelector('.text-run-underline') || run).textDecorationStyle, strikethrough: getComputedStyle(run).textDecorationStyle }])))()`)
+  assert(textUnderlineStyles.Run.underline === 'dotted' && textUnderlineStyles.Dash.underline === 'dashed' && textUnderlineStyles.Wave.underline === 'wavy' && textUnderlineStyles.Pair.underline === 'double' && textUnderlineStyles.Word.underline === 'solid' && textUnderlineStyles.Mix.underline === 'dotted' && textUnderlineStyles.Mix.strikethrough === 'double', `DrawingML underline and strikethrough styles must render independently: ${JSON.stringify(textUnderlineStyles)}`)
+  assert(initial.warnings.some(warning => warning.includes('underline value "words" is approximated')), `Unrepresentable underline variants must be reported: ${JSON.stringify(initial.warnings)}`)
   const outlinedParagraphRuns = await evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Paragraph wipe target"] .text-run') || [])].map(run => ({ color: getComputedStyle(run).webkitTextStrokeColor, width: parseFloat(getComputedStyle(run).webkitTextStrokeWidth) })))()`)
   assert(outlinedParagraphRuns.length === 2 && outlinedParagraphRuns.every(run => run.color === 'rgb(255, 0, 0)' && run.width > 0), `A solid DrawingML text outline must render with its color and width across p:charRg segmentation: ${JSON.stringify(outlinedParagraphRuns)}`)
+  const initialOutlineRangeRuns = initial.textRuns.filter(run => run.name === 'Text outline range' && run.text.trim())
+  assert(initialOutlineRangeRuns.length > 0 && initialOutlineRangeRuns.every(run => Number.parseFloat(run.textStrokeWidth) > 0 && run.textShadow !== 'none') && !initial.warnings.some(warning => warning.includes('text outline') && warning.includes('text range')), `Character-range outline and shadow animations must preserve complete static effects before their trigger without warning: ${JSON.stringify({ runs: initialOutlineRangeRuns, warnings: initial.warnings })}`)
   assert(['Al', '\n', 'ways'].every(text => initial.textRuns.some(run => run.text === text && run.visibility === 'hidden')) && initial.textRuns.find(run => run.text === 'Al')?.start === 16 && initial.textRuns.find(run => run.text === 'ways')?.end === 23 && initial.textRuns.some(run => run.text === ' visible' && run.visibility === 'visible'), 'Character ranges must isolate the half-open selected text interval across styled spans.')
   assert(shape(initial, 'Automatic fade').visibility === 'hidden' && shape(initial, 'Automatic fade').opacity === '0', `An automatic entrance must remain hidden throughout its delay: ${JSON.stringify({ shape: shape(initial, 'Automatic fade'), warnings: initial.warnings, reducedMotion: await evaluate("matchMedia('(prefers-reduced-motion: reduce)').matches") })}`)
   const motionWarnings = initial.warnings.filter(warning => warning.toLowerCase().includes('motion'))
@@ -1167,6 +3538,7 @@ try {
   assert(!initial.warnings.some(warning => warning.includes('shape iteration')), `Shape iteration must be handled rather than reported as unsupported: ${JSON.stringify(initial.warnings)}`)
   assert(shape(initial, 'Click fade').visibility === 'hidden' && shape(initial, 'With previous').visibility === 'hidden', 'Entrance targets must start hidden.')
   assert(shape(initial, 'Exit after previous').visibility === 'visible' && shape(initial, 'Second click').visibility === 'hidden', 'Exit targets must start visible while later entrances remain hidden.')
+  assert(shape(initial, 'Next event target').visibility === 'visible', 'An onBegin interactive sequence must start when its referenced main-sequence time node begins.')
   assert(shape(initial, 'Wipe exit').visibility === 'visible', 'A wipe exit target must begin visible.')
   assert(shape(initial, 'Blinds animation').maskImage.includes('repeating-linear-gradient') && shape(initial, 'Blinds animation').blindsStripeSize === '0%', 'An entrance blinds animation must begin with all slats closed.')
   const checkerStart = shape(initial, 'Checker animation').clipPath
@@ -1174,34 +3546,49 @@ try {
   assert(['W', 'O', 'R', 'D'].every(text => initial.textRuns.find(run => run.text === text)?.visibility === 'hidden'), 'By-letter animation text must start hidden before its click step.')
   assert(['ONE', 'TWO'].every(text => initial.textRuns.find(run => run.text === text)?.visibility === 'hidden'), 'By-word animation text must start hidden before its click step.')
   assert(paragraph(initial, 'Built paragraph').visibility === 'hidden' && paragraph(initial, 'Al\nways visible').visibility === 'visible', 'Only the targeted paragraph range must start hidden.')
+  const forcedLineBreak = await evaluate(`(() => {
+    const paragraph = [...document.querySelectorAll('.stage-shell > .slide-host .text-paragraph')].find(item => item.textContent.includes('Al') && item.textContent.includes('ways visible'))
+    const runs = [...(paragraph?.querySelectorAll('.text-run') || [])]
+    const first = runs.find(run => run.textContent === 'Al')
+    const lineBreak = runs.find(run => run.textContent === String.fromCharCode(10))
+    const next = lineBreak && runs[runs.indexOf(lineBreak) + 1]
+    return { paragraphCount: document.querySelectorAll('.stage-shell > .slide-host .text-paragraph').length, text: paragraph?.textContent, runs: runs.map(run => run.textContent), firstTop: first?.getBoundingClientRect().top, nextTop: next?.getBoundingClientRect().top, whiteSpace: lineBreak && getComputedStyle(lineBreak).whiteSpace }
+  })()`)
+  assert(forcedLineBreak.nextTop !== undefined && forcedLineBreak.firstTop !== undefined && forcedLineBreak.nextTop > forcedLineBreak.firstTop + 1 && forcedLineBreak.whiteSpace === 'pre', `DrawingML a:br must force the following run onto a new visual line: ${JSON.stringify(forcedLineBreak)}`)
 
   assert(initial.textRuns.find(run => run.name === 'Character slide animation' && run.text === 'REST')?.visibility === 'visible'
     && initial.textRuns.find(run => run.name === 'Character slide animation' && run.text === 'MOVE')?.visibility === 'hidden'
     && !initial.warnings.some(warning => warning.includes('Text-range slide')),
   'A valid character-range slide entrance must hide only its selected range without an unsupported-effect warning.')
-  const autoActive = await evaluate(`new Promise(resolve => {
+  const autoRepeat = await evaluate('window.__automaticFadeRepeatProbe')
+  assert(autoRepeat && autoRepeat.firstOpacity > 0 && autoRepeat.maxOpacity > 0.5 && autoRepeat.opacity > 0 && autoRepeat.opacity < autoRepeat.maxOpacity - 0.3, `A repeated fade must restart its interpolation for the second iteration: ${JSON.stringify(autoRepeat)}`)
+  const autoComplete = await evaluate(`new Promise(resolve => {
     const started = performance.now()
+    let stableFrames = 0
     const checkFrame = () => {
       const element = document.querySelector('.stage-shell > .slide-host [title="Automatic fade"]')
-      const opacity = Number(element && getComputedStyle(element).opacity)
-      if (element && getComputedStyle(element).visibility === 'visible' && opacity > 0 && opacity < 0.3) resolve(true)
+      const style = element && getComputedStyle(element)
+      stableFrames = style?.visibility === 'visible' && style.opacity === '1' ? stableFrames + 1 : 0
+      if (stableFrames >= 8) resolve(true)
       else if (performance.now() - started > 12000) resolve(false)
       else requestAnimationFrame(checkFrame)
     }
     checkFrame()
   })`)
-  assert(autoActive, `The repeated automatic fade must enter its first interpolation after its delay: ${JSON.stringify({ automatic: shape(await state(), 'Automatic fade'), warnings: initial.warnings })}`)
-  await delay(200)
-  const autoRepeat = await state()
-  assert(Number(shape(autoRepeat, 'Automatic fade').opacity) > 0 && Number(shape(autoRepeat, 'Automatic fade').opacity) < 1, 'A repeated fade must restart its interpolation for the second iteration.')
-  await delay(200)
-  const autoComplete = await state()
-  assert(shape(autoComplete, 'Automatic fade').visibility === 'visible' && shape(autoComplete, 'Automatic fade').opacity === '1', 'The repeated automatic sequence must hold its final state without a click.')
+  assert(autoComplete, 'The repeated automatic sequence must hold its final state without a click.')
+  const pressPresentationKey = key => evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`)
+  const readScreenBlank = () => evaluate(`document.querySelector('.screen-overlay')?.classList.contains('is-black') ? 'black' : document.querySelector('.screen-overlay')?.classList.contains('is-white') ? 'white' : null`)
+  for (const [key, mode] of [['b', 'black'], ['w', 'white'], ['.', 'black'], [',', 'white']]) {
+    await pressPresentationKey(key)
+    assert(await readScreenBlank() === mode, `${key} must activate the ${mode} blank screen.`)
+    await pressPresentationKey(key)
+    assert(await readScreenBlank() === null, `${key} must restore the presentation from the ${mode} blank screen.`)
+  }
 
-  const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell').click(); return started })()`)
-  const afterStart = await stateAtElapsed(clickStartedAt, 50)
+  const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell').click(); window.__earlyClickState = new Promise(resolve => { const sample = frameTime => { if (frameTime - started >= 50) { const sampleTime = frameTime; resolve(${stateExpression}) } else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }); return started })()`)
+  const afterStart = await evaluate('window.__earlyClickState')
   assert(shape(afterStart, 'Click fade').visibility === 'visible' && shape(afterStart, 'With previous').visibility === 'hidden', `The delayed with-effect must not start with the click effect: ${JSON.stringify({ click: shape(afterStart, 'Click fade'), delayed: shape(afterStart, 'With previous') })}`)
-  assert(Number(shape(afterStart, 'Click fade').opacity) > 0 && Number(shape(afterStart, 'Click fade').opacity) < 0.29, `A fade with equal acceleration and deceleration should still be in the early part of its normalized time curve: ${shape(afterStart, 'Click fade').opacity}`)
+  assert(Number(shape(afterStart, 'Click fade').opacity) > 0 && Number(shape(afterStart, 'Click fade').opacity) < 0.29, `A fade with equal acceleration and deceleration should still be in the early part of its normalized time curve: ${JSON.stringify({ elapsed: afterStart.now - clickStartedAt, captureDuration: afterStart.captureEndedAt - afterStart.now, opacity: shape(afterStart, 'Click fade').opacity })}`)
   assert(Number(shape(afterStart, 'Parent eased fade').opacity) > 0 && Number(shape(afterStart, 'Parent eased fade').opacity) < 0.29, `A finite parent time-node curve must shape its child animation progress: ${shape(afterStart, 'Parent eased fade').opacity}`)
   assert(shape(afterStart, 'Parent timing after-effect').visibility === 'hidden', 'An after-effect must wait for the finite parent time-container duration.')
   const characterSlideDuring = await evaluate(`(() => { const shape = document.querySelector('.stage-shell > .slide-host .slide-element[title="Character slide animation"]'); const read = text => { const run = [...shape.querySelectorAll('.text-run')].find(item => item.textContent === text); const style = getComputedStyle(run); const matrix = style.transform === 'none' ? new DOMMatrix() : new DOMMatrix(style.transform); return { translateX: matrix.e, visibility: style.visibility } }; return { rest: read('REST'), move: read('MOVE'), frameWidth: shape.closest('.slide-frame')?.getBoundingClientRect().width } })()`)
@@ -1215,9 +3602,17 @@ try {
   const paragraphWipe = afterStart.paragraphs.find(item => item.text === 'Paragraph wipe target')
   assert(paragraphWipe?.maskImage.includes('linear-gradient') && Number.parseFloat(paragraphWipe.wipeProgress) > 0 && Number.parseFloat(paragraphWipe.wipeProgress) < 100 && paragraphWipe.opacity === '1' && shape(afterStart, 'Paragraph wipe target').maskImage === 'none', `A paragraph-range wipe must mask only the selected paragraph and preserve text opacity: ${JSON.stringify(paragraphWipe)}`)
   const letterRuns = afterStart.textRuns.filter(run => ['W', 'O', 'R', 'D'].includes(run.text))
-  assert(letterRuns.length === 4 && Number(letterRuns[0].opacity) > 0 && Number(letterRuns[0].opacity) < 1 && letterRuns.slice(1).every(run => run.visibility === 'hidden'), `The tmAbs by-letter iteration must stagger grapheme starts: ${JSON.stringify(letterRuns)}`)
+  assert(letterRuns.length === 4 && letterRuns[0].visibility === 'visible' && letterRuns[0].maskImage.includes('linear-gradient') && Number.parseFloat(letterRuns[0].wipeProgress) > 0 && Number.parseFloat(letterRuns[0].wipeProgress) < 100 && letterRuns.slice(1).every(run => run.visibility === 'hidden'), `The tmAbs by-letter wipe must stagger text masks: ${JSON.stringify(letterRuns)}`)
+  const letterSlideX = await evaluate(`(() => [...document.querySelectorAll('.stage-shell > .slide-host .slide-element[title="By letter"] .text-run')].map(run => { const transform = getComputedStyle(run).transform; return transform === 'none' ? 0 : new DOMMatrix(transform).e }))()`)
+  assert(letterSlideX.length === 4 && letterSlideX[0] < 0 && letterSlideX[0] > -Number(afterStart.hostFrame.width) && letterSlideX.slice(1).every(value => Math.abs(value + Number(afterStart.hostFrame.width)) < 0.5), `The tmAbs by-letter slide must move the active grapheme while keeping later graphemes offstage: ${JSON.stringify(letterSlideX)}`)
+  const letterTransformStats = await evaluate(`(() => [...document.querySelectorAll('.stage-shell > .slide-host .slide-element[title="By letter"] .text-run')].map(run => { const transform = getComputedStyle(run).transform; const matrix = transform === 'none' ? new DOMMatrix() : new DOMMatrix(transform); return { scale: Math.hypot(matrix.a, matrix.b), rotation: Math.atan2(matrix.b, matrix.a) * 180 / Math.PI } }))()`)
+  assert(letterTransformStats.length === 4 && letterTransformStats[0].scale > 1 && letterTransformStats[0].scale < 1.5 && letterTransformStats[0].rotation > 0 && letterTransformStats[0].rotation < 90 && letterTransformStats.slice(1).every(value => Math.abs(value.scale - 1) < 0.01 && Math.abs(value.rotation) < 0.5), `The tmAbs by-letter scale and rotation must animate only the active grapheme: ${JSON.stringify(letterTransformStats)}`)
+  const letterShapeTransform = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By letter"]')).transform`)
+  assert(letterShapeTransform === 'none', `By-letter transforms must not leak onto the whole target shape: ${letterShapeTransform}`)
   const wordRuns = afterStart.textRuns.filter(run => run.name === 'By word' && ['ONE', 'TWO', ' '].includes(run.text))
-  assert(wordRuns.length === 3 && Number(wordRuns.find(run => run.text === 'TWO')?.opacity) > 0 && wordRuns.find(run => run.text === 'ONE')?.visibility === 'hidden' && wordRuns.find(run => run.text === ' ')?.visibility === 'visible', `The backwards tmPct by-word iteration must reveal words in reverse and leave separators alone: ${JSON.stringify(wordRuns)}`)
+  assert(wordRuns.length === 3 && Number(wordRuns.find(run => run.text === 'TWO')?.opacity) > 0 && wordRuns.find(run => run.text === 'TWO')?.maskImage !== 'none' && wordRuns.find(run => run.text === 'ONE')?.visibility === 'hidden' && wordRuns.find(run => run.text === ' ')?.visibility === 'visible', `The backwards tmPct by-word strips iteration must reveal and mask words in reverse while leaving separators alone: ${JSON.stringify(wordRuns)}`)
+  const wordMotionState = { shapeTransform: shape(afterStart, 'By word').transform, runs: afterStart.textRuns.filter(run => run.name === 'By word').map(run => ({ text: run.text, y: transformValues(run)[5] })) }
+  assert(wordMotionState.shapeTransform === 'none' && wordMotionState.runs.filter(run => run.text === 'TWO').length === 1 && wordMotionState.runs.find(run => run.text === 'TWO').y > 0 && Math.abs(wordMotionState.runs.find(run => run.text === 'ONE').y) < 0.5, `The backwards by-word motion must move only the active word, without moving its target shape: ${JSON.stringify(wordMotionState)}`)
   const baseFontSize = Number.parseFloat(initial.textRuns.find(run => run.text === 'ways')?.fontSize || '')
   const activeFontSize = Number.parseFloat(afterStart.textRuns.find(run => run.text === 'ways')?.fontSize || '')
   assert(activeFontSize > baseFontSize && activeFontSize < baseFontSize * 1.5, `A generic style.fontSize animation must interpolate on just the targeted character range: ${JSON.stringify({ baseFontSize, activeFontSize, targetRun: afterStart.textRuns.find(run => run.text === 'ways'), warnings: afterStart.warnings.filter(warning => /font.?size|animation/i.test(warning)) })}`)
@@ -1225,6 +3620,8 @@ try {
   assert(fadeOpacity > 0 && fadeOpacity < 1, 'A fade entrance must interpolate during its duration.')
   const motionAtStart = shape(afterStart, 'Motion path').frameRect.left / shape(afterStart, 'Motion path').frameRect.frameWidth
   assert(motionAtStart > motionStart + 0.2 && motionAtStart < motionStart + 0.25, `A later motion-path M must snap to its new subpath and continue interpolating there: ${motionAtStart - motionStart}`)
+  const fixedMotionDuring = shape(afterStart, 'Fixed motion path').frameRect
+  assert(Math.abs(fixedMotionDuring.top / fixedMotionDuring.frameHeight - 0.1) < 0.01, `A lowercase motion-path m must offset its point from the current path position: ${JSON.stringify(fixedMotionDuring)}`)
   const curveAtStart = shape(afterStart, 'Curved motion path').frameRect
   assert(curveAtStart.top / curveAtStart.frameHeight > curveStart.top / curveStart.frameHeight + 0.01, 'A cubic Bezier path must interpolate along its curved y-coordinate.')
   assert(shape(afterStart, 'Exit after previous').visibility === 'visible', 'The after-effect must wait for preceding effects.')
@@ -1252,13 +3649,15 @@ try {
   assert(Math.abs(Number.parseFloat(afterChain.textRuns.find(run => run.text === 'ways')?.fontSize || '') - baseFontSize * 1.5) < 0.5, 'A held generic style.fontSize animation must retain its final scale.')
   assert(shape(afterChain, 'Click fade').visibility === 'visible' && shape(afterChain, 'With previous').visibility === 'visible', 'Both entrance effects must finish in the first click step.')
   assert(shape(afterChain, 'Parent timing after-effect').visibility === 'visible' && shape(afterChain, 'Parent timing after-effect').opacity === '1', 'The after-effect must begin and finish after the complete parent time-container duration.')
+  assert(shape(afterChain, 'Previous event target').visibility === 'visible', 'An onEnd interactive sequence must start after its referenced main-sequence time node ends.')
   assert(Math.abs(shape(afterChain, 'Motion path').frameRect.left / shape(afterChain, 'Motion path').frameRect.frameWidth - motionStart - 0.25) < 0.01, 'A straight layout-origin motion path must end at its OOXML slide-size offset.')
   const relativeMotionEnd = shape(afterChain, 'Relative position motion').frameRect.left / shape(afterChain, 'Relative position motion').frameRect.frameWidth
   assert(Math.abs(relativeMotionEnd - relativeMotionStart - 0.25) < 0.01, 'A parent-origin by-only motion must add its ST_Percentage offset to the object position.')
   assert(Math.abs(shape(afterChain, 'From/to motion').frameRect.left / shape(afterChain, 'From/to motion').frameRect.frameWidth - fromToMotionStart - 0.5) < 0.01, 'A from/to motion must end at its slide-percentage coordinate and accept percent-string attributes.')
   assert(Math.abs(shape(afterChain, 'From/by motion').frameRect.left / shape(afterChain, 'From/by motion').frameRect.frameWidth - fromByMotionStart - 0.35) < 0.01, 'A from/by motion must add the relative offset to its supplied start coordinate.')
   assert(Math.abs(shape(afterChain, 'To-only motion').frameRect.left / shape(afterChain, 'To-only motion').frameRect.frameWidth - toMotionStart - 0.4) < 0.01, 'A to-only motion must interpolate from the current layout position.')
-  assert(Math.abs(shape(afterChain, 'Fixed motion path').frameRect.left / shape(afterChain, 'Fixed motion path').frameRect.frameWidth - 0.25) < 0.01 && fixedMotionStart > 0.3, 'A fixed layout-origin path must remain anchored to its slide coordinates when the target starts elsewhere.')
+  const fixedMotionEnd = shape(afterChain, 'Fixed motion path').frameRect
+  assert(Math.abs(fixedMotionEnd.left / fixedMotionEnd.frameWidth - 0.3) < 0.01 && Math.abs(fixedMotionEnd.top / fixedMotionEnd.frameHeight - 0.1) < 0.01 && fixedMotionStart > 0.3, `A fixed path's relative M must offset from the preceding absolute point while remaining slide-anchored: ${JSON.stringify(fixedMotionEnd)}`)
   const rotatedMotionEnd = shape(afterChain, 'Rotated fixed motion path').frameRect
   assert(Math.abs(rotatedMotionEnd.left / rotatedMotionEnd.frameWidth - 0.5) < 0.01 && Math.abs(rotatedMotionEnd.top / rotatedMotionEnd.frameHeight - (0.5 + 0.05 * rotatedMotionEnd.frameWidth / rotatedMotionEnd.frameHeight)) < 0.01 && rotatedMotionStart.left / rotatedMotionStart.frameWidth > 0.3, `rAng must rotate a fixed layout path clockwise around its rCtr slide point: ${JSON.stringify({ start: rotatedMotionStart, end: rotatedMotionEnd })}`)
   const formulaMotionEnd = shape(afterChain, 'Formula fixed motion path').frameRect
@@ -1357,39 +3756,56 @@ try {
   const baselineShift = await evaluate(`(() => { const run = document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run'); return { offset: parseFloat(getComputedStyle(run).verticalAlign), size: parseFloat(getComputedStyle(run).fontSize) } })()`)
   assert(Math.abs(baselineShift.offset / baselineShift.size - 0.3) < 0.01, `DrawingML a:rPr/@baseline="30000" must raise the run by 30% of its font size: ${baselineShift.offset}/${baselineShift.size}`)
   const textShadowNames = ['Text shadow direct', 'Text shadow keyframes', 'Text shadow set none', 'Text shadow set auto']
-  const dynamicMotionStart = await evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="Dynamic formula motion path"]'); const frame = target.closest('.slide-frame').getBoundingClientRect(); const left = target.getBoundingClientRect().left - frame.left; const frameWidth = frame.width; const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale emphasis"]').click(); return { left, frameWidth, started } })()`)
+  const dynamicMotionStart = await evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="Dynamic formula motion path"]'); const frame = target.closest('.slide-frame').getBoundingClientRect(); const left = target.getBoundingClientRect().left - frame.left; const frameWidth = frame.width; const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale emphasis"]').click(); window.__triggerTextShadowStart = new Promise(resolve => requestAnimationFrame(() => resolve(${JSON.stringify(textShadowNames)}.map(name => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="' + name + '"] .text-run')); return {filter: style.filter, textShadow: style.textShadow} })))); window.__triggerAnimationState = new Promise(resolve => { const sample = frameTime => { if (frameTime - started >= 100) { const sampleTime = frameTime; resolve(${stateExpression}) } else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }); return { left, frameWidth, started } })()`)
   const triggerStartedAt = dynamicMotionStart.started
-  const textEmbossStartFilters = await evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve(${JSON.stringify(textShadowNames)}.map(name => getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="' + name + '"] .text-run')).filter))))`)
-  await delay(80)
-  const triggered = await state()
+  const textShadowStartStyles = await evaluate('window.__triggerTextShadowStart')
+  const triggered = await evaluate('window.__triggerAnimationState')
+  await evaluate(`window.__hueSample = new Promise(resolve => {
+    const sample = () => {
+      const color = getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Stroke color"] .line-render')).borderTopColor
+      const [red, green, blue] = (color.match(/\\d+/g) || []).map(Number)
+      if (red > 150 && blue > 150 && green < 60 || performance.now() - ${triggerStartedAt} >= 300) resolve({ color, elapsed: performance.now() - ${triggerStartedAt}, passed: red > 150 && blue > 150 && green < 60 })
+      else requestAnimationFrame(sample)
+    }
+    sample()
+  }); true`)
+  // Capture the shared midpoint before later CDP round trips can pass the word-stagger window.
+  await delay(Math.max(0, 190 - ((await evaluate('performance.now()')) - triggerStartedAt)))
+  const iterationMiddle = await state()
+  const hueSample = await evaluate('window.__hueSample')
   const textRangeOpacityDuring = triggered.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
   const opacityFormulaTextRunsDuring = triggered.textRuns.filter(run => run.name === 'Opacity formula targets' && run.text.trim() === 'Run')
   const initialTextShadowRuns = initial.textRuns.filter(run => textShadowNames.includes(run.name) && run.text.trim())
   const textShadowRuns = (snapshot, name) => snapshot.textRuns.filter(run => run.name === name && run.text.trim())
-  const textEmbossFilter = name => evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="${name}"] .text-run')).filter`)
   assert(initialTextShadowRuns.length === textShadowNames.length && initialTextShadowRuns.every(run => run.textShadow !== 'none'), `Text-shadow animation fixtures must begin with a static run shadow: ${JSON.stringify(initialTextShadowRuns)}`)
-  assert(textShadowRuns(triggered, 'Text shadow direct').every(run => run.textShadow !== 'none') && textShadowRuns(triggered, 'Text shadow keyframes').every(run => run.textShadow !== 'none') && textShadowRuns(triggered, 'Text shadow set none').every(run => run.textShadow === 'none') && textShadowRuns(triggered, 'Text shadow set auto').every(run => run.textShadow !== 'none'), `Direct/from and p:set text-shadow values must compose with the static shadow at trigger start: ${JSON.stringify(textShadowNames.map(name => [name, textShadowRuns(triggered, name)]))}`)
-  assert(textEmbossStartFilters[0] === 'none' && textEmbossStartFilters[1] === 'none' && textEmbossStartFilters[2]?.includes('drop-shadow') && textEmbossStartFilters[3] === 'none', `Text emboss from/to, keyframes, and p:set must apply discrete values: ${JSON.stringify(textEmbossStartFilters)}`)
+  assert(textShadowStartStyles[0]?.textShadow !== 'none' && textShadowStartStyles[1]?.textShadow !== 'none' && textShadowStartStyles[2]?.textShadow === 'none' && textShadowStartStyles[3]?.textShadow !== 'none', `Direct/from and p:set text-shadow values must compose with the static shadow at trigger start: ${JSON.stringify(textShadowStartStyles)}`)
+  assert(textShadowStartStyles[0]?.filter === 'none' && textShadowStartStyles[1]?.filter === 'none' && textShadowStartStyles[2]?.filter?.includes('drop-shadow') && textShadowStartStyles[3]?.filter === 'none', `Text emboss from/to, keyframes, and p:set must apply discrete values: ${JSON.stringify(textShadowStartStyles)}`)
   assert(triggered.warnings.some(warning => warning.includes('text emboss animation is approximated with CSS drop shadows')), `Text emboss approximation must be reported: ${JSON.stringify(triggered.warnings)}`)
-  assert(triggered.warnings.some(warning => warning.includes('text shadow animation without complete static shadows or with a text range was skipped.')), `Unsupported shadow ranges and missing static shadows must produce a warning: ${JSON.stringify(triggered.warnings)}`)
+  assert(triggered.warnings.some(warning => warning.includes('text shadow animation without complete static shadows was skipped.')) && !triggered.warnings.some(warning => warning.includes('text shadow') && warning.includes('text range')), `Missing static shadows must produce a warning while valid character ranges remain supported: ${JSON.stringify(triggered.warnings)}`)
   const cssAlpha = value => Number(value.match(/rgba\([^,]+,\s*[^,]+,\s*[^,]+,\s*([\d.]+)\)/)?.[1] ?? 1)
+  const gradientStopAlphas = value => [...value.matchAll(/rgba\([^)]*\)/g)].map(match => cssAlpha(match[0]))
+
   assert(textRangeOpacityDuring.length === 2 && [textRangeOpacityDuring[0].color, textRangeOpacityDuring[0].textStrokeColor, textRangeOpacityDuring[0].textShadow, textRangeOpacityDuring[1].color, textRangeOpacityDuring[1].textStrokeColor, textRangeOpacityDuring[1].textShadow].every(value => cssAlpha(value) > 0 && cssAlpha(value) < 1), 'Numeric and formula character-range fill, outline, and shadow opacity must interpolate only across their selected text.')
   assert(opacityFormulaTextRunsDuring.length === 1 && opacityFormulaTextRunsDuring[0].opacity > 0 && opacityFormulaTextRunsDuring[0].opacity < 1, `A style.opacity formula must apply to its targeted text range: ${JSON.stringify(opacityFormulaTextRunsDuring)}`)
   const cssRgb = value => value.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/)?.slice(1, 4).map(Number)
   const textRangeShadowDuringRgb = cssRgb(textRangeOpacityDuring[0]?.textShadow || '')
   assert(textRangeShadowDuringRgb?.[0] > 0 && textRangeShadowDuringRgb[0] < 255 && textRangeShadowDuringRgb[1] === 0 && textRangeShadowDuringRgb[2] === 0, `Character-range shadow.color must interpolate on only the selected text: ${textRangeOpacityDuring[0]?.textShadow}`)
-  assert(triggered.slide?.startsWith('01 / 67') && shape(triggered, 'Click fade').visibility === 'visible', 'Clicking the configured trigger shape must start its animation without advancing the slide build.')
+  assert(triggered.slide?.startsWith('01 / 68') && shape(triggered, 'Click fade').visibility === 'visible', 'Clicking the configured trigger shape must start its animation without advancing the slide build.')
+  const additiveRotationDuring = rotation(shape(triggered, 'Additive rotation'))
+  assert(additiveRotationDuring > 30 && additiveRotationDuring < 45, `An additive rotation must interpolate on top of its 30-degree base: ${additiveRotationDuring}`)
   assert(shape(triggered, 'Dynamic formula motion path').frameRect.left < dynamicMotionStart.left - dynamicMotionStart.frameWidth * 0.04, `A dynamic motion formula must change the target path as progress advances: ${shape(triggered, 'Dynamic formula motion path').frameRect.left - dynamicMotionStart.left}`)
+  const coordinateStart = shape(initial, 'Opacity formula targets').frameRect
+  const coordinateDuring = shape(triggered, 'Opacity formula targets').frameRect
+  assert(coordinateDuring.left > coordinateStart.left + coordinateStart.frameWidth * 0.02 && coordinateDuring.top > coordinateStart.top + coordinateStart.frameHeight * 0.02, `Generic ppt_x/ppt_y animations must move their target independently on both axes: ${JSON.stringify({ start: coordinateStart, during: coordinateDuring })}`)
   const triggerOpacity = Number(shape(triggered, 'Click fade').opacity)
   const formulaOpacityDuring = Number(shape(triggered, 'By word').opacity)
   assert(formulaOpacityDuring > 0.4 && formulaOpacityDuring < 0.8, `A linear style.opacity p:tav formula must affect the target element: ${formulaOpacityDuring}`)
-  const formulaFontSizeDuring = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')).fontSize)`)) / formulaFontSizeBase
+  const formulaFontSizeDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'By word' && run.text.trim())?.fontSize || '') / formulaFontSizeBase
   assert(formulaFontSizeDuring > 1.3 && formulaFontSizeDuring < 1.8, `A linear style.fontSize p:tav formula must affect the active text size: ${formulaFontSizeDuring}`)
-  const fontWeightDuring = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Paragraph wipe target"] .text-run')).fontWeight)`))
-  const keyframedFontWeightSample = await evaluate(`(() => ({ weight: parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By letter"] .text-run')).fontWeight), now: performance.now() }))()`)
-  const keyframedFontWeightDuring = Number(keyframedFontWeightSample.weight)
-  assert(fontWeightDuring > 400 && fontWeightDuring < 900, `A generic style.fontWeight animation must interpolate text weight: ${fontWeightDuring}`)
-  const keyframedFontWeightProgress = Math.min(1, Math.max(0, (Number(keyframedFontWeightSample.now) - triggerStartedAt) / 300))
+  const fontWeightDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'Paragraph wipe target' && run.text.trim())?.fontWeight || '')
+  const keyframedFontWeightDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'By letter' && run.text.trim())?.fontWeight || '')
+  assert(fontWeightDuring > 400 && fontWeightDuring < 900, `A generic style.fontWeight animation must interpolate text weight at ${Math.round(triggered.now - triggerStartedAt)}ms: ${fontWeightDuring}`)
+  const keyframedFontWeightProgress = Math.min(1, Math.max(0, (triggered.now - triggerStartedAt) / 300))
   const expectedKeyframedFontWeight = keyframedFontWeightProgress < 0.5 ? 400 + keyframedFontWeightProgress * 600 : 700 + (keyframedFontWeightProgress - 0.5) * 400
   assert(Math.abs(keyframedFontWeightDuring - expectedKeyframedFontWeight) < 50, `A numeric font-weight p:tavLst must interpolate from its keyframes at the captured animation time: ${keyframedFontWeightDuring}/${expectedKeyframedFontWeight}`)
   assert(shape(triggered, 'Custom geometry').opacity === '0.5', `A triggered p:set fltVal must apply its fixed opacity: ${shape(triggered, 'Custom geometry').opacity}`)
@@ -1412,20 +3828,9 @@ try {
   const shadowRedDuring = Number(/rgba\(([\d.]+)/.exec(shape(triggered, 'With previous').boxShadow)?.[1])
   assert(shadowRedDuring > 0 && shadowRedDuring < 255, `A shadow.color animation must interpolate its target color: ${shape(triggered, 'With previous').boxShadow}`)
   assert(shape(triggered, 'Rotated group child').transform !== shape(initial, 'Rotated group child').transform, 'Rotation animation must compose with a grouped shape’s existing transform matrix.')
-  const hueSample = await evaluate(`new Promise(resolve => {
-    const sample = () => {
-      const color = getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Stroke color"] .line-render')).borderTopColor
-      const [red, green, blue] = (color.match(/\\d+/g) || []).map(Number)
-      if (red > 150 && blue > 150 && green < 60 || performance.now() - ${triggerStartedAt} >= 300) resolve({ color, elapsed: performance.now() - ${triggerStartedAt}, passed: red > 150 && blue > 150 && green < 60 })
-      else requestAnimationFrame(sample)
-    }
-    sample()
-  })`)
   assert(hueSample.passed, `Clockwise HSL interpolation must pass through magenta: ${JSON.stringify(hueSample)}`)
-  await delay(Math.max(0, 190 - ((await evaluate('performance.now()')) - triggerStartedAt)))
-  const discreteOpacityMiddle = await state()
+  const discreteOpacityMiddle = iterationMiddle
   assert(Math.abs(Number(shape(discreteOpacityMiddle, 'Scale emphasis').opacity) - 0.8) < 0.02, `A discrete opacity p:tavLst must jump at its middle keypoint: ${shape(discreteOpacityMiddle, 'Scale emphasis').opacity}`)
-  const iterationMiddle = await state()
   const runsNamed = name => iterationMiddle.textRuns.filter(run => run.name === name && run.text.trim())
   const paragraphWipeMiddle = runsNamed('Paragraph wipe target')[0]
   const byLetterMiddle = runsNamed('By letter')[0]
@@ -1450,15 +3855,15 @@ try {
   const textTransformMiddle = byWordMiddleRuns[0]?.verticalAlign
   const textOutlineMiddle = Number.parseFloat(byWordMiddleRuns[0]?.textStrokeWidth || '')
   const textShadowKeyframeMiddle = runsNamed('Text shadow keyframes')
-  const textEmbossKeyframeMiddle = await textEmbossFilter('Text shadow keyframes')
+  const textEmbossKeyframeMiddle = textShadowRuns(iterationMiddle, 'Text shadow keyframes')[0]?.filter || 'none'
   const iteratedWordMiddle = byWordMiddleRuns.map(run => ({ text: run.text, weight: Number.parseFloat(run.fontWeight), fontStyle: run.fontStyle }))
   const iteratedOpacityMiddle = opacityWordMiddleRuns.map(run => ({ text: run.text, opacity: Number.parseFloat(run.opacity) }))
   assert(fontWeightMiddle > 700 && fontWeightMiddle < 900, `A held font-weight value must progress during its second half: ${fontWeightMiddle}`)
   assert(keyframedFontWeightMiddle > 700 && keyframedFontWeightMiddle < 900, `A linear numeric font-weight p:tavLst must interpolate the final interval: ${keyframedFontWeightMiddle}`)
   assert(formulaFontWeightMiddle > 700 && formulaFontWeightMiddle < 850, `A linear style.fontWeight p:tav formula must combine the numeric track and behavior progress: ${formulaFontWeightMiddle}`)
-  assert(formulaFontSizeMiddle > 1.6 && formulaFontSizeMiddle < 2, `A linear style.fontSize p:tav formula must combine the numeric track and behavior progress: ${formulaFontSizeMiddle}`)
+  assert(formulaFontSizeMiddle > 1.5 && formulaFontSizeMiddle < 2, `A linear style.fontSize p:tav formula must raise the active numeric track above its 1.5 maximum (${Math.round(iterationMiddle.now - triggerStartedAt)}ms): ${formulaFontSizeMiddle}`)
   assert(formulaOpacityMiddle > 0.6 && formulaOpacityMiddle < 0.9, `A linear style.opacity p:tav formula must combine the numeric track and behavior progress: ${formulaOpacityMiddle}`)
-  assert(opacityFormulaFillMiddle > 0.55 && opacityFormulaFillMiddle < 0.8 && opacityFormulaStrokeMiddle > 0.45 && opacityFormulaStrokeMiddle < 0.7 && opacityFormulaShadowMiddle > 0.15 && opacityFormulaShadowMiddle < 0.3, `Linear p:tav formulas must animate fill.opacity, stroke.opacity, and shadow.opacity: ${JSON.stringify({ opacityFormulaFillMiddle, opacityFormulaStrokeMiddle, opacityFormulaShadowMiddle, opacityFormulaMidpoint })}`)
+  assert(opacityFormulaFillMiddle > 0.5 && opacityFormulaFillMiddle < 0.8 && opacityFormulaStrokeMiddle > 0.4 && opacityFormulaStrokeMiddle < 0.7 && opacityFormulaShadowMiddle > 0.15 && opacityFormulaShadowMiddle < 0.3, `Linear p:tav formulas must animate fill.opacity, stroke.opacity, and shadow.opacity before their final values: ${JSON.stringify({ opacityFormulaFillMiddle, opacityFormulaStrokeMiddle, opacityFormulaShadowMiddle, opacityFormulaMidpoint })}`)
   assert(textStyleFontStyleMiddle === 'normal' && textStyleUnderlineMiddle.includes('underline') && textStyleLineThroughMiddle[0]?.includes('line-through') && !textStyleLineThroughMiddle[1]?.includes('line-through') && textTransformMiddle === 'baseline', `Discrete text-style keyframes must compose underline and stagger line-through by word: ${textStyleFontStyleMiddle}/${JSON.stringify(textStyleLineThroughMiddle)}/${textTransformMiddle}`)
   assert(directLineThroughMiddle.length > 0 && directLineThroughMiddle.every(run => !run.textDecorationLine.includes('line-through')), `A discrete line-through from/to animation must apply its false value during playback: ${JSON.stringify(directLineThroughMiddle)}`)
   assert(fontFamilyKeyframesMiddle.length > 0 && fontFamilyKeyframesMiddle.every(fontFamily => fontFamily.includes('georgia')), `A discrete style.fontFamily p:tavLst must apply its active string keyframe: ${JSON.stringify(fontFamilyKeyframesMiddle)}`)
@@ -1467,11 +3872,13 @@ try {
   assert(textEmbossKeyframeMiddle.includes('drop-shadow'), `The textEffectEmboss middle keyframe must enable its embossed filter: ${textEmbossKeyframeMiddle}`)
   assert(iteratedWordMiddle.length === 2 && iteratedWordMiddle[0].weight > iteratedWordMiddle[1].weight && iteratedWordMiddle[1].weight > 400 && iteratedWordMiddle.every(run => run.fontStyle === 'normal'), `p:iterate by word must stagger font-weight and discrete text style: ${JSON.stringify(iteratedWordMiddle)}`)
   assert(iteratedOpacityMiddle.length === 2 && iteratedOpacityMiddle[0].opacity > iteratedOpacityMiddle[1].opacity && iteratedOpacityMiddle[1].opacity > 0.2 && iteratedOpacityMiddle[0].opacity < 1, `p:iterate by word must stagger generic style.opacity on text runs: ${JSON.stringify(iteratedOpacityMiddle)}`)
-  await delay(130)
-  const triggerComplete = await state()
+  const triggerComplete = await stateAtElapsed(triggerStartedAt, 400)
   const textRangeOpacityFinal = triggerComplete.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
+  const textOutlineRangeFinal = triggerComplete.textRuns.filter(run => run.name === 'Text outline range' && run.text.trim())
+  const textOutlineRangeRun = text => textOutlineRangeFinal.find(run => run.text === text)
+  assert(Number.parseFloat(textOutlineRangeRun('Test')?.textStrokeWidth || '') === 0 && Number.parseFloat(textOutlineRangeRun('ran')?.textStrokeWidth || '') === 0 && Number.parseFloat(textOutlineRangeRun('ge')?.textStrokeWidth || '') > 0, `p:anim and p:set must toggle outlines only on their selected character ranges: ${JSON.stringify(textOutlineRangeFinal)}`)
   const opacityFormulaTextRunsFinal = triggerComplete.textRuns.filter(run => run.name === 'Opacity formula targets' && run.text.trim() === 'Run')
-  const textEmbossFinalFilters = await Promise.all(textShadowNames.map(name => textEmbossFilter(name)))
+  const textEmbossFinalFilters = textShadowNames.map(name => textShadowRuns(triggerComplete, name)[0]?.filter || 'none')
   assert(textEmbossFinalFilters[0]?.includes('drop-shadow') && textEmbossFinalFilters[1] === 'none' && textEmbossFinalFilters[2]?.includes('drop-shadow') && textEmbossFinalFilters[3] === 'none', `Text emboss animations and p:set must hold or reset their final value: ${JSON.stringify(textEmbossFinalFilters)}`)
   assert(textShadowRuns(triggerComplete, 'Text shadow direct').every(run => run.textShadow === 'none') && textShadowRuns(triggerComplete, 'Text shadow keyframes').every(run => run.textShadow !== 'none') && textShadowRuns(triggerComplete, 'Text shadow set none').every(run => run.textShadow === 'none') && textShadowRuns(triggerComplete, 'Text shadow set auto').every(run => run.textShadow !== 'none'), `Discrete text-shadow animations and p:set must hold none or restore the static shadow for auto/normal: ${JSON.stringify(textShadowNames.map(name => [name, textShadowRuns(triggerComplete, name)]))}`)
   const iteratedFontFamilyFinal = triggerComplete.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
@@ -1486,28 +3893,33 @@ try {
   const unselectedShadowFinalRgb = cssRgb(textRangeOpacityFinal[1]?.textShadow || '')
   assert(textRangeShadowFinalRgb?.[0] === 255 && textRangeShadowFinalRgb[1] === 0 && textRangeShadowFinalRgb[2] === 0 && unselectedShadowFinalRgb?.[0] === 0 && unselectedShadowFinalRgb[1] === 0 && unselectedShadowFinalRgb[2] === 0, `Character-range shadow.color must hold red only on selected text: ${JSON.stringify(textRangeOpacityFinal)}`)
   assert(Number(shape(triggerComplete, 'Click fade').opacity) === 1, 'A shape-triggered animation must hold its final visual state.')
-  const fontWeightEnd = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Paragraph wipe target"] .text-run')).fontWeight)`))
-  const keyframedFontWeightEnd = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By letter"] .text-run')).fontWeight)`))
-  const formulaFontWeightEnd = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')).fontWeight)`))
-  const formulaFontSizeEnd = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')).fontSize)`)) / formulaFontSizeBase
-  const iteratedWordEnd = await evaluate(`[...document.querySelectorAll('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')].filter(run => run.textContent.trim()).map(run => ({ text: run.textContent, weight: Number(getComputedStyle(run).fontWeight), fontStyle: getComputedStyle(run).fontStyle }))`)
+  // These assertions describe one instant before the second iterated word finishes.
+  // Read all styles from the same snapshot instead of advancing time through CDP round trips.
+  const paragraphWipeEnd = textShadowRuns(triggerComplete, 'Paragraph wipe target')[0]
+  const byLetterEnd = textShadowRuns(triggerComplete, 'By letter')[0]
+  const byWordEnd = textShadowRuns(triggerComplete, 'By word')[0]
+  const fontWeightEnd = Number(paragraphWipeEnd.fontWeight)
+  const keyframedFontWeightEnd = Number(byLetterEnd.fontWeight)
+  const formulaFontWeightEnd = Number(byWordEnd.fontWeight)
+  const formulaFontSizeEnd = Number.parseFloat(byWordEnd.fontSize) / formulaFontSizeBase
+  const iteratedWordEnd = textShadowRuns(triggerComplete, 'By word').map(run => ({ text: run.text, weight: Number(run.fontWeight), fontStyle: run.fontStyle }))
   const iteratedOpacityEnd = textRangeOpacityFinal.map(run => ({ text: run.text, opacity: Number(run.opacity) }))
   const formulaOpacityEnd = Number(shape(triggerComplete, 'By word').opacity)
-  const textStyleFontStyleEnd = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')).fontStyle`)
-  const textStyleUnderlineEnd = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')).textDecorationLine`)
-  const directLineThroughEnd = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Text range opacity"] .text-run')).textDecorationLine`)
-  const pSetFontStyle = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By letter"] .text-run')).fontStyle`)
-  const pSetUnderline = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By letter"] .text-run')).textDecorationLine`)
-  const textTransformEnd = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')).verticalAlign`)
-  const pSetTextTransform = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By letter"] .text-run')).verticalAlign`)
-  const textOutlineEnd = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="By word"] .text-run')).webkitTextStrokeWidth)`))
-  const pSetTextOutline = Number(await evaluate(`parseFloat(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Paragraph wipe target"] .text-run')).webkitTextStrokeWidth)`))
+  const textStyleFontStyleEnd = byWordEnd.fontStyle
+  const textStyleUnderlineEnd = byWordEnd.textDecorationLine
+  const directLineThroughEnd = textRangeOpacityFinal[0].textDecorationLine
+  const pSetFontStyle = byLetterEnd.fontStyle
+  const pSetUnderline = byLetterEnd.textDecorationLine
+  const textTransformEnd = byWordEnd.verticalAlign
+  const pSetTextTransform = byLetterEnd.verticalAlign
+  const textOutlineEnd = Number.parseFloat(byWordEnd.textStrokeWidth)
+  const pSetTextOutline = Number.parseFloat(paragraphWipeEnd.textStrokeWidth)
   assert(fontWeightEnd === 900 && keyframedFontWeightEnd === 900 && formulaFontWeightEnd === 700, `Font-weight animations must hold their final values: ${fontWeightEnd}/${keyframedFontWeightEnd}/${formulaFontWeightEnd}`)
   assert(Math.abs(formulaFontSizeEnd - 1.5) < 0.03, `A linear style.fontSize p:tav formula must hold its final numeric keyframe: ${formulaFontSizeEnd}`)
   assert(Math.abs(formulaOpacityEnd - 0.7) < 0.03, `A linear style.opacity p:tav formula must hold its final numeric keyframe: ${formulaOpacityEnd}`)
   assert(textStyleFontStyleEnd === 'italic' && textStyleUnderlineEnd.includes('underline') && textStyleUnderlineEnd.includes('line-through') && directLineThroughEnd.includes('line-through'), `Discrete font-style, underline, and line-through animations must hold their final values: ${textStyleFontStyleEnd}/${textStyleUnderlineEnd}/${directLineThroughEnd}`)
-  assert(iteratedWordEnd.length === 2 && iteratedWordEnd[0].weight === 700 && iteratedWordEnd[1].weight > 700 && iteratedWordEnd[1].weight < 850 && iteratedWordEnd[0].fontStyle === 'italic' && iteratedWordEnd[1].fontStyle === 'normal', `The first iterated word must finish before the second word begins its final state: ${JSON.stringify(iteratedWordEnd)}`)
-  assert(iteratedOpacityEnd.length === 2 && iteratedOpacityEnd[0].opacity === 1 && iteratedOpacityEnd[1].opacity > 0.5 && iteratedOpacityEnd[1].opacity < 0.9, `p:iterate opacity must hold the first word while animating the second: ${JSON.stringify(iteratedOpacityEnd)}`)
+  assert(iteratedWordEnd.length === 2 && iteratedWordEnd[0].weight === 700 && iteratedWordEnd[1].weight > 700 && iteratedWordEnd[1].weight < 900 && iteratedWordEnd[0].fontStyle === 'italic' && iteratedWordEnd[1].fontStyle === 'normal', `The first iterated word must finish before the second word begins its final state: ${JSON.stringify(iteratedWordEnd)}`)
+  assert(iteratedOpacityEnd.length === 2 && iteratedOpacityEnd[0].opacity === 1 && iteratedOpacityEnd[1].opacity > 0.2 && iteratedOpacityEnd[1].opacity < 1, `p:iterate opacity must hold the first word while animating the second: ${JSON.stringify(iteratedOpacityEnd)}`)
   assert(pSetFontStyle === 'italic' && pSetUnderline.includes('underline') && pSetUnderline.includes('line-through'), `p:set must compose its discrete font-style, underline, and line-through values: ${pSetFontStyle}/${pSetUnderline}`)
   assert(textTransformEnd === 'super' && pSetTextTransform === 'sub', `Discrete p:anim and p:set textTransform values must map to superscript and subscript: ${textTransformEnd}/${pSetTextTransform}`)
   assert(textOutlineEnd > 0 && pSetTextOutline === 0, `Discrete textEffectOutline animations must enable parsed outlines and let p:set hide them: ${textOutlineEnd}/${pSetTextOutline}`)
@@ -1530,8 +3942,14 @@ try {
   const opacityFormulaEnd = shape(triggerComplete, 'Opacity formula targets')
   assert(Math.abs(cssAlpha(opacityFormulaEnd.backgroundColor) - 0.5) < 0.03 && Math.abs(cssAlpha(opacityFormulaEnd.borderColor) - 0.4) < 0.03 && Math.abs(cssAlpha(opacityFormulaEnd.boxShadow) - 0.15) < 0.03, `Opacity formula animations must hold their final keyframe values: ${JSON.stringify(opacityFormulaEnd)}`)
   assert(shape(triggerComplete, 'Rotated group child').transform !== shape(initial, 'Rotated group child').transform, 'A completed grouped-shape rotation must hold its transformed matrix.')
+  const accumulatedRotationFinal = await stateAtElapsed(triggerStartedAt, 650)
+  assert(Math.abs(rotation(shape(accumulatedRotationFinal, 'Additive rotation')) - 75) < 2, `Three accumulated 15-degree repeats must add 45 degrees to the shape's 30-degree base: ${rotation(shape(accumulatedRotationFinal, 'Additive rotation'))}`)
   const dynamicMotionEnd = await stateAtElapsed(triggerStartedAt, 800)
+  const byLetterVisibilityEnd = dynamicMotionEnd.textRuns.filter(run => run.name === 'By letter' && ['W', 'O', 'R', 'D'].includes(run.text))
+  assert(byLetterVisibilityEnd.length === 4 && byLetterVisibilityEnd.every(run => run.visibility === 'hidden') && shape(dynamicMotionEnd, 'By letter').visibility === 'visible', `p:iterate visibility must hide each letter without hiding the whole shape: ${JSON.stringify({ runs: byLetterVisibilityEnd, shape: shape(dynamicMotionEnd, 'By letter').visibility })}`)
   assert(Math.abs(shape(dynamicMotionEnd, 'Dynamic formula motion path').frameRect.left - dynamicMotionStart.left) < dynamicMotionStart.frameWidth * 0.01, `A sampled dynamic motion formula must reach its end-time path position: ${shape(dynamicMotionEnd, 'Dynamic formula motion path').frameRect.left - dynamicMotionStart.left}`)
+  const coordinateEnd = shape(dynamicMotionEnd, 'Opacity formula targets').frameRect
+  assert(Math.abs(coordinateEnd.left - coordinateStart.left) < coordinateStart.frameWidth * 0.01 && Math.abs(coordinateEnd.top - coordinateStart.top) < coordinateStart.frameHeight * 0.01, `Generic ppt_x/ppt_y animations must return to their formula-defined endpoint: ${JSON.stringify({ start: coordinateStart, end: coordinateEnd })}`)
   assert(shape(triggerComplete, 'With previous').backgroundColor === 'rgba(255, 0, 0, 0.5)', 'A triggered fillcolor animation must hold its final fill under fill opacity.')
   assert(shape(triggerComplete, 'Stroke color').lineColor === 'rgba(255, 0, 0, 0.5)', 'A triggered stroke.color animation must hold its final line color under stroke opacity.')
   assert(paragraph(triggerComplete, 'Built paragraph').color === 'rgb(255, 0, 255)' && paragraph(triggerComplete, 'Al\nways visible').color !== 'rgb(255, 0, 255)', 'A paragraph-range style.color animation must affect only its targeted paragraph.')
@@ -1561,12 +3979,41 @@ try {
   const repeatedParent = await state()
   const repeatCountOpacity = Number(shape(repeatedParent, 'Parent repeat count target').opacity)
   assert(repeatCountOpacity > 0.05 && repeatCountOpacity < 0.95, `A finite parent repeatCount must restart the child fade on its second cycle: ${JSON.stringify({ elapsed: repeatedParent.now - repeatCountStartedAt, opacity: repeatCountOpacity, warnings: repeatedParent.warnings })}`)
+  await delay(Math.max(0, 1_250 - ((await evaluate('performance.now()')) - repeatCountStartedAt)))
+  const repeatCountSettled = await state()
+  assert(Number(shape(repeatCountSettled, 'Parent repeat count target').opacity) > 0.95, `A completed interactive sequence must settle before testing restart="never": ${JSON.stringify(shape(repeatCountSettled, 'Parent repeat count target'))}`)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat count trigger"]').click()`)
+  await delay(100)
+  const neverRestarted = await state()
+  assert(Number(shape(neverRestarted, 'Parent repeat count target').opacity) > 0.95, `restart="never" must not replay a completed interactive sequence: ${JSON.stringify(shape(neverRestarted, 'Parent repeat count target'))}`)
 
   const repeatDurationStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat duration trigger"]').click(); return started })()`)
-  await delay(950)
+  await delay(80)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat duration trigger"]').click()`)
+  await delay(50)
+  const repeatDurationWhileActive = await state()
+  const repeatDurationActiveOpacity = Number(shape(repeatDurationWhileActive, 'Parent repeat duration target').opacity)
+  assert(repeatDurationActiveOpacity > 0.55 && repeatDurationActiveOpacity < 0.95, `restart="whenNotActive" must let the active sequence continue instead of restarting it: ${JSON.stringify({ elapsed: repeatDurationWhileActive.now - repeatDurationStartedAt, opacity: repeatDurationActiveOpacity })}`)
+  await delay(120)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat duration trigger"]').click()`)
+  await delay(60)
+  const repeatDurationAfterLaterClick = await state()
+  assert(Number(shape(repeatDurationAfterLaterClick, 'Parent repeat duration target').opacity) > 0.9, `restart="whenNotActive" must remain blocked while an earlier step is still active: ${JSON.stringify({ elapsed: repeatDurationAfterLaterClick.now - repeatDurationStartedAt, opacity: shape(repeatDurationAfterLaterClick, 'Parent repeat duration target').opacity })}`)
+  await delay(Math.max(0, 900 - ((await evaluate('performance.now()')) - repeatDurationStartedAt)))
   const repeatedParentDuration = await state()
   const afterRepeatOpacity = Number(shape(repeatedParentDuration, 'Parent repeat after-effect').opacity)
   assert(Number(shape(repeatedParentDuration, 'Parent repeat duration target').opacity) === 1 && afterRepeatOpacity > 0.05 && afterRepeatOpacity < 0.95, `A finite parent repeatDur must cap looping and defer the after-effect until the cap: ${JSON.stringify({ elapsed: repeatedParentDuration.now - repeatDurationStartedAt, repeatedTarget: shape(repeatedParentDuration, 'Parent repeat duration target'), afterEffect: shape(repeatedParentDuration, 'Parent repeat after-effect'), warnings: repeatedParentDuration.warnings })}`)
+
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat after-effect"]').click()`)
+  await delay(150)
+  const concurrentOffBeforeAdvance = await state()
+  const concurrentOffOpacityBefore = Number(shape(concurrentOffBeforeAdvance, 'Parent repeat count target').opacity)
+  assert(concurrentOffOpacityBefore > 0.1 && concurrentOffOpacityBefore < 0.9, `A sequential trigger step must be active before advancing: ${JSON.stringify({ elapsed: concurrentOffBeforeAdvance.now, opacity: concurrentOffOpacityBefore })}`)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat after-effect"]').click()`)
+  await delay(220)
+  const concurrentOffAfterAdvance = await state()
+  const concurrentOffOpacityAfter = Number(shape(concurrentOffAfterAdvance, 'Parent repeat count target').opacity)
+  assert(Math.abs(concurrentOffOpacityAfter - concurrentOffOpacityBefore) < 0.08, `A non-concurrent p:seq must end its previous step when advancing: ${JSON.stringify({ before: concurrentOffOpacityBefore, after: concurrentOffOpacityAfter })}`)
 
   const reverseParent = await evaluate(`new Promise(resolve => {
     const trigger = document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent reverse speed trigger"]')
@@ -1655,7 +4102,7 @@ try {
   const elementIterationStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Element iteration first"]').click(); return started })()`)
   await delay(60)
   const firstElementIteration = await state()
-  assert(firstElementIteration.slide?.startsWith('01 / 67') && Number(shape(firstElementIteration, 'Element iteration first').opacity) > 0 && Number(shape(firstElementIteration, 'Element iteration first').opacity) < 1, 'Element iteration must start the first grouped shape on its trigger click.')
+  assert(firstElementIteration.slide?.startsWith('01 / 68') && Number(shape(firstElementIteration, 'Element iteration first').opacity) > 0 && Number(shape(firstElementIteration, 'Element iteration first').opacity) < 1, 'Element iteration must start the first grouped shape on its trigger click.')
   assert(shape(firstElementIteration, 'Element iteration second').visibility === 'hidden', 'Element iteration must retain its interval before revealing the next grouped shape.')
   await delay(190)
   const secondElementIteration = await state()
@@ -1668,7 +4115,7 @@ try {
   await evaluate(`document.querySelector('.stage-shell').click()`)
   await delay(30)
   const secondSlide = await state()
-  assert(secondSlide.slide?.startsWith('02 / 67'), 'The next click after all builds must advance the slide.')
+  assert(secondSlide.slide?.startsWith('02 / 68'), 'The next click after all builds must advance the slide.')
   assert(secondSlide.slideTransition && secondSlide.slideTransition.keyframes[0] === 'translate(-100%, 100%)' && secondSlide.slideTransition.keyframes[1] === 'translate(0px, 0px)' && secondSlide.slideTransition.translateX < 0 && secondSlide.slideTransition.translateY > 0 && Number(secondSlide.slideTransition.duration) === 750, `The diagonal OOXML cover transition must follow its direction and duration: ${JSON.stringify(secondSlide.slideTransition)}`)
   assert(secondSlide.transitionUnderlay.slideCount === 1 && secondSlide.transitionUnderlay.shapeNames.includes('Click fade'), 'The previous slide must remain rendered below the incoming transition until it finishes.')
   assert(secondSlide.transitionUnderlay.translateX === 0 && secondSlide.transitionUnderlay.translateY === 0 && Math.abs(secondSlide.transitionUnderlay.frame.width - initial.hostFrame.width) < 1 && Math.abs(secondSlide.transitionUnderlay.frame.height - initial.hostFrame.height) < 1, `Cover must leave the outgoing page stationary beneath the incoming slide: ${JSON.stringify({ before: initial.hostFrame, underlay: secondSlide.transitionUnderlay })}`)
@@ -1683,20 +4130,29 @@ try {
   await evaluate(`(() => { const shape = document.querySelector('.stage-shell .slide-element[title="Go to slide 3"]'); shape?.focus(); shape?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })()`)
   await delay(100)
   const keyboardInternalJump = await state()
-  assert(keyboardInternalJump.slide?.startsWith('03 / 67'), `Enter on a focused linked shape must navigate to its target slide: ${keyboardInternalJump.slide}`)
+  assert(keyboardInternalJump.slide?.startsWith('03 / 68'), `Enter on a focused linked shape must navigate to its target slide: ${keyboardInternalJump.slide}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(850)
   await evaluate(`document.querySelector('.stage-shell .slide-element[title="Go to slide 3"]')?.click()`)
   await delay(100)
   const internalJump = await state()
-  assert(internalJump.slide?.startsWith('03 / 67'), `A shape hlinkClick relationship must navigate directly to its slide and stop click-to-advance: ${internalJump.slide}`)
+  assert(internalJump.slide?.startsWith('03 / 68'), `A shape hlinkClick relationship must navigate directly to its slide and stop click-to-advance: ${internalJump.slide}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(850)
   const openedExternalLink = await evaluate(`(() => { const open = window.open; let result; window.open = (...args) => { result = args; return null }; document.querySelector('.stage-shell .text-run-hyperlink[title="Open external documentation"]')?.click(); window.open = open; return result })()`)
   await delay(80)
   const afterExternalLink = await state()
   assert(openedExternalLink?.[0] === 'https://example.test/reference' && openedExternalLink?.[1] === '_blank' && openedExternalLink?.[2] === 'noopener,noreferrer'
-    && afterExternalLink.slide?.startsWith('01 / 67'), `A text hyperlink must open its safe external target without advancing the slide: ${JSON.stringify({ openedExternalLink, slide: afterExternalLink.slide })}`)
+    && afterExternalLink.slide?.startsWith('01 / 68'), `A text hyperlink must open its safe external target without advancing the slide: ${JSON.stringify({ openedExternalLink, slide: afterExternalLink.slide })}`)
+  const keyboardTextLink = await evaluate(`(() => {
+    const link = document.querySelector('.stage-shell .text-run-hyperlink[title="Open external documentation"]')
+    link?.focus()
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    link?.dispatchEvent(event)
+    return { focused: document.activeElement === link, defaultPrevented: event.defaultPrevented, slide: document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber }
+  })()`)
+  assert(keyboardTextLink.focused && !keyboardTextLink.defaultPrevented && keyboardTextLink.slide === '1',
+    `Enter on a focused text hyperlink must remain available to native link activation without changing slides: ${JSON.stringify(keyboardTextLink)}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(850)
   const chartRender = await evaluate(`(() => { const format = (value, options) => new Intl.NumberFormat(undefined, options).format(value); const percent = value => format(value, { style: 'percent', maximumFractionDigits: 1 }); return [...document.querySelectorAll('.slide-chart')].map(svg => { const name = svg.closest('.slide-element')?.title; return { name, title: svg.querySelector('title')?.textContent, labels: [...svg.querySelectorAll('text')].map(item => item.textContent), dataLabels: [...svg.querySelectorAll('.chart-data-label')].map(item => [...item.querySelectorAll('tspan')].map(line => line.textContent).join('\\n')), expectedDataLabels: name === 'Quarterly sales chart' ? [format(9, { useGrouping: true, minimumFractionDigits: 1, maximumFractionDigits: 1 }), format(18, { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 2 }), format(15, { useGrouping: true, minimumFractionDigits: 1, maximumFractionDigits: 1 }), format(21, { useGrouping: true, minimumFractionDigits: 1, maximumFractionDigits: 1 })] : name === 'Quarterly trend chart' ? [18, 15, 26, 21].map(value => format(value, { style: 'percent', useGrouping: false, minimumFractionDigits: 1, maximumFractionDigits: 1 })) : name === 'Quarterly share chart' ? ['Q1\\n' + percent(12 / 56), '18 / Q2', 'Q3\\n' + percent(26 / 56)] : undefined, bars: [...svg.querySelectorAll('rect')].filter(item => Number(item.getAttribute('height')) > 20).map(item => item.getAttribute('fill')), paths: svg.querySelectorAll('path').length, markers: svg.querySelectorAll('circle').length }; }) })()`)
@@ -1707,6 +4163,7 @@ try {
   const valueAxisRender = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, ticks: [...svg.querySelectorAll('.chart-value-axis-label')].map(item => ({ label: item.textContent, x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')), anchor: item.getAttribute('text-anchor') })) })))()`)
   const barValueAxis = valueAxisRender.find(axis => axis.name === 'Quarterly sales chart')
   const lineValueAxis = valueAxisRender.find(axis => axis.name === 'Quarterly trend chart')
+  const chartMinorAxisTicks = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, ticks: [...svg.querySelectorAll('.chart-axis-minor-tick')].map(item => ({ axis: item.getAttribute('data-axis'), x1: Number(item.getAttribute('x1')), y1: Number(item.getAttribute('y1')), x2: Number(item.getAttribute('x2')), y2: Number(item.getAttribute('y2')) })) })))()`)
   const doughnutRingRadii = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly allocation doughnut'); return [...(svg?.querySelectorAll('path') || [])].map(path => [...(path.getAttribute('d') || '').matchAll(/A\\s+([-.\\d]+)\\s+([-.\\d]+)\\s+0\\s+[01]\\s+[01]/g)].map(match => Number(match[1]))) })()`)
   assert(doughnutRingRadii.length === 6 && doughnutRingRadii[0][0] < doughnutRingRadii[3][0] && Math.abs(doughnutRingRadii[0][0] - doughnutRingRadii[3][1]) < 0.01 && Math.abs(doughnutRingRadii[0][1] / doughnutRingRadii[3][0] - 0.4) < 0.001, `Doughnut series must form consecutive concentric rings while preserving the configured center hole: ${JSON.stringify(doughnutRingRadii)}`)
   const chartAxisCrossings = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => { const line = selector => { const item = svg.querySelector(selector); return item && { x1: Number(item.getAttribute('x1')), y1: Number(item.getAttribute('y1')), x2: Number(item.getAttribute('x2')), y2: Number(item.getAttribute('y2')) } }; return { name: svg.closest('.slide-element')?.title, category: line('.chart-category-axis-line'), value: line('.chart-value-axis-line'), gridlines: svg.querySelectorAll('.chart-major-gridline').length } }))()`)
@@ -1715,13 +4172,33 @@ try {
   const stackedChartGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { bars: [...(svg?.querySelectorAll('.chart-bar') || [])].map(item => ({ x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')), width: Number(item.getAttribute('width')), height: Number(item.getAttribute('height')) })), baseline: Number(svg?.querySelector('.chart-category-axis-line')?.getAttribute('y1')), axisLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent), dataLabels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => item.textContent) } }; return { stacked: read('Stacked bar chart'), percent: read('Percent stacked chart') } })()`)
   const stackedLineGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { markers: [...(svg?.querySelectorAll('circle') || [])].map(item => ({ x: Number(item.getAttribute('cx')), y: Number(item.getAttribute('cy')) })), axisLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent), dataLabels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => item.textContent) } }; return { stacked: read('Stacked line chart'), percent: read('Percent stacked line chart') } })()`)
   const areaChartGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { areas: [...(svg?.querySelectorAll('.chart-area') || [])].map(item => ({ d: item.getAttribute('d'), fill: item.getAttribute('fill') })), bars: svg?.querySelectorAll('.chart-bar').length, axisLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent), dataLabels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => item.textContent) } }; return { standard: read('Area chart'), stacked: read('Stacked area chart'), percent: read('Percent stacked area chart') } })()`)
-  const scatterChartGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'XY scatter chart'); return { markers: [...(svg?.querySelectorAll('.chart-line-marker') || [])].map(item => ({ x: Number(item.getAttribute('cx')), y: Number(item.getAttribute('cy')) })), lines: [...(svg?.querySelectorAll('.chart-series-line') || [])].map(item => item.getAttribute('d')), xLabels: [...(svg?.querySelectorAll('.chart-x-value-axis-label') || [])].map(item => item.textContent), yLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent), xGridlines: svg?.querySelectorAll('.chart-x-gridline').length, yGridlines: [...(svg?.querySelectorAll('.chart-major-gridline') || [])].filter(item => !item.classList.contains('chart-x-gridline')).length, xTicks: svg?.querySelectorAll('.chart-axis-tick[data-axis="xValue"]').length, yAxis: svg?.querySelector('.chart-value-axis-line') && Number(svg.querySelector('.chart-value-axis-line').getAttribute('x1')), xAxis: svg?.querySelector('.chart-x-axis-line') && Number(svg.querySelector('.chart-x-axis-line').getAttribute('y1')), categories: svg?.querySelectorAll('.chart-category-label').length } })()`)
+  const scatterChartGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'XY scatter chart'); return { markers: [...(svg?.querySelectorAll('.chart-line-marker') || [])].map(item => ({ x: Number(item.getAttribute('data-x')), y: Number(item.getAttribute('data-y')), shape: item.getAttribute('data-marker-shape'), radius: Number(item.getAttribute('data-radius')), d: item.getAttribute('d'), fill: item.getAttribute('fill') })), lines: [...(svg?.querySelectorAll('.chart-series-line') || [])].map(item => item.getAttribute('d')), xLabels: [...(svg?.querySelectorAll('.chart-x-value-axis-label') || [])].map(item => item.textContent), yLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent), xGridlines: svg?.querySelectorAll('.chart-x-gridline').length, yGridlines: [...(svg?.querySelectorAll('.chart-major-gridline') || [])].filter(item => !item.classList.contains('chart-x-gridline')).length, xTicks: svg?.querySelectorAll('.chart-axis-tick[data-axis="xValue"]').length, yAxis: svg?.querySelector('.chart-value-axis-line') && Number(svg.querySelector('.chart-value-axis-line').getAttribute('x1')), xAxis: svg?.querySelector('.chart-x-axis-line') && Number(svg.querySelector('.chart-x-axis-line').getAttribute('y1')), categories: svg?.querySelectorAll('.chart-category-label').length } })()`)
+  const logScatterChartGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Logarithmic XY chart'); return { markers: [...(svg?.querySelectorAll('.chart-line-marker') || [])].map(item => ({ x: Number(item.getAttribute('data-x')), y: Number(item.getAttribute('data-y')) })), xLabels: [...(svg?.querySelectorAll('.chart-x-value-axis-label') || [])].map(item => item.textContent), yLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent), xGridlines: svg?.querySelectorAll('.chart-x-gridline').length, yGridlines: [...(svg?.querySelectorAll('.chart-major-gridline') || [])].filter(item => !item.classList.contains('chart-x-gridline')).length, xTicks: svg?.querySelectorAll('.chart-axis-tick[data-axis="xValue"]').length } })()`)
+  const invalidLogScatterGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Invalid log base XY chart'); return { markers: [...(svg?.querySelectorAll('.chart-line-marker') || [])].map(item => ({ x: Number(item.getAttribute('data-x')), y: Number(item.getAttribute('data-y')) })) } })()`)
   const bubbleChartGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { bubbles: [...(svg?.querySelectorAll('.chart-bubble-marker') || [])].map(item => ({ x: Number(item.getAttribute('cx')), y: Number(item.getAttribute('cy')), r: Number(item.getAttribute('r')), fill: item.getAttribute('fill') })), labels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => item.textContent), xLabels: [...(svg?.querySelectorAll('.chart-x-value-axis-label') || [])].map(item => item.textContent), yLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent) } }; return { area: read('Bubble area chart'), width: read('Bubble width chart') } })()`)
   const radarChartGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { style: svg?.getAttribute('data-radar-style'), grid: svg?.querySelectorAll('.chart-radar-gridline').length, spokes: svg?.querySelectorAll('.chart-radar-spoke').length, categoryTicks: svg?.querySelectorAll('.chart-axis-tick[data-axis="category"]').length, valueTicks: svg?.querySelectorAll('.chart-axis-tick[data-axis="value"]').length, categories: [...(svg?.querySelectorAll('.chart-category-label') || [])].map(item => item.textContent), axisLabels: [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => item.textContent), lines: [...(svg?.querySelectorAll('.chart-series-line') || [])].map(item => item.getAttribute('d')), areas: [...(svg?.querySelectorAll('.chart-area') || [])].map(item => ({ d: item.getAttribute('d'), fillOpacity: item.getAttribute('fill-opacity') })), markers: [...(svg?.querySelectorAll('.chart-line-marker') || [])].map(item => ({ r: Number(item.getAttribute('r')), x: Number(item.getAttribute('cx')), y: Number(item.getAttribute('cy')) })), labels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => item.textContent) } }; return { standard: read('Radar standard chart'), marker: read('Radar marker chart'), filled: read('Radar filled chart') } })()`)
   const categoryAxisRender = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, labels: [...svg.querySelectorAll('.chart-category-label')].map(item => ({ text: item.textContent, x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')), anchor: item.getAttribute('text-anchor') })) })))()`)
   const lineCategoryAxis = categoryAxisRender.find(axis => axis.name === 'Quarterly trend chart')
   const barCategoryAxis = categoryAxisRender.find(axis => axis.name === 'Quarterly sales chart')
   const horizontalCategoryAxis = categoryAxisRender.find(axis => axis.name === 'Horizontal axis tick chart')
+  const dateAxisCategory = categoryAxisRender.find(axis => axis.name === 'Date axis 1904 chart')
+  const elapsedAxisCategory = categoryAxisRender.find(axis => axis.name === 'Elapsed time axis chart')
+  assert(elapsedAxisCategory?.labels.map(label => label.text).join(',') === '0:00:00.00,12:00:00.00,24:00:00.00,36:00:00.00,48:00:00.00', `Elapsed-time chart labels must keep cumulative hours and fractional seconds across day boundaries: ${JSON.stringify(elapsedAxisCategory)}`)
+  const dateAxisMinorTickPositions = chartMinorAxisTicks.find(chart => chart.name === 'Date axis 1904 chart')?.ticks.filter(tick => tick.axis === 'category').map(tick => tick.x1) || []
+  const dateAxisGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Date axis 1904 chart'); const axis = svg?.querySelector('.chart-category-axis-line'); return { axisBounds: [Number(axis?.getAttribute('x1')), Number(axis?.getAttribute('x2'))], categoryPositions: [...(svg?.querySelectorAll('.chart-category-label') || [])].map(item => Number(item.getAttribute('x'))), categoryTickPositions: [...(svg?.querySelectorAll('.chart-axis-tick[data-axis="category"]') || [])].map(item => Number(item.getAttribute('x1'))), categoryGridlinePositions: [...(svg?.querySelectorAll('.chart-category-major-gridline') || [])].map(item => Number(item.getAttribute('x1'))), barCenters: [...(svg?.querySelectorAll('.chart-bar') || [])].map(item => Number(item.getAttribute('x')) + Number(item.getAttribute('width')) / 2) } })()`)
+  const dateAxisBarCenters = [0, 1, 2].map(index => (dateAxisGeometry.barCenters[index * 2] + dateAxisGeometry.barCenters[index * 2 + 1]) / 2)
+  const dateAxisStart = dateAxisGeometry.axisBounds[0]
+  const dateAxisWidth = dateAxisGeometry.axisBounds[1] - dateAxisStart
+  const dateAxisBarSpan = dateAxisBarCenters[2] - dateAxisBarCenters[0]
+  const dateAxisBarRatio = (dateAxisBarCenters[1] - dateAxisBarCenters[0]) / dateAxisBarSpan
+  const dateAxisExpectedFractions = [0, 2 / 9, 4 / 9, 6 / 9, 8 / 9]
+  const dateAxisMinorTickFractions = dateAxisMinorTickPositions.map(position => (position - dateAxisStart) / dateAxisWidth)
+  const dateAxisLabelFractions = (dateAxisCategory?.labels || []).map(label => (label.x - dateAxisStart) / dateAxisWidth)
+  const dateAxisTickFractions = dateAxisGeometry.categoryTickPositions.map(position => (position - dateAxisStart) / dateAxisWidth)
+  const dateAxisGridlineFractions = dateAxisGeometry.categoryGridlinePositions.map(position => (position - dateAxisStart) / dateAxisWidth)
+  assert(dateAxisCategory?.labels.map(label => label.text).join(',') === '7/4/2011,7/6/2011,7/8/2011,7/10/2011,7/12/2011', 'Date-axis major labels must use c:majorUnit, c:majorTimeUnit, c:numFmt, and the chart date1904 date system: ' + JSON.stringify(dateAxisCategory))
+  assert(dateAxisLabelFractions.length === dateAxisExpectedFractions.length && dateAxisTickFractions.length === dateAxisExpectedFractions.length && dateAxisGridlineFractions.length === dateAxisExpectedFractions.length && dateAxisExpectedFractions.every((fraction, index) => Math.abs(dateAxisLabelFractions[index] - fraction) < 0.001 && Math.abs(dateAxisTickFractions[index] - fraction) < 0.001 && Math.abs(dateAxisGridlineFractions[index] - fraction) < 0.001) && dateAxisBarCenters.length === 3 && dateAxisBarSpan > 0 && Math.abs(dateAxisBarRatio - 1 / 3) < 0.01, 'Date-axis major labels, tick marks, gridlines, category points, and column groups must follow calendar ticks and cached date spacing: ' + JSON.stringify({dateAxisCategory, dateAxisGeometry, dateAxisBarRatio}))
+  assert(dateAxisMinorTickFractions.length === 4 && [1 / 9, 3 / 9, 5 / 9, 7 / 9].every((fraction, index) => Math.abs(dateAxisMinorTickFractions[index] - fraction) < 0.001), `Date-axis c:minorUnit/c:minorTimeUnit must render daily minor marks between two-day major intervals: ${JSON.stringify(dateAxisMinorTickFractions)}`)
   const stockChartGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { type: svg?.getAttribute('data-chart-type'), categories: [...(svg?.querySelectorAll('.chart-category-label') || [])].map(item => item.textContent), lines: [...(svg?.querySelectorAll('.chart-series-line') || [])].map(item => ({ d: item.getAttribute('d'), color: item.getAttribute('stroke'), width: item.getAttribute('stroke-width') })), bars: [...(svg?.querySelectorAll('.chart-bar') || [])].map(item => ({ fill: item.getAttribute('fill'), height: Number(item.getAttribute('height')) })), labels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => ({ text: item.textContent, x: Number(item.getAttribute('x')), anchor: item.getAttribute('text-anchor') })) } }; return { hlc: read('Stock HLC chart'), ohlc: read('Stock OHLC chart') } })()`)
   const stockVolumeGeometry = await evaluate(`(() => { const read = name => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); return { type: svg?.getAttribute('data-chart-type'), categories: [...(svg?.querySelectorAll('.chart-category-label') || [])].map(item => item.textContent), bars: [...(svg?.querySelectorAll('.chart-bar') || [])].map(item => ({ fill: item.getAttribute('fill'), y: Number(item.getAttribute('y')), width: Number(item.getAttribute('width')), height: Number(item.getAttribute('height')) })), secondaryTicks: [...(svg?.querySelectorAll('.chart-secondary-value-axis-label') || [])].map(item => ({ id: item.getAttribute('data-axis-id'), label: item.textContent })), secondaryAxes: [...(svg?.querySelectorAll('.chart-secondary-value-axis-line') || [])].map(item => item.getAttribute('data-axis-id')), labels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => item.textContent) } }; return { hlc: read('Stock volume HLC chart'), ohlc: read('Stock volume OHLC chart') } })()`)
   const comboChartGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Column and line combo chart'); return { type: svg?.getAttribute('data-chart-type'), bars: svg?.querySelectorAll('.chart-bar').length, lines: [...(svg?.querySelectorAll('.chart-series-line') || [])].map(item => ({ d: item.getAttribute('d'), color: item.getAttribute('stroke') })), markers: svg?.querySelectorAll('.chart-line-marker').length, categories: [...(svg?.querySelectorAll('.chart-category-label') || [])].map(item => item.textContent), primaryTicks: [...(svg?.querySelectorAll('.chart-value-axis-label:not([data-axis-id])') || [])].map(item => item.textContent), secondaryTicks: [...(svg?.querySelectorAll('.chart-secondary-value-axis-label') || [])].map(item => ({ id: item.getAttribute('data-axis-id'), label: item.textContent })), secondaryAxes: [...(svg?.querySelectorAll('.chart-secondary-value-axis-line') || [])].map(item => ({ id: item.getAttribute('data-axis-id'), x1: Number(item.getAttribute('x1')), x2: Number(item.getAttribute('x2')) })) } })()`)
@@ -1729,12 +4206,38 @@ try {
   const chartLegends = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, items: [...svg.querySelectorAll('.chart-legend-label')].map(item => ({ text: item.textContent, x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')) })) })))()`)
   const manualLegendClip = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Value axis deleted chart'); const group = svg?.querySelector('.chart-legend-group'); const id = /url\\(#([^)]+)\\)/.exec(group?.getAttribute('clip-path') || '')?.[1]; const rect = [...(svg?.querySelectorAll('clipPath') || [])].find(item => item.id === id)?.querySelector('rect'); return rect && { x: Number(rect.getAttribute('x')), y: Number(rect.getAttribute('y')), width: Number(rect.getAttribute('width')), height: Number(rect.getAttribute('height')) } })()`)
   const dataLabelGeometry = await evaluate(`(() => [...document.querySelectorAll('.slide-chart')].map(svg => ({ name: svg.closest('.slide-element')?.title, labels: [...svg.querySelectorAll('.chart-data-label')].map(item => ({ text: item.textContent, x: Number(item.getAttribute('x')), y: Number(item.getAttribute('y')), anchor: item.getAttribute('text-anchor') })) })))()`)
+  const chartDataLabelStyles = await evaluate(`(() => {
+    const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly sales chart')
+    return [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => {
+      const style = getComputedStyle(item)
+      return { text: item.textContent, fill: style.fill, fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight, fontStyle: style.fontStyle, letterSpacing: style.letterSpacing, baselineShift: item.querySelector('tspan')?.getAttribute('dy'), textDecorationLine: style.textDecorationLine, textDecorationStyle: style.textDecorationStyle, textDecorationColor: style.textDecorationColor, textDecorationThickness: style.textDecorationThickness }
+    })
+  })()`)
   const barLegend = chartLegends.find(legend => legend.name === 'Quarterly sales chart')
+  const chartDataLabelKeyRender = await evaluate(`(() => {
+    const read = name => {
+      const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name)
+      return {
+        labels: [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => {
+          const key = item.parentElement?.querySelector('.chart-data-label-key')
+          const keyBox = key?.getBBox()
+          const labelBox = item.getBBox()
+          return {text: item.textContent || '', fill: key?.getAttribute('fill'), gap: keyBox && labelBox.width ? labelBox.x - keyBox.x - keyBox.width : undefined}
+        })
+      }
+    }
+    return {sales: read('Quarterly sales chart'), keyOnly: read('Horizontal axis tick chart')}
+  })()`)
+  assert(chartDataLabelKeyRender.sales.labels.length === 4 && chartDataLabelKeyRender.sales.labels.every(label => !!label.fill && barChart?.bars.includes(label.fill) && label.gap !== undefined && label.gap >= 0), `Group, series, and point c:showLegendKey settings must render adjacent keys in series colors: ${JSON.stringify(chartDataLabelKeyRender.sales)}`)
+  assert(chartDataLabelKeyRender.keyOnly.labels.length === 4 && chartDataLabelKeyRender.keyOnly.labels.every(label => label.text === '' && !!label.fill), `c:showLegendKey alone must render key-only labels while point-level false suppresses its indexed key: ${JSON.stringify(chartDataLabelKeyRender.keyOnly)}`)
   const lineLegend = chartLegends.find(legend => legend.name === 'Quarterly trend chart')
   const pieLegend = chartLegends.find(legend => legend.name === 'Quarterly share chart')
   const barPositionedLabels = dataLabelGeometry.find(chart => chart.name === 'Quarterly sales chart')
   const linePositionedLabels = dataLabelGeometry.find(chart => chart.name === 'Quarterly trend chart')
   assert(barChart?.title === 'Quarterly sales' && ['Q1', 'Q2', 'Q3', 'South'].every(label => barChart.labels.includes(label)) && !barChart.labels.includes('North') && barChart.bars.length === 6 && new Set(barChart.bars).size === 2, `A linked chart must render cached categories, preserve both series, and apply legend-entry deletion: ${JSON.stringify(chartRender)}`)
+  const groupedDataLabelStyle = chartDataLabelStyles.find(label => label.text === '9.0')
+  const pointDataLabelStyle = chartDataLabelStyles.find(label => label.text === '18.00')
+  assert(groupedDataLabelStyle?.fontFamily.includes('Arial') && groupedDataLabelStyle.fontSize === '16px' && groupedDataLabelStyle.fontWeight === '700' && groupedDataLabelStyle.fontStyle === 'normal' && groupedDataLabelStyle.fill === 'rgb(30, 64, 175)' && groupedDataLabelStyle.textDecorationLine.includes('underline') && groupedDataLabelStyle.textDecorationColor === 'rgb(0, 170, 255)' && Math.abs(parseFloat(groupedDataLabelStyle.textDecorationThickness) - 4 / 3) < 0.02 && pointDataLabelStyle?.fontFamily.includes('Verdana') && Math.abs(parseFloat(pointDataLabelStyle.fontSize) - 40 / 3) < 0.01 && Math.abs(parseFloat(pointDataLabelStyle.letterSpacing) - 8 / 3) < 0.02 && pointDataLabelStyle.baselineShift === '-0.3em' && pointDataLabelStyle.fontWeight === '400' && pointDataLabelStyle.fontStyle === 'italic' && pointDataLabelStyle.fill === 'rgb(210, 31, 60)' && !pointDataLabelStyle.textDecorationLine.includes('underline') && pointDataLabelStyle.textDecorationLine.includes('line-through'), `Chart-group, series, and point typography, character spacing, baseline shift, and underline paint must cascade, with explicit point-level overrides: ${JSON.stringify(chartDataLabelStyles)}`)
   assert(barValueAxis?.ticks.map(tick => tick.label).join(',') === '0.0,10.0,20.0,30.0', `Value-axis min, max, major unit, and number format must render: ${JSON.stringify(valueAxisRender)}`)
   assert(barValueAxis?.ticks.every(tick => tick.x === 78 && tick.anchor === 'end') && barCategoryAxis?.labels.length === 3 && barCategoryAxis.labels.every(label => label.y === 65 && label.anchor === 'middle'), `c:tickLblPos high/low must place category and value labels at the perpendicular axis ends: ${JSON.stringify({ value: barValueAxis, category: barCategoryAxis })}`)
   assert(barLegend?.items.map(item => item.text).join(',') === 'South' && barLegend.items.every(item => item.y === 530), `c:legendEntry/c:delete must hide the indexed series entry without moving the remaining bottom legend: ${JSON.stringify(chartLegends)}`)
@@ -1745,12 +4248,18 @@ try {
   assert(lineValueAxis?.ticks.map(tick => tick.label).join(',') === '10.0,15.0,20.0,25.0,30.0' && lineValueAxis.ticks[0].y < lineValueAxis.ticks.at(-1).y, `A reversed value axis must place minimum above maximum: ${JSON.stringify(valueAxisRender)}`)
   assert(lineLegend?.items.map(item => item.text).join(',') === 'North,South' && lineLegend.items.every(item => item.x === 118 && item.y >= 135) && lineValueAxis.ticks.every(tick => tick.x === 644 && tick.anchor === 'start'), `A c:catAx/crossesAt category index must position the value-axis labels at that category: ${JSON.stringify({ chartLegends, valueAxisRender })}`)
   assert(lineCategoryAxis?.labels.map(label => label.text).join(',') === 'Q1,Q2,Q3' && lineCategoryAxis.labels.every(label => Math.abs(label.y - 162.5) < 0.01 && label.anchor === 'middle'), `A c:valAx/crossesAt value must position the category-axis labels at that value: ${JSON.stringify(categoryAxisRender)}`)
-  assert(valueAxisRender.find(axis => axis.name === 'Horizontal axis tick chart')?.ticks.length === 0 && horizontalCategoryAxis?.labels.length === 3 && horizontalCategoryAxis.labels.every(label => label.x === 78 && label.anchor === 'end'), `c:tickLblPos none must hide value labels while low positions horizontal-bar category labels at the low value end: ${JSON.stringify({ value: valueAxisRender, category: horizontalCategoryAxis })}`)
+  assert(valueAxisRender.find(axis => axis.name === 'Horizontal axis tick chart')?.ticks.length === 0 && horizontalCategoryAxis?.labels.map(label => label.text).join(',') === 'USD 1.00E+00,USD 3.00E+00' && horizontalCategoryAxis.labels.every(label => label.x === 78 && label.anchor === 'end'), `c:catAx/c:numFmt must render quoted literal prefixes and scientific notation on numeric category labels, while c:tickLblSkip skips labels, c:tickLblPos none hides value labels, and low positions horizontal-bar category labels: ${JSON.stringify({ value: valueAxisRender, category: horizontalCategoryAxis })}`)
   const barAxisCrossings = chartAxisCrossings.find(chart => chart.name === 'Quarterly sales chart')
   const lineAxisCrossings = chartAxisCrossings.find(chart => chart.name === 'Quarterly trend chart')
   const barAxisTicks = chartAxisTicks.find(chart => chart.name === 'Quarterly sales chart')?.ticks || []
   const lineAxisTicks = chartAxisTicks.find(chart => chart.name === 'Quarterly trend chart')?.ticks || []
   const horizontalAxisTicks = chartAxisTicks.find(chart => chart.name === 'Horizontal axis tick chart')?.ticks || []
+  const quarterlySalesMinorTicks = chartMinorAxisTicks.find(chart => chart.name === 'Quarterly sales chart')?.ticks.filter(tick => tick.axis === 'value') || []
+  const horizontalMinorTicks = chartMinorAxisTicks.find(chart => chart.name === 'Horizontal axis tick chart')?.ticks || []
+  const horizontalCategoryMinorTicks = horizontalMinorTicks.filter(tick => tick.axis === 'category')
+  const horizontalValueMinorTicks = horizontalMinorTicks.filter(tick => tick.axis === 'value')
+  assert(quarterlySalesMinorTicks.length === 12 && quarterlySalesMinorTicks.every(tick => tick.y1 === tick.y2 && tick.x1 !== tick.x2), `Automatic value-axis minor ticks must add four marks per major interval: ${JSON.stringify(quarterlySalesMinorTicks)}`)
+  assert(horizontalCategoryMinorTicks.length === 2 && horizontalCategoryMinorTicks.every(tick => tick.y1 === tick.y2 && tick.x2 - tick.x1 === -3) && horizontalValueMinorTicks.length === 3 && horizontalValueMinorTicks.every(tick => tick.x1 === tick.x2 && tick.y2 - tick.y1 === -3), `Explicit value-axis minor units and category-axis minor marks must render on horizontal chart axes: ${JSON.stringify(horizontalMinorTicks)}`)
   const categoryDeletedAxis = chartAxisCrossings.find(chart => chart.name === 'Category axis deleted chart')
   const valueDeletedAxis = chartAxisCrossings.find(chart => chart.name === 'Value axis deleted chart')
   const horizontalAxisCrossings = chartAxisCrossings.find(chart => chart.name === 'Horizontal axis tick chart')
@@ -1763,7 +4272,7 @@ try {
   assert(Math.abs((lineAxisCrossings?.category?.y1 ?? NaN) - 172.5) < 0.01 && lineAxisCrossings?.value?.x1 === 634, `Both c:crossesAt values must position the intersecting axis lines: ${JSON.stringify(chartAxisCrossings)}`)
   assert(barAxisTicks.filter(tick => tick.axis === 'category').length === 0 && barAxisTicks.filter(tick => tick.axis === 'value').length === 4 && barAxisTicks.filter(tick => tick.axis === 'value').every(tick => tick.y1 === tick.y2 && tick.x1 === 938 && tick.x2 === 933), `c:majorTickMark val="out" must draw outward value-axis marks while "none" suppresses category marks: ${JSON.stringify(barAxisTicks)}`)
   assert(lineAxisTicks.filter(tick => tick.axis === 'category').length === 3 && lineAxisTicks.filter(tick => tick.axis === 'category').every(tick => tick.x1 === tick.x2 && Math.abs(tick.y1 - 167.5) < 0.01 && Math.abs(tick.y2 - 177.5) < 0.01) && lineAxisTicks.filter(tick => tick.axis === 'value').length === 5 && lineAxisTicks.filter(tick => tick.axis === 'value').every(tick => tick.x1 === 634 && tick.x2 === 629 && tick.y1 === tick.y2), `c:majorTickMark val="cross" and "in" must follow their axis sides and crossings: ${JSON.stringify(lineAxisTicks)}`)
-  assert(horizontalChartGeometry.bars.length === 6 && horizontalChartGeometry.bars.every(bar => bar.width > bar.height) && horizontalAxisTicks.filter(tick => tick.axis === 'category').length === 3 && horizontalAxisTicks.filter(tick => tick.axis === 'category').every(tick => tick.y1 === tick.y2 && tick.x1 === 938 && tick.x2 === 943) && horizontalAxisTicks.filter(tick => tick.axis === 'value').length === 4 && horizontalAxisTicks.filter(tick => tick.axis === 'value').every(tick => tick.x1 === tick.x2 && tick.y1 === 75 && tick.y2 === 80), `Horizontal bar charts must render horizontal bars and category/value ticks at right/top axes: ${JSON.stringify({ horizontalChartGeometry, horizontalAxisTicks })}`)
+  assert(horizontalChartGeometry.bars.length === 6 && horizontalChartGeometry.bars.every(bar => bar.width > bar.height) && horizontalAxisTicks.filter(tick => tick.axis === 'category').length === 2 && horizontalAxisTicks.filter(tick => tick.axis === 'category').every(tick => tick.y1 === tick.y2 && tick.x1 === 938 && tick.x2 === 943) && horizontalAxisTicks.filter(tick => tick.axis === 'value').length === 4 && horizontalAxisTicks.filter(tick => tick.axis === 'value').every(tick => tick.x1 === tick.x2 && tick.y1 === 75 && tick.y2 === 80), `Horizontal bar charts must honor category tick spacing and place major/minor marks at right/top axes: ${JSON.stringify({ horizontalChartGeometry, horizontalAxisTicks })}`)
   const stackedCategory = stackedChartGeometry.stacked.bars.slice(0, 3)
   assert(stackedChartGeometry.stacked.bars.length === 9 && stackedCategory.every(bar => bar.x === stackedCategory[0].x) && Math.abs(stackedCategory[1].y + stackedCategory[1].height - stackedCategory[0].y) < 0.01 && Math.abs(stackedCategory[2].y - stackedChartGeometry.stacked.baseline) < 0.01 && stackedChartGeometry.stacked.axisLabels.includes('-21') && stackedChartGeometry.stacked.axisLabels.includes('47') && stackedChartGeometry.stacked.dataLabels.includes('-9'), `Stacked columns must share category centers, accumulate positive values, stack negatives below zero, and use signed totals for the axis: ${JSON.stringify(stackedChartGeometry.stacked)}`)
   const percentCategory = stackedChartGeometry.percent.bars.slice(0, 2)
@@ -1786,7 +4295,9 @@ try {
   assert(lineChart.dataLabels.filter(label => label.includes(' | ')).map(label => label.split(' | ')[0]).join(',') === lineChart.expectedDataLabels.join(',') && ['North', 'South'].every(label => lineChart.dataLabels.includes(label)) && lineChart.dataLabels.filter(label => label.includes(' | ')).every(label => / \| (North|South)$/.test(label)), `Series names and custom separators must follow chart and point overrides: ${JSON.stringify(lineChart)}`)
   assert(pieChart?.paths === 3 && ['Q1', 'Q2', 'Q3'].every(label => pieChart.dataLabels.some(item => item.includes(label))), `Pie chart caches must render one colored slice and data label per category: ${JSON.stringify(pieChart)}`)
   assert(doughnutGeometry.count === 6 && doughnutGeometry.fillRule === 'evenodd' && doughnutGeometry.arcRadii.length === 2 && Math.abs(doughnutGeometry.arcRadii[1] / doughnutGeometry.arcRadii[0] - 4 / 7) < 0.001 && doughnutGeometry.start?.[1] === 270 && doughnutGeometry.start?.[0] > 513, `Doughnut charts must render annular slices with configured hole size and first-slice angle: ${JSON.stringify(doughnutGeometry)}`)
-  assert(scatterChartGeometry.markers.length === 6 && Math.abs(scatterChartGeometry.markers[0].x - (88 + 850 / 6)) < 0.1 && Math.abs(scatterChartGeometry.markers[1].x - 513) < 0.1 && scatterChartGeometry.lines.length === 1 && scatterChartGeometry.xLabels.join(',') === '0,2,4,6' && scatterChartGeometry.yLabels.join(',') === '0,10,20,30' && scatterChartGeometry.xGridlines === 4 && scatterChartGeometry.yGridlines === 4 && scatterChartGeometry.xTicks === 4 && scatterChartGeometry.xAxis === 465 && scatterChartGeometry.yAxis === 88 && scatterChartGeometry.categories === 0, `XY scatter charts must pair cached x/y values, use separate numeric axes, and honor per-series line overrides: ${JSON.stringify(scatterChartGeometry)}`)
+  assert(scatterChartGeometry.markers.length === 6 && scatterChartGeometry.markers.map(marker => marker.shape).join(',') === 'diamond,diamond,diamond,square,triangle,square' && scatterChartGeometry.markers.every(marker => marker.d?.endsWith('Z')) && scatterChartGeometry.markers[0].radius === 7 && scatterChartGeometry.markers[4].radius === 10 && scatterChartGeometry.markers.slice(3).every(marker => marker.fill === scatterChartGeometry.markers[3].fill) && Math.abs(scatterChartGeometry.markers[0].x - (88 + 850 / 6)) < 0.1 && Math.abs(scatterChartGeometry.markers[1].x - 513) < 0.1 && scatterChartGeometry.lines.length === 1 && scatterChartGeometry.xLabels.join(',') === '0,2,4,6' && scatterChartGeometry.yLabels.join(',') === '0,10,20,30' && scatterChartGeometry.xGridlines === 4 && scatterChartGeometry.yGridlines === 4 && scatterChartGeometry.xTicks === 4 && scatterChartGeometry.xAxis === 465 && scatterChartGeometry.yAxis === 88 && scatterChartGeometry.categories === 0, `XY scatter charts must honor series and point marker symbols/sizes alongside cached x/y values and separate numeric axes: ${JSON.stringify(scatterChartGeometry)}`)
+  assert(logScatterChartGeometry.markers.length === 4 && logScatterChartGeometry.xLabels.join(',') === '1,10,100' && logScatterChartGeometry.yLabels.join(',') === '1,10,100' && logScatterChartGeometry.xGridlines === 3 && logScatterChartGeometry.yGridlines === 3 && logScatterChartGeometry.xTicks === 3 && logScatterChartGeometry.markers.slice(0, 3).every((point, index) => Math.abs(point.x - [88, 513, 938][index]) < 0.1 && Math.abs(point.y - [465, 270, 75][index]) < 0.1), `Logarithmic XY axes must place decade ticks geometrically and omit non-positive x/y points: ${JSON.stringify(logScatterChartGeometry)}`)
+  assert(invalidLogScatterGeometry.markers.length === 6 && Math.abs(invalidLogScatterGeometry.markers[1].x - 173) < 0.1 && Math.abs(invalidLogScatterGeometry.markers[1].y - 422.525) < 0.1 && Math.abs(invalidLogScatterGeometry.markers[3].x - 88) < 0.1 && Math.abs(invalidLogScatterGeometry.markers[4].y - 465) < 0.1 && initial.warnings.some(warning => warning.includes('Invalid chart x-axis logarithmic base')) && initial.warnings.some(warning => warning.includes('Invalid chart value-axis logarithmic base')), `Out-of-range c:logBase values must warn, render linearly, and preserve non-positive data: ${JSON.stringify({ geometry: invalidLogScatterGeometry, warnings: initial.warnings.filter(warning => warning.includes('logarithmic base')) })}`)
   assert(bubbleChartGeometry.area.bubbles.length === 3 && Math.abs(bubbleChartGeometry.area.bubbles[0].r / bubbleChartGeometry.area.bubbles[1].r - 0.5) < 0.001 && Math.abs(bubbleChartGeometry.area.bubbles[2].r / bubbleChartGeometry.area.bubbles[1].r - 0.8) < 0.001 && new Set(bubbleChartGeometry.area.bubbles.map(item => item.fill)).size === 3 && bubbleChartGeometry.area.labels.join(',') === '1,25,5,100,9,-64' && bubbleChartGeometry.area.xLabels.join(',') === '0,2,4,6,8,10' && bubbleChartGeometry.area.yLabels.join(',') === '0,10,20,30,40', `Bubble charts must use paired x/y/size caches, area-scaled radii, standard negative-bubble defaults, varying point colors, labels, and numeric axes: ${JSON.stringify(bubbleChartGeometry.area)}`)
   assert(bubbleChartGeometry.width.bubbles.length === 2 && Math.abs(bubbleChartGeometry.width.bubbles[0].r - 15.6) < 0.1 && Math.abs(bubbleChartGeometry.width.bubbles[1].r / bubbleChartGeometry.width.bubbles[0].r - 0.25) < 0.001 && bubbleChartGeometry.width.labels.join(',') === '100,25', `Bubble width sizing must honor c:bubbleScale, hide negative bubbles when requested, and render bubble-size labels: ${JSON.stringify(bubbleChartGeometry.width)}`)
   assert(radarChartGeometry.standard.style === 'standard' && radarChartGeometry.standard.lines.length === 1 && radarChartGeometry.standard.lines[0].endsWith('Z') && radarChartGeometry.standard.markers.length === 0 && radarChartGeometry.standard.grid === 4 && radarChartGeometry.standard.spokes === 4 && radarChartGeometry.standard.categoryTicks === 4 && radarChartGeometry.standard.valueTicks === 5 && radarChartGeometry.standard.categories.join(',') === 'Speed,Quality,Value,Reliability' && radarChartGeometry.standard.axisLabels.join(',') === '0,25,50,75,100' && radarChartGeometry.standard.labels.join(',') === '80,60,40,90', `Standard radar charts must render closed series polygons, axis ticks, category spokes, value rings, and labels: ${JSON.stringify(radarChartGeometry.standard)}`)
@@ -1809,6 +4320,7 @@ try {
   const dynamicTableCell = secondSlide.tables[0].cells.find(cell => cell.autoFit === 'normal')
   const referenceTableCell = secondSlide.tables[0].cells.find(cell => cell.text === 'Left cell')
   assert(dynamicTableCell && referenceTableCell && dynamicTableCell.fontSize < referenceTableCell.fontSize
+    && dynamicTableCell.textScrollHeight <= dynamicTableCell.textClientHeight + 1
     && dynamicTableCell.scrollHeight <= dynamicTableCell.clientHeight,
     `A table-cell a:normAutofit must shrink text to fit its saved row height: ${JSON.stringify({ dynamicTableCell, referenceTableCell })}`)
   const columnTableCellRender = secondSlide.tables[0].cells.find(cell => cell.text.includes('fills its first text column'))
@@ -1816,7 +4328,10 @@ try {
   const tableColumnXs = (columnTableCellRender?.runRects || []).map(rect => rect.left)
   const tableColumnFlow = await evaluate(`(() => {
     const cell = [...document.querySelectorAll('.stage-shell > .slide-host .slide-table td')].find(item => item.textContent.includes('fills its first text column'))
-    const node = cell?.querySelector('.text-run')?.firstChild
+    const textRun = cell?.querySelector('.text-run')
+    const walker = textRun && document.createTreeWalker(textRun, NodeFilter.SHOW_TEXT)
+    let node = walker?.nextNode()
+    while (node && !node.textContent?.length) node = walker?.nextNode()
     if (!node || node.nodeType !== Node.TEXT_NODE) return undefined
     const rectAt = (start, end) => { const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end); const rect = range.getBoundingClientRect(); return { left: rect.left, right: rect.right } }
     const rect = element => { const { left, right, top, width, height } = element.getBoundingClientRect(); return { left, right, top, width, height } }
@@ -1862,7 +4377,7 @@ try {
   await evaluate(`document.querySelector('.player-controls button:first-child').click()`)
   await delay(50)
   const returned = await state()
-  assert(returned.slide?.startsWith('01 / 67'), 'Previous must return to the first slide.')
+  assert(returned.slide?.startsWith('01 / 68'), 'Previous must return to the first slide.')
   assert(returned.slideTransition && returned.slideTransition.keyframes[0] === 'scale(0.5)' && returned.slideTransition.keyframes[1] === 'scale(1)', 'Returning to the first slide must play its OOXML zoom transition.')
   assert(shape(returned, 'Click fade').visibility === 'visible' && shape(returned, 'With previous').visibility === 'visible' && shape(returned, 'Second click').visibility === 'visible', 'Returning must show completed entrance builds.')
   assert(paragraph(returned, 'Built paragraph').visibility === 'visible', 'Returning must show completed paragraph builds.')
@@ -1871,7 +4386,7 @@ try {
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(50)
   const numberJump = await state()
-  assert(numberJump.slide?.startsWith('02 / 67'), 'Number plus Enter must jump to that slide.')
+  assert(numberJump.slide?.startsWith('02 / 68'), 'Number plus Enter must jump to that slide.')
   await evaluate(`document.querySelector('.stage-shell').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 120 }))`)
   await delay(20)
   const menuOpen = await state()
@@ -1883,14 +4398,14 @@ try {
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(50)
   const pushSlide = await state()
-  assert(pushSlide.slide?.startsWith('03 / 67') && pushSlide.slideTransition?.keyframes[0] === 'translateX(-100%)' && pushSlide.slideTransition.translateX < 0, `The push transition must move the incoming slide left-to-right from the OOXML direction: ${JSON.stringify({ slide: pushSlide.slide, transition: pushSlide.slideTransition, underlay: pushSlide.transitionUnderlay })}`)
+  assert(pushSlide.slide?.startsWith('03 / 68') && pushSlide.slideTransition?.keyframes[0] === 'translateX(-100%)' && pushSlide.slideTransition.translateX < 0, `The push transition must move the incoming slide left-to-right from the OOXML direction: ${JSON.stringify({ slide: pushSlide.slide, transition: pushSlide.slideTransition, underlay: pushSlide.transitionUnderlay })}`)
   assert(blackScreen.slideTransition && pushSlide.transitionUnderlay.translateX > blackScreen.slideTransition.translateX && pushSlide.transitionUnderlay.translateX < blackScreen.slideTransition.translateX + initial.hostFrame.width, `The paired push must move the outgoing snapshot right from the in-progress cover position: ${JSON.stringify({ cover: blackScreen.slideTransition, outgoing: pushSlide.transitionUnderlay })}`)
   await delay(800)
   const beforePull = await state()
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(70)
   const pullSlide = await state()
-  assert(pullSlide.slide?.startsWith('04 / 67') && !pullSlide.slideTransition, 'Pull must animate the retained outgoing slide while the incoming slide remains stationary.')
+  assert(pullSlide.slide?.startsWith('04 / 68') && !pullSlide.slideTransition, 'Pull must animate the retained outgoing slide while the incoming slide remains stationary.')
   assert(pullSlide.transitionUnderlay.pulling && Number(pullSlide.transitionUnderlay.layerZIndex) > Number(pullSlide.transitionUnderlay.hostZIndex), 'The pull snapshot must be stacked above the incoming slide.')
   assert(pullSlide.transitionUnderlay.shapeNames.includes('Third slide') && pullSlide.transitionUnderlay.keyframes?.at(-1)?.includes('translate(-100%, 100%)') && Number(pullSlide.transitionUnderlay.duration) === 750, `The pull snapshot must move left and down for dir=ld: ${JSON.stringify(pullSlide.transitionUnderlay)}`)
   assert(pullSlide.transitionUnderlay.frame.left < beforePull.hostFrame.left - 5 && pullSlide.transitionUnderlay.frame.top > beforePull.hostFrame.top + 5, `The old page must visibly move left and down while revealing the new slide: ${JSON.stringify({ before: beforePull.hostFrame, outgoing: pullSlide.transitionUnderlay.frame })}`)
@@ -1899,54 +4414,54 @@ try {
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const splitOut = await state()
-  assert(splitOut.slide?.startsWith('05 / 67') && splitOut.slideTransition?.clipKeyframes?.[0]?.includes('50%') && splitOut.slideTransition.clipKeyframes.at(-1)?.includes('0'), `Vertical split-out must reveal the new page from its center: ${JSON.stringify(splitOut.slideTransition)}`)
+  assert(splitOut.slide?.startsWith('05 / 68') && /^inset\(50% 0/.test(splitOut.slideTransition?.clipKeyframes?.[0] || '') && splitOut.slideTransition.clipKeyframes.at(-1)?.startsWith('inset(0'), `A split with omitted attributes must use the ECMA-376 defaults dir=out and orient=horz: ${JSON.stringify(splitOut.slideTransition)}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '6' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const splitIn = await state()
-  assert(splitIn.slide?.startsWith('06 / 67') && !splitIn.slideTransition && splitIn.transitionUnderlay.splittingIn && Number(splitIn.transitionUnderlay.layerZIndex) > Number(splitIn.transitionUnderlay.hostZIndex), 'Horizontal split-in must animate the old page above the new page.')
-  assert(splitIn.transitionUnderlay.shapeNames.includes('Split out slide') && splitIn.transitionUnderlay.clipKeyframes?.at(-1)?.includes('50% 0') && Number(splitIn.transitionUnderlay.duration) === 750, `Horizontal split-in must close the outgoing page toward its center: ${JSON.stringify(splitIn.transitionUnderlay)}`)
+  assert(splitIn.slide?.startsWith('06 / 68') && !splitIn.slideTransition && splitIn.transitionUnderlay.splittingIn && Number(splitIn.transitionUnderlay.layerZIndex) > Number(splitIn.transitionUnderlay.hostZIndex), 'Vertical split-in must animate the old page above the new page.')
+  assert(splitIn.transitionUnderlay.shapeNames.includes('Split out slide') && /^inset\(0(?:px)? 50%/.test(splitIn.transitionUnderlay.clipKeyframes?.at(-1) || '') && Number(splitIn.transitionUnderlay.duration) === 750, `Vertical split-in must close the outgoing page toward its center: ${JSON.stringify(splitIn.transitionUnderlay)}`)
   await delay(800)
   assert((await state()).transitionUnderlay.slideCount === 0, 'Split must remove the outgoing snapshot after the transition.')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const circle = await state()
-  assert(circle.slide?.startsWith('07 / 67') && circle.slideTransition?.clipKeyframes?.[0]?.startsWith('circle(0%') && circle.slideTransition.clipKeyframes.at(-1)?.startsWith('circle(100%'), `Circle must grow from the slide center to reveal the new page: ${JSON.stringify(circle.slideTransition)}`)
+  assert(circle.slide?.startsWith('07 / 68') && circle.slideTransition?.clipKeyframes?.[0]?.startsWith('circle(0%') && circle.slideTransition.clipKeyframes.at(-1)?.startsWith('circle(100%'), `Circle must grow from the slide center to reveal the new page: ${JSON.stringify(circle.slideTransition)}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '8' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const diamond = await state()
-  assert(diamond.slide?.startsWith('08 / 67') && diamond.slideTransition?.clipKeyframes?.[0]?.includes('50% 50%') && diamond.slideTransition.clipKeyframes.at(-1)?.includes('-50%'), `Diamond must expand beyond slide edges: ${JSON.stringify(diamond.slideTransition)}`)
+  assert(diamond.slide?.startsWith('08 / 68') && diamond.slideTransition?.clipKeyframes?.[0]?.includes('50% 50%') && diamond.slideTransition.clipKeyframes.at(-1)?.includes('-50%'), `Diamond must expand beyond slide edges: ${JSON.stringify(diamond.slideTransition)}`)
   await delay(800)
   assert((await state()).transitionUnderlay.slideCount === 0, 'The shape transitions must leave no outgoing snapshot behind.')
   await evaluate(`window.__decklineCutBlackObserved = false; window.__decklineCutBlackObserver = new MutationObserver(() => { if (document.querySelector('.stage-shell')?.classList.contains('is-cut-through-black')) window.__decklineCutBlackObserved = true }); window.__decklineCutBlackObserver.observe(document.querySelector('.stage-shell'), { attributes: true, attributeFilter: ['class'] })`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(30)
   const cutThroughBlack = await state()
-  assert(cutThroughBlack.slide?.startsWith('09 / 67') && !cutThroughBlack.slideTransition && cutThroughBlack.cutBlackObserved && !cutThroughBlack.warnings.some(warning => warning.includes('through-black')) && cutThroughBlack.warnings.some(warning => warning.includes('AlternateContent')), 'An unsupported AlternateContent choice must render its through-black cut fallback and report only the unsupported-choice warning.')
+  assert(cutThroughBlack.slide?.startsWith('09 / 68') && !cutThroughBlack.slideTransition && cutThroughBlack.cutBlackObserved && !cutThroughBlack.warnings.some(warning => warning.includes('through-black')) && cutThroughBlack.warnings.some(warning => warning.includes('AlternateContent')), 'An unsupported AlternateContent choice must render its through-black cut fallback and report only the unsupported-choice warning.')
   await evaluate(`window.__decklineCutBlackObserver.disconnect(); delete window.__decklineCutBlackObserver`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(30)
   const cut = await state()
-  assert(cut.slide?.startsWith('10 / 67') && !cut.slideTransition && cut.transitionUnderlay.slideCount === 0, 'Cut must switch slides immediately without an animation or retained overlay.')
+  assert(cut.slide?.startsWith('10 / 68') && !cut.slideTransition && cut.transitionUnderlay.slideCount === 0, 'Cut must switch slides immediately without an animation or retained overlay.')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const honeycomb = await state()
   const honeycombStart = honeycomb.slideTransition?.clipKeyframes?.[0] || ''
   const honeycombEnd = honeycomb.slideTransition?.clipKeyframes?.at(-1) || ''
-  assert(honeycomb.slide?.startsWith('11 / 67') && Number(honeycomb.slideTransition?.duration) === 900 && honeycombStart.startsWith('path("M') && honeycombEnd.startsWith('path("M') && (honeycombEnd.match(/M(?=\s*[-\d])/g) || []).length > 50 && honeycomb.slideTransition.clipPath.startsWith('path(') && !honeycomb.warnings.some(warning => warning.includes('honeycomb')), 'The Office 2010 honeycomb transition must render as an animated tiled hexagon mask without a fallback warning and honor p14:dur.')
+  assert(honeycomb.slide?.startsWith('11 / 68') && Number(honeycomb.slideTransition?.duration) === 900 && honeycombStart.startsWith('path("M') && honeycombEnd.startsWith('path("M') && (honeycombEnd.match(/M(?=\s*[-\d])/g) || []).length > 50 && honeycomb.slideTransition.clipPath.startsWith('path(') && !honeycomb.warnings.some(warning => warning.includes('honeycomb')), 'The Office 2010 honeycomb transition must render as an animated tiled hexagon mask without a fallback warning and honor p14:dur.')
   await delay(950)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const blinds = await state()
-  assert(blinds.slide?.startsWith('12 / 67') && blinds.slideTransition?.clipKeyframes?.length === 3 && blinds.slideTransition.clipKeyframes[0]?.startsWith('path("M') && blinds.slideTransition.clipKeyframes.at(-1)?.startsWith('path("M') && blinds.slideTransition.clipPath.startsWith('path(') && !blinds.warnings.some(warning => warning.includes('blinds')), 'Vertical blinds must reveal the new slide through animated, full-height slats without a fallback warning.')
+  assert(blinds.slide?.startsWith('12 / 68') && blinds.slideTransition?.clipKeyframes?.length === 3 && blinds.slideTransition.clipKeyframes[0]?.startsWith('path("M') && blinds.slideTransition.clipKeyframes.at(-1)?.startsWith('path("M') && blinds.slideTransition.clipPath.startsWith('path(') && !blinds.warnings.some(warning => warning.includes('blinds')), 'Vertical blinds must reveal the new slide through animated, full-height slats without a fallback warning.')
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const checker = await state()
   const checkerEnd = checker.slideTransition?.clipKeyframes?.at(-1) || ''
-  assert(checker.slide?.startsWith('13 / 67') && checker.slideTransition?.clipKeyframes?.length === 5 && checker.slideTransition.clipKeyframes[0]?.startsWith('path("M') && (checkerEnd.match(/M(?=\s*[-\d])/g) || []).length > 50 && checker.slideTransition.clipPath.startsWith('path(') && !checker.warnings.some(warning => warning.includes('checker')), 'Horizontal checkerboard must reveal through a tiled square mask without a fallback warning.')
+  assert(checker.slide?.startsWith('13 / 68') && checker.slideTransition?.clipKeyframes?.length === 5 && checker.slideTransition.clipKeyframes[0]?.startsWith('path("M') && (checkerEnd.match(/M(?=\s*[-\d])/g) || []).length > 50 && checker.slideTransition.clipPath.startsWith('path(') && !checker.warnings.some(warning => warning.includes('checker')), 'Horizontal checkerboard must reveal through a tiled square mask without a fallback warning.')
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
@@ -1954,7 +4469,7 @@ try {
   const wheelEnd = wheel.slideTransition?.clipKeyframes?.at(-1) || ''
   const reverseBoundary = wheel.slideTransition?.clipKeyframes?.[1]?.split(' L')[1]?.trim().split(' ').slice(0, 2).map(Number)
   const reverseStartAngle = reverseBoundary && Math.atan2(reverseBoundary[1] - wheel.hostFrame.height / 2, reverseBoundary[0] - wheel.hostFrame.width / 2)
-  assert(wheel.slide?.startsWith('14 / 67') && wheel.slideTransition?.clipKeyframes?.length === 5 && (wheelEnd.match(/M(?=\s*[-\d])/g) || []).length === 8 && wheel.slideTransition.clipPath.startsWith('path(') && Number(wheel.slideTransition.duration) === 750, 'The eight-spoke wheel transition must render eight animated radial wedges.')
+  assert(wheel.slide?.startsWith('14 / 68') && wheel.slideTransition?.clipKeyframes?.length === 5 && (wheelEnd.match(/M(?=\s*[-\d])/g) || []).length === 8 && wheel.slideTransition.clipPath.startsWith('path(') && Number(wheel.slideTransition.duration) === 750, 'The eight-spoke wheel transition must render eight animated radial wedges.')
   assert(reverseStartAngle !== undefined && Math.abs(reverseStartAngle + Math.PI / 4) < 0.05, `The p14 eight-spoke reverse wheel must select its AlternateContent choice and sweep from the opposite spoke boundary: ${JSON.stringify({ reverseStartAngle, reverseBoundary, warnings: wheel.warnings })}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
@@ -1972,14 +4487,26 @@ try {
   await evaluate(`window.__decklineMediaCalls = []; window.__decklineMediaPauses = []; window.__decklineOriginalPlay = HTMLMediaElement.prototype.play; window.__decklineOriginalPause = HTMLMediaElement.prototype.pause; HTMLMediaElement.prototype.play = function () { window.__decklineMediaCalls.push({ id: this.dataset.mediaId, currentTime: this.currentTime, volume: this.volume, muted: this.muted }); return window.__decklineBlockNextMediaPlay ? (delete window.__decklineBlockNextMediaPlay, Promise.reject(new DOMException('Autoplay blocked', 'NotAllowedError'))) : Promise.resolve() }; HTMLMediaElement.prototype.pause = function () { window.__decklineMediaPauses.push(this.dataset.mediaId); return window.__decklineOriginalPause.apply(this, arguments) }; window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(300)
   const embeddedMedia = await state()
-  assert(embeddedMedia.slide?.startsWith('15 / 67') && embeddedMedia.media.videos.length === 1 && embeddedMedia.media.audios.length === 3 && embeddedMedia.slideTransition?.clipKeyframes?.length === 5 && embeddedMedia.slideTransition.clipPath.startsWith('path('), `Embedded media and the OOXML dissolve transition must render on their source slide: ${JSON.stringify({ slide: embeddedMedia.slide, media: embeddedMedia.media, transition: embeddedMedia.slideTransition })}`)
+  assert(embeddedMedia.slide?.startsWith('15 / 68') && embeddedMedia.media.videos.length === 1 && embeddedMedia.media.audios.length === 3 && embeddedMedia.slideTransition?.clipKeyframes?.length === 5 && embeddedMedia.slideTransition.clipPath.startsWith('path('), `Embedded media and the OOXML dissolve transition must render on their source slide: ${JSON.stringify({ slide: embeddedMedia.slide, media: embeddedMedia.media, transition: embeddedMedia.slideTransition })}`)
   assert(embeddedMedia.media.videos[0].src.startsWith('blob:') && embeddedMedia.media.videos[0].poster.startsWith('blob:') && embeddedMedia.media.videos[0].controls && !embeddedMedia.media.videos[0].autoplay && !embeddedMedia.media.videos[0].muted, 'Embedded video must use local media and poster blobs with native controls and no forced playback.')
   const automaticMediaCalls = await evaluate(`window.__decklineMediaCalls`)
   assert(automaticMediaCalls.some(call => call.id === '3' && Math.abs(call.volume - 0.8) < 0.01 && !call.muted) && automaticMediaCalls.some(call => call.id === '2' && call.volume === 1 && !call.muted), `Timed p:audio/p:video nodes must start their respective targets using authored volume and mute settings: ${JSON.stringify(automaticMediaCalls)}`)
   const automaticMediaPauses = await evaluate(`window.__decklineMediaPauses`)
   assert(automaticMediaPauses.includes('2'), `A finite 100 ms media time node must stop its video target at its declared end: ${JSON.stringify(automaticMediaPauses)}`)
   assert(shape(embeddedMedia, 'Media after-effect').visibility === 'hidden', 'An afterEffect animation must wait for an indefinite timed media node to end.')
-  assert(embeddedMedia.warnings.some(warning => warning.includes('Cross-slide video playback is not supported')), 'Unsupported cross-slide video must produce a visible warning.')
+  assert(shape(embeddedMedia, 'Media bookmark trigger').visibility === 'hidden', 'A media-bookmark-triggered animation must remain hidden before playback crosses its bookmark.')
+  assert(shape(embeddedMedia, 'Media bookmark start trigger').visibility === 'hidden', 'A zero-time bookmark animation must remain hidden before its media starts.')
+  await evaluate(`(() => { const audio = document.querySelector('.slide-audio[data-media-id="5"]'); Object.defineProperty(audio, 'paused', { configurable: true, value: false }); Object.defineProperty(audio, 'currentTime', { configurable: true, writable: true, value: 0 }); audio.dispatchEvent(new Event('play')) })()`)
+  await delay(50)
+  await evaluate(`(() => { const audio = document.querySelector('.slide-audio[data-media-id="5"]'); delete audio.paused; delete audio.currentTime; audio.dispatchEvent(new Event('pause')) })()`)
+  const mediaBookmarkStartState = await state()
+  assert(shape(mediaBookmarkStartState, 'Media bookmark start trigger').visibility === 'visible', `A zero-time p14 media bookmark must fire when playback starts at the media beginning: ${JSON.stringify(shape(mediaBookmarkStartState, 'Media bookmark start trigger'))}`)
+  await evaluate(`(() => { const audio = document.querySelector('.slide-audio[data-media-id="3"]'); Object.defineProperty(audio, 'paused', { configurable: true, value: false }); Object.defineProperty(audio, 'currentTime', { configurable: true, writable: true, value: 0.2 }); audio.dispatchEvent(new Event('play')); audio.currentTime = 0.3 })()`)
+  await delay(140)
+  await evaluate(`(() => { const audio = document.querySelector('.slide-audio[data-media-id="3"]'); delete audio.paused; delete audio.currentTime; audio.dispatchEvent(new Event('pause')) })()`)
+  const mediaBookmarkState = await state()
+  assert(shape(mediaBookmarkState, 'Media bookmark trigger').visibility === 'visible', `RAF sampling must start a p14 bookmark-triggered animation without a timeupdate event: ${JSON.stringify(shape(mediaBookmarkState, 'Media bookmark trigger'))}`)
+  assert(!embeddedMedia.warnings.some(warning => warning.includes('Cross-slide video playback is not supported')), 'Supported numSld video playback must not report an unsupported warning.')
   await evaluate(`document.querySelector('.slide-audio').dispatchEvent(new Event('ended'))`)
   await delay(220)
   const mediaAfterEffectState = await state()
@@ -2004,7 +4531,7 @@ try {
   assert(Math.abs(trimmedMedia.media.audios[0].currentTime - 0.4) < 0.02 && trimmedMedia.media.audios[0].muted && trimmedMedia.media.warnings.some(warning => warning.name === 'Invalid trim'), `Seeking beyond the 100 ms end trim must clamp playback and finish the fade-out: ${JSON.stringify(trimmedMedia.media)}`)
   assert(!embeddedMedia.warnings.some(warning => warning.includes('PowerPoint autoplay/timing is not applied')), 'The old warning for all timed media playback must be removed after supported timeline media playback is enabled.')
   await evaluate(`(() => { const video = document.querySelector('.slide-video'); video.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); video.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })) })()`)
-  assert((await state()).slide?.startsWith('15 / 67'), 'Video clicks and media-focused navigation keys must not advance the slide.')
+  assert((await state()).slide?.startsWith('15 / 68'), 'Video clicks and media-focused navigation keys must not advance the slide.')
 
   const shapeMasksInitial = await state()
   const shapeMaskNames = ['Circle mask animation', 'Diamond mask animation', 'Box mask animation', 'Dissolve mask animation', 'Wheel mask animation', 'Wedge mask animation', 'Plus in mask animation', 'Plus out mask animation', 'Random horizontal bars animation', 'Random vertical bars animation', 'Strips downLeft animation', 'Strips upLeft animation', 'Strips downRight animation', 'Strips upRight animation']
@@ -2057,6 +4584,14 @@ try {
   await delay(20)
   const stoppedMedia = await state()
   assert(Math.abs(stoppedMedia.media.audios[0].currentTime - 0.1) < 0.02, `The stop command must pause and return media to its trimmed start: ${JSON.stringify(stoppedMedia.media.audios[0])}`)
+  const stopAudioPauseStart = await evaluate(`window.__decklineMediaPauses.length`)
+  await evaluate(`document.querySelector('.stage-shell').click()`)
+  await delay(150)
+  const stopAudioState = await state()
+  const stopAudioPauseIds = await evaluate(`window.__decklineMediaPauses.slice(${stopAudioPauseStart})`)
+  const stageAudioIds = await evaluate(`[...document.querySelectorAll('.stage-shell .slide-audio')].map(audio => audio.dataset.mediaId)`)
+  assert(stageAudioIds.length === 3 && stageAudioIds.every(id => stopAudioPauseIds.includes(id)), `The onstopaudio event must stop every audio element on the slide: ${JSON.stringify({ stageAudioIds, stopAudioPauseIds })}`)
+  assert(shape(stopAudioState, 'Stop audio trigger').visibility === 'visible', `The slide-targeted onStopAudio sequence must run when type=evt cmd=onstopaudio fires: ${JSON.stringify(shape(stopAudioState, 'Stop audio trigger'))}`)
   await evaluate(`HTMLMediaElement.prototype.play = window.__decklineOriginalPlay; HTMLMediaElement.prototype.pause = window.__decklineOriginalPause; delete window.__decklineOriginalPlay; delete window.__decklineOriginalPause; delete window.__decklineMediaCalls; delete window.__decklineMediaPauses`)
 
   await evaluate(`document.querySelector('[data-tool=pen]').click(); (() => { const layer = document.querySelector('.ink-layer'); const rect = layer.getBoundingClientRect(); const event = (type, x, y, buttons) => layer.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 21, pointerType: 'mouse', clientX: rect.left + x, clientY: rect.top + y, buttons })); event('pointerdown', 30, 30, 1); event('pointermove', 90, 80, 1); event('pointerup', 90, 80, 0) })()`)
@@ -2097,7 +4632,7 @@ try {
   await delay(80)
   const randomBarTransition = await state()
   const randomBarFrames = randomBarTransition.slideTransition?.clipKeyframes || []
-  assert(randomBarTransition.slide?.startsWith('16 / 67') && randomBarFrames.length === 5 && randomBarFrames.every(frame => frame.startsWith('path(')) && (randomBarFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 8 && Number(randomBarTransition.slideTransition.duration) === 750, `The horizontal random-bar slide transition must animate eight stable, interpolable masks: ${JSON.stringify(randomBarTransition.slideTransition)}`)
+  assert(randomBarTransition.slide?.startsWith('16 / 68') && randomBarFrames.length === 5 && randomBarFrames.every(frame => frame.startsWith('path(')) && (randomBarFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 8 && Number(randomBarTransition.slideTransition.duration) === 750, `The horizontal random-bar slide transition must animate eight stable, interpolable masks: ${JSON.stringify(randomBarTransition.slideTransition)}`)
   await delay(800)
   const jumpToPresetSlide = slideNumber => evaluate(`(() => { for (const key of '${slideNumber}') window.dispatchEvent(new KeyboardEvent('keydown', { key })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) })()`)
   const presetCases = ['fallOver', 'drape', 'curtains', 'wind', 'prestige', 'fracture', 'crush', 'peelOff', 'pageCurlDouble', 'pageCurlSingle', 'airplane', 'origami']
@@ -2107,7 +4642,7 @@ try {
     await delay(80)
     const result = await state()
     const snapshot = await evaluate(`(() => { const underlay = document.querySelector('.slide-transition-underlay'); const outgoing = underlay?.firstElementChild; const animation = outgoing?.getAnimations()[0]; return { preset: document.querySelector('.stage-shell > .slide-host')?.dataset.transitionPreset, className: document.querySelector('.stage-shell')?.className, layer: getComputedStyle(underlay).zIndex, duration: animation?.effect.getTiming().duration, transforms: animation?.effect.getKeyframes().map(frame => frame.transform), origins: animation?.effect.getKeyframes().map(frame => frame.transformOrigin) } })()`)
-    assert(result.slide?.startsWith(`${slideNumber} / 67`) && result.transitionEffect === 'preset' && result.transitionPreset === presetName && snapshot.preset === presetName && snapshot.className.includes('is-preset-transition') && Number(snapshot.layer) > 1 && Number(snapshot.duration) === 850 && snapshot.transforms?.length > 1, `p15:prstTrans ${presetName} must parse, animate the outgoing snapshot, and honor p14:dur: ${JSON.stringify({ slide: result.slide, effect: result.transitionEffect, preset: snapshot.preset, duration: snapshot.duration, snapshot, warnings: result.warnings })}`)
+    assert(result.slide?.startsWith(`${slideNumber} / 68`) && result.transitionEffect === 'preset' && result.transitionPreset === presetName && snapshot.preset === presetName && snapshot.className.includes('is-preset-transition') && Number(snapshot.layer) > 1 && Number(snapshot.duration) === 850 && snapshot.transforms?.length > 1, `p15:prstTrans ${presetName} must parse, animate the outgoing snapshot, and honor p14:dur: ${JSON.stringify({ slide: result.slide, effect: result.transitionEffect, preset: snapshot.preset, duration: snapshot.duration, snapshot, warnings: result.warnings })}`)
     if (presetName === 'fallOver') assert(snapshot.transforms.at(-1).includes('rotateX(-72deg)'), `p15:invY must mirror fallOver's vertical direction: ${JSON.stringify(snapshot.transforms)}`)
     if (presetName === 'peelOff') assert(snapshot.origins.at(-1) === 'right center' && snapshot.transforms.at(-1).includes('rotateY(-105deg)'), `p15:invX must mirror peelOff's hinge direction: ${JSON.stringify({ origins: snapshot.origins, transforms: snapshot.transforms })}`)
     await delay(850)
@@ -2116,7 +4651,7 @@ try {
   await jumpToPresetSlide(66)
   await delay(80)
   const invalidPreset = await state()
-  assert(invalidPreset.slide?.startsWith('66 / 67') && invalidPreset.transitionEffect === 'fade' && invalidPreset.warnings.some(warning => warning.includes('notARealPreset') && warning.includes('falls back to fade')), `An unknown p15 preset must be warned and use a fade fallback: ${JSON.stringify({ slide: invalidPreset.slide, effect: invalidPreset.transitionEffect, warnings: invalidPreset.warnings })}`)
+  assert(invalidPreset.slide?.startsWith('66 / 68') && invalidPreset.transitionEffect === 'fade' && invalidPreset.warnings.some(warning => warning.includes('notARealPreset') && warning.includes('falls back to fade')), `An unknown p15 preset must be warned and use a fade fallback: ${JSON.stringify({ slide: invalidPreset.slide, effect: invalidPreset.transitionEffect, warnings: invalidPreset.warnings })}`)
   await evaluate(`document.querySelector('.stage-shell')?.click()`)
   await delay(35)
   const visibilityMiddle = await state()
@@ -2127,16 +4662,38 @@ try {
   await delay(550)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
-  await evaluate(`new Promise((resolve, reject) => { const started = performance.now(); const check = () => { const frame = document.querySelector('.stage-shell > .slide-host .slide-frame'); if (frame && getComputedStyle(frame).backgroundSize === '2px 8px') resolve(true); else if (performance.now() - started > 3000) reject(new Error('The flipped background tile did not finish rendering.')); else setTimeout(check, 20) }; check() })`)
+  await evaluate(`new Promise((resolve, reject) => { const started = performance.now(); const check = () => { const frame = document.querySelector('.stage-shell > .slide-host .slide-frame'); if (frame && getComputedStyle(frame).backgroundSize === '1px 8px') resolve(true); else if (performance.now() - started > 3000) reject(new Error('The flipped background tile did not finish rendering.')); else setTimeout(check, 20) }; check() })`)
   const verticalRandomBarTransition = await state()
+  const inheritedGroupFill = shape(verticalRandomBarTransition, 'Group fill placeholder')
+  assert(inheritedGroupFill?.backgroundColor === 'rgba(0, 0, 0, 0)' && ['none', 'rgba(0, 0, 0, 0)'].includes(inheritedGroupFill.borderColor) && verticalRandomBarTransition.warnings.some(warning => warning.includes('grp fill was simplified')), 'A placeholder’s local group fills must prevent layout fill inheritance while reporting the transparency fallback: ' + JSON.stringify({background: inheritedGroupFill?.backgroundColor, border: inheritedGroupFill?.borderColor, warnings: verticalRandomBarTransition.warnings.filter(warning => warning.includes('grp fill'))}))
+  const groupedFillChild = shape(verticalRandomBarTransition, 'Grouped fill child')
+  assert(groupedFillChild?.backgroundColor === 'rgb(18, 171, 52)' && groupedFillChild.borderColor === 'rgb(18, 171, 52)', 'A grouped shape’s grpFill must inherit the parent group’s solid fill for both its fill and line.')
+  const groupedFillTextRuns = verticalRandomBarTransition.textRuns.filter(run => run.name === 'Grouped fill child')
+  assert(groupedFillTextRuns.find(run => run.text === 'Group fill text')?.color === 'rgb(18, 171, 52)', 'A text run’s grpFill must inherit its parent group’s solid fill.')
+  const wordsUnderline = groupedFillTextRuns.find(run => run.text === 'Words and spaces')
+  assert(wordsUnderline?.textDecorationLine.includes('underline'), `PowerPoint loads the unsupported DrawingML words underline as a single underline across the run: ${JSON.stringify(wordsUnderline)}`)
+  assert(groupedFillTextRuns.find(run => run.text === 'No fill text')?.color === 'rgba(0, 0, 0, 0)', 'A text run’s noFill must render with transparent text color.')
+  assert(groupedFillTextRuns.find(run => run.text === 'Gradient text')?.color === 'rgb(239, 68, 68)' && verticalRandomBarTransition.warnings.some(warning => warning.includes('Gradient text fills are approximated with their first color stop')), 'A gradient text fill must use a visible first-stop fallback and report the approximation.')
+  assert(groupedFillTextRuns.find(run => run.text === 'Custom underline fill')?.textDecorationColor === 'rgb(255, 0, 255)', 'a:uFill must render the underline with its explicit fill color.')
+  assert(groupedFillTextRuns.find(run => run.text === 'Underline follows text')?.color === 'rgb(11, 83, 148)' && groupedFillTextRuns.find(run => run.text === 'Underline follows text')?.textDecorationColor === 'rgb(11, 83, 148)', 'a:uFillTx must make the underline follow its text run color.')
+  assert(groupedFillTextRuns.find(run => run.text === 'Transparent underline')?.textDecorationColor === 'rgba(0, 0, 0, 0)', 'a:uFill with a:noFill must suppress the underline paint.')
+  const customUnderlineStroke = verticalRandomBarTransition.underlineRuns.find(run => run.text === 'Custom underline stroke')
+  assert(customUnderlineStroke?.color === 'rgb(220, 38, 38)' && customUnderlineStroke.style === 'dotted' && Number.parseFloat(customUnderlineStroke.thickness) > 0, 'a:uLn must render its fill, preset dash, and explicit width.')
+  assert(customUnderlineStroke?.line.includes('underline') && customUnderlineStroke.strikeLine.includes('line-through') && customUnderlineStroke.strikeColor === 'rgb(17, 17, 17)' && customUnderlineStroke.strikeStyle === 'solid', 'Custom underline paint must remain independent from strikethrough paint on the same text run.')
+  const followingUnderlineStroke = verticalRandomBarTransition.underlineRuns.find(run => run.text === 'Underline stroke follows outline')
+  assert(followingUnderlineStroke?.color === 'rgb(29, 78, 216)' && Number.parseFloat(followingUnderlineStroke.thickness) > 0, 'a:uLnTx must follow the run outline color and thickness.')
+  const nestedGroupedFillChild = shape(verticalRandomBarTransition, 'Nested grouped fill child')
+  assert(nestedGroupedFillChild?.backgroundColor === 'rgb(18, 171, 52)' && nestedGroupedFillChild.borderColor === 'rgb(18, 171, 52)', 'A nested group’s grpFill must inherit the parent group’s solid fill for both its fill and line.')
+  const groupedGradientChild = shape(verticalRandomBarTransition, 'Grouped gradient child')
+  assert(groupedGradientChild?.backgroundImage.startsWith('linear-gradient(') && verticalRandomBarTransition.warnings.some(warning => warning.includes('Inherited group gradients are applied separately to child shapes')), 'An inherited group gradient must render and report its per-shape coordinate approximation.')
   const verticalRandomBarFrames = verticalRandomBarTransition.slideTransition?.clipKeyframes || []
-  assert(verticalRandomBarTransition.slide?.startsWith('17 / 67') && verticalRandomBarFrames.length === 5 && verticalRandomBarFrames.every(frame => frame.startsWith('path(')) && (verticalRandomBarFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 15, `The vertical random-bar slide transition must animate fifteen stable, interpolable masks: ${JSON.stringify(verticalRandomBarTransition.slideTransition)}`)
+  assert(verticalRandomBarTransition.slide?.startsWith('17 / 68') && verticalRandomBarFrames.length === 5 && verticalRandomBarFrames.every(frame => frame.startsWith('path(')) && (verticalRandomBarFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 15, `The vertical random-bar slide transition must animate fifteen stable, interpolable masks: ${JSON.stringify(verticalRandomBarTransition.slideTransition)}`)
   const tileSize = verticalRandomBarTransition.slideBackground?.size.match(/^([\d.]+)px ([\d.]+)px$/)?.slice(1).map(Number)
   const tileOffsets = [...(verticalRandomBarTransition.slideBackground?.position.matchAll(/calc\(100% ([+-]) ([\d.]+)px\)/g) || [])]
-  const expectedTileOffsets = [914400, -457200].map((offset, index) => offset * (verticalRandomBarTransition.slideBackground?.frameWidth || 0) / 12192000 + (index ? 4 : 1))
-  assert(/^url\(["']?blob:/.test(verticalRandomBarTransition.slideBackground?.image || '') && verticalRandomBarTransition.slideBackground?.repeat === 'repeat' && tileSize?.length === 2 && Math.abs(tileSize[0] - 2) < 0.01 && Math.abs(tileSize[1] - 8) < 0.01 && tileOffsets.length === 2 && tileOffsets.every((match, index) => Math.abs((match[1] === '-' ? -1 : 1) * Number(match[2]) - expectedTileOffsets[index]) < 0.1) && !verticalRandomBarTransition.warnings.some(warning => warning.includes('Tiled slide background')), `DrawingML tile scale, bottom-right alignment, xy-flip, and EMU offsets must render with a local image and without fallback warnings: ${JSON.stringify({ background: verticalRandomBarTransition.slideBackground, tileOffsets: tileOffsets.map(match => match[0]), expectedTileOffsets, warnings: verticalRandomBarTransition.warnings })}`)
-  const tileFlipPixels = await evaluate(`(async () => { const frame = document.querySelector('.stage-shell > .slide-host .slide-frame'); const backgroundImage = getComputedStyle(frame).backgroundImage; const url = backgroundImage.startsWith('url("') ? backgroundImage.slice(5, -2) : backgroundImage.slice(4, -1); let response; let blob; try { response = await fetch(url); blob = await response.blob(); const bitmap = await createImageBitmap(blob); const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height; const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0); const pixels = [[0,0],[1,0],[2,0],[3,0],[0,1],[1,1],[2,1],[3,1],[0,2],[1,2],[0,3],[1,3]].map(([x,y]) => [...context.getImageData(x,y,1,1).data].slice(0,3).map(value => value.toString(16).padStart(2,'0')).join('')); return { width: bitmap.width, height: bitmap.height, pixels } } catch (error) { return { url, status: response?.status, type: blob?.type, size: blob?.size, error: String(error) } } })()`)
-  assert(tileFlipPixels.width === 4 && tileFlipPixels.height === 4 && tileFlipPixels.pixels.join(',') === 'ff0000,00ff00,00ff00,ff0000,0000ff,ffff00,ffff00,0000ff,0000ff,ffff00,ff0000,00ff00', `Tile flip=xy must mirror alternating rows and columns in the generated pattern: ${JSON.stringify(tileFlipPixels)}`)
+  const expectedTileOffsets = [914400, -457200].map((offset, index) => offset * (verticalRandomBarTransition.slideBackground?.frameWidth || 0) / 12192000 + (index ? 4 : 0.5))
+  assert(/^url\(["']?blob:/.test(verticalRandomBarTransition.slideBackground?.image || '') && verticalRandomBarTransition.slideBackground?.repeat === 'repeat' && tileSize?.length === 2 && Math.abs(tileSize[0] - 1) < 0.01 && Math.abs(tileSize[1] - 8) < 0.01 && tileOffsets.length === 2 && tileOffsets.every((match, index) => Math.abs((match[1] === '-' ? -1 : 1) * Number(match[2]) - expectedTileOffsets[index]) < 0.1) && !verticalRandomBarTransition.warnings.some(warning => warning.includes('Tiled slide background')), `DrawingML srcRect crop, tile scale, bottom-right alignment, xy-flip, and EMU offsets must render with a local image and without fallback warnings: ${JSON.stringify({ background: verticalRandomBarTransition.slideBackground, tileOffsets: tileOffsets.map(match => match[0]), expectedTileOffsets, warnings: verticalRandomBarTransition.warnings })}`)
+  const tileFlipPixels = await evaluate(`(async () => { const frame = document.querySelector('.stage-shell > .slide-host .slide-frame'); const backgroundImage = getComputedStyle(frame).backgroundImage; const url = backgroundImage.startsWith('url("') ? backgroundImage.slice(5, -2) : backgroundImage.slice(4, -1); let response; let blob; try { response = await fetch(url); blob = await response.blob(); const bitmap = await createImageBitmap(blob); const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height; const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0); const pixels = [[0,0],[1,0],[0,1],[1,1],[0,2],[1,2],[0,3],[1,3]].map(([x,y]) => [...context.getImageData(x,y,1,1).data].slice(0,3).map(value => value.toString(16).padStart(2,'0')).join('')); return { width: bitmap.width, height: bitmap.height, pixels } } catch (error) { return { url, status: response?.status, type: blob?.type, size: blob?.size, error: String(error) } } })()`)
+  assert(tileFlipPixels.width === 2 && tileFlipPixels.height === 4 && tileFlipPixels.pixels.join(',') === '00ff00,00ff00,ffff00,ffff00,ffff00,ffff00,00ff00,00ff00', `Tile flip=xy must mirror alternating rows and columns in the generated pattern: ${JSON.stringify(tileFlipPixels)}`)
   const smartArtCachedRoot = verticalRandomBarTransition.shapes.find(element => element.name === 'SmartArt cached drawing fixture: Root node')
   const smartArtCachedChild = verticalRandomBarTransition.shapes.find(element => element.name === 'SmartArt cached drawing fixture: Child node')
   const smartArtRunText = verticalRandomBarTransition.textRuns.map(run => run.text)
@@ -2164,16 +4721,22 @@ try {
   const columnXs = (twoColumnFrame?.runRects || []).map(rect => rect.left)
   assert(twoColumnFrame?.columnCount === '2' && Math.abs(Number.parseFloat(twoColumnFrame.columnGap) - expectedColumnGap) < 0.1 && columnXs.length > 1 && Math.max(...columnXs) - Math.min(...columnXs) > expectedColumnGap, `a:bodyPr numCol and spcCol must create equal text columns with the specified EMU gap and flow text into the next column: ${JSON.stringify({ twoColumnFrame, expectedColumnGap })}`)
   const ltrColumnFlow = await evaluate(`(() => {
-    const node = document.querySelector('.stage-shell > .slide-host .slide-element[title="Two-column text"] .text-run')?.firstChild
-    if (!node || node.nodeType !== Node.TEXT_NODE) return undefined
+    const textRun = document.querySelector('.stage-shell > .slide-host .slide-element[title="Two-column text"] .text-run')
+    const walker = textRun && document.createTreeWalker(textRun, NodeFilter.SHOW_TEXT)
+    let node = walker?.nextNode()
+    while (node && !node.textContent?.length) node = walker?.nextNode()
+    if (!node || node.nodeType !== Node.TEXT_NODE || node.textContent.length < 5) return undefined
     const rectAt = (start, end) => { const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end); const rect = range.getBoundingClientRect(); return { left: rect.left, right: rect.right } }
     return { first: rectAt(0, 5), last: rectAt(Math.max(0, node.textContent.length - 5), node.textContent.length) }
   })()`)
   assert(twoColumnFrame?.direction === 'ltr' && twoColumnFrame.paragraphDirection === 'ltr' && ltrColumnFlow?.first.left < ltrColumnFlow?.last.left, `a:bodyPr rtlCol="0" must preserve left-to-right column overflow and paragraph direction: ${JSON.stringify({ frame: twoColumnFrame && { direction: twoColumnFrame.direction, paragraphDirection: twoColumnFrame.paragraphDirection }, flow: ltrColumnFlow })}`)
   const rtlColumnFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'Two-column RTL text')
   const rtlColumnFlow = await evaluate(`(() => {
-    const node = document.querySelector('.stage-shell > .slide-host .slide-element[title="Two-column RTL text"] .text-run')?.firstChild
-    if (!node || node.nodeType !== Node.TEXT_NODE) return undefined
+    const textRun = document.querySelector('.stage-shell > .slide-host .slide-element[title="Two-column RTL text"] .text-run')
+    const walker = textRun && document.createTreeWalker(textRun, NodeFilter.SHOW_TEXT)
+    let node = walker?.nextNode()
+    while (node && !node.textContent?.length) node = walker?.nextNode()
+    if (!node || node.nodeType !== Node.TEXT_NODE || node.textContent.length < 5) return undefined
     const rectAt = (start, end) => { const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end); const rect = range.getBoundingClientRect(); return { left: rect.left, right: rect.right } }
     return { first: rectAt(0, 5), last: rectAt(Math.max(0, node.textContent.length - 5), node.textContent.length) }
   })()`)
@@ -2202,29 +4765,29 @@ try {
   const strips = await state()
   const stripsFrames = strips.slideTransition?.clipKeyframes || []
   const stripsMiddle = stripsFrames[2] || ''
-  assert(strips.slide?.startsWith('18 / 67') && stripsFrames.length === 5 && stripsFrames.every(frame => frame.startsWith('path(')) && (stripsMiddle.match(/M(?=\s*[-\d])/g) || []).length === 8 && Number(strips.slideTransition.duration) === 750 && !strips.warnings.some(warning => warning.includes('strips')), `The four-corner strips transition must render eight stable staggered masks without falling back: ${JSON.stringify(strips.slideTransition)}`)
+  assert(strips.slide?.startsWith('18 / 68') && stripsFrames.length === 5 && stripsFrames.every(frame => frame.startsWith('path(')) && (stripsMiddle.match(/M(?=\s*[-\d])/g) || []).length === 8 && Number(strips.slideTransition.duration) === 750 && !strips.warnings.some(warning => warning.includes('strips')), `The four-corner strips transition must render eight stable staggered masks without falling back: ${JSON.stringify(strips.slideTransition)}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const plusTransition = await state()
   const plusFrames = plusTransition.slideTransition?.clipKeyframes || []
-  assert(plusTransition.slide?.startsWith('19 / 67') && plusFrames.length === 5 && plusFrames.every(frame => frame.startsWith('path("M')) && new Set(plusFrames).size === 5 && !plusTransition.warnings.some(warning => warning.includes('plus')), `The plus transition must expand a stable cross mask without falling back: ${JSON.stringify(plusTransition.slideTransition)}`)
+  assert(plusTransition.slide?.startsWith('19 / 68') && plusFrames.length === 5 && plusFrames.every(frame => frame.startsWith('path("M')) && new Set(plusFrames).size === 5 && !plusTransition.warnings.some(warning => warning.includes('plus')), `The plus transition must expand a stable cross mask without falling back: ${JSON.stringify(plusTransition.slideTransition)}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const wedgeTransition = await state()
   const wedgeFrames = wedgeTransition.slideTransition?.clipKeyframes || []
-  assert(wedgeTransition.slide?.startsWith('20 / 67') && wedgeFrames.length === 5 && wedgeFrames.every(frame => frame.startsWith('path("M')) && wedgeFrames.every(frame => (frame.match(/L/g) || []).length === 13) && !wedgeTransition.warnings.some(warning => warning.includes('wedge')), `The wedge transition must sweep a single radial sector without falling back: ${JSON.stringify(wedgeTransition.slideTransition)}`)
+  assert(wedgeTransition.slide?.startsWith('20 / 68') && wedgeFrames.length === 5 && wedgeFrames.every(frame => frame.startsWith('path("M')) && wedgeFrames.every(frame => (frame.match(/L/g) || []).length === 13) && !wedgeTransition.warnings.some(warning => warning.includes('wedge')), `The wedge transition must sweep a single radial sector without falling back: ${JSON.stringify(wedgeTransition.slideTransition)}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const newsflash = await state()
-  assert(newsflash.slide?.startsWith('21 / 67') && newsflash.slideTransition?.keyframes[0]?.includes('rotate(360deg)') && newsflash.slideTransition.keyframes[0]?.includes('scale(0.2)') && newsflash.slideTransition.keyframes.at(-1)?.includes('rotate(0deg)') && Number(newsflash.slideTransition.opacityKeyframes[0]) === 0 && !newsflash.warnings.some(warning => warning.includes('newsflash')), `Newsflash must grow and counter-rotate the incoming slide without falling back: ${JSON.stringify(newsflash.slideTransition)}`)
+  assert(newsflash.slide?.startsWith('21 / 68') && newsflash.slideTransition?.keyframes[0]?.includes('rotate(360deg)') && newsflash.slideTransition.keyframes[0]?.includes('scale(0.2)') && newsflash.slideTransition.keyframes.at(-1)?.includes('rotate(0deg)') && Number(newsflash.slideTransition.opacityKeyframes[0]) === 0 && !newsflash.warnings.some(warning => warning.includes('newsflash')), `Newsflash must grow and counter-rotate the incoming slide without falling back: ${JSON.stringify(newsflash.slideTransition)}`)
   await delay(800)
   await evaluate(`window.__decklineRandomValues = [0, 0.9999]; window.__decklineOriginalRandom = Math.random; Math.random = () => window.__decklineRandomValues.shift() ?? 0.5; window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const randomFade = await state()
-  assert(randomFade.slide?.startsWith('22 / 67') && Number(randomFade.slideTransition?.opacityKeyframes?.[0]) === 0 && Number(randomFade.slideTransition?.opacityKeyframes.at(-1)) === 1, `The first random-transition draw must select fade: ${JSON.stringify(randomFade.slideTransition)}`)
+  assert(randomFade.slide?.startsWith('22 / 68') && Number(randomFade.slideTransition?.opacityKeyframes?.[0]) === 0 && Number(randomFade.slideTransition?.opacityKeyframes.at(-1)) === 1, `The first random-transition draw must select fade: ${JSON.stringify(randomFade.slideTransition)}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(800)
@@ -2232,7 +4795,7 @@ try {
   await delay(80)
   const randomPush = await state()
   await evaluate(`Math.random = window.__decklineOriginalRandom; delete window.__decklineOriginalRandom; delete window.__decklineRandomValues`)
-  assert(randomPush.slide?.startsWith('22 / 67') && randomPush.slideTransition?.keyframes[0]?.includes('translateX(100%)') && randomPush.slideTransition.keyframes.at(-1)?.includes('translate(0px, 0px)'), `The next random-transition draw must select a different supported effect: ${JSON.stringify(randomPush.slideTransition)}`)
+  assert(randomPush.slide?.startsWith('22 / 68') && randomPush.slideTransition?.keyframes[0]?.includes('translateX(100%)') && randomPush.slideTransition.keyframes.at(-1)?.includes('translate(0px, 0px)'), `The next random-transition draw must select a different supported effect: ${JSON.stringify(randomPush.slideTransition)}`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(800)
@@ -2240,7 +4803,7 @@ try {
   await delay(80)
   const randomWheel = await state()
   const randomWheelFrames = randomWheel.slideTransition?.clipKeyframes || []
-  assert(randomWheel.slide?.startsWith('22 / 67') && randomWheelFrames.length === 5 && (randomWheelFrames[2]?.match(/M/g) || []).length === 4, `The random wheel transition must use the schema default of four spokes: ${JSON.stringify(randomWheel.slideTransition)}`)
+  assert(randomWheel.slide?.startsWith('22 / 68') && randomWheelFrames.length === 5 && (randomWheelFrames[2]?.match(/M/g) || []).length === 4, `The random wheel transition must use the schema default of four spokes: ${JSON.stringify(randomWheel.slideTransition)}`)
   await evaluate(`Math.random = window.__decklineOriginalRandom; delete window.__decklineOriginalRandom; delete window.__decklineRandomValues`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
@@ -2248,66 +4811,66 @@ try {
   await evaluate(`window.__decklineRandomValues = [0.925]; window.__decklineOriginalRandom = Math.random; Math.random = () => window.__decklineRandomValues.shift() ?? 0.5; window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const randomFlash = await state()
-  assert(randomFlash.slide?.startsWith('22 / 67') && randomFlash.flashTransition?.opacityKeyframes?.map(Number).join(',') === '0,1,1,0' && Number(randomFlash.flashTransition.duration) === 750, `A random transition draw must be able to select flash: ${JSON.stringify(randomFlash.flashTransition)}`)
+  assert(randomFlash.slide?.startsWith('22 / 68') && randomFlash.flashTransition?.opacityKeyframes?.map(Number).join(',') === '0,1,1,0' && Number(randomFlash.flashTransition.duration) === 750, `A random transition draw must be able to select flash: ${JSON.stringify(randomFlash.flashTransition)}`)
   await evaluate(`Math.random = window.__decklineOriginalRandom; delete window.__decklineOriginalRandom; delete window.__decklineRandomValues`)
   await delay(800)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const fadeThroughBlack = await state()
-  assert(fadeThroughBlack.slide?.startsWith('23 / 67') && fadeThroughBlack.slideTransition?.opacityKeyframes?.map(Number).join(',') === '0,0,1' && fadeThroughBlack.transitionUnderlay.opacityKeyframes?.map(Number).join(',') === '1,0,0' && Number(fadeThroughBlack.slideTransition.duration) === 1000 && fadeThroughBlack.stageClasses.includes('is-fading-through-black') && !fadeThroughBlack.warnings.some(warning => warning.includes('through-black')), `Fade through black must fade the outgoing and incoming slides around a black midpoint: ${JSON.stringify({ incoming: fadeThroughBlack.slideTransition, outgoing: fadeThroughBlack.transitionUnderlay, classes: fadeThroughBlack.stageClasses, warnings: fadeThroughBlack.warnings })}`)
+  assert(fadeThroughBlack.slide?.startsWith('23 / 68') && fadeThroughBlack.slideTransition?.opacityKeyframes?.map(Number).join(',') === '0,0,1' && fadeThroughBlack.transitionUnderlay.opacityKeyframes?.map(Number).join(',') === '1,0,0' && Number(fadeThroughBlack.slideTransition.duration) === 1000 && fadeThroughBlack.stageClasses.includes('is-fading-through-black') && !fadeThroughBlack.warnings.some(warning => warning.includes('through-black')), `Fade through black must fade the outgoing and incoming slides around a black midpoint: ${JSON.stringify({ incoming: fadeThroughBlack.slideTransition, outgoing: fadeThroughBlack.transitionUnderlay, classes: fadeThroughBlack.stageClasses, warnings: fadeThroughBlack.warnings })}`)
   await delay(1_050)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const longTransition = await state()
   const verticalCombFrames = longTransition.slideTransition?.clipKeyframes || []
-  assert(longTransition.slide?.startsWith('24 / 67') && verticalCombFrames.length === 5 && verticalCombFrames.every(frame => frame.startsWith('path(')) && (verticalCombFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 15 && Number(longTransition.slideTransition.duration) === 45_000 && !longTransition.warnings.some(warning => warning.includes('comb')), `Vertical comb must render animated bars and preserve explicit p14:dur: ${JSON.stringify(longTransition.slideTransition)}`)
+  assert(longTransition.slide?.startsWith('24 / 68') && verticalCombFrames.length === 5 && verticalCombFrames.every(frame => frame.startsWith('path(')) && (verticalCombFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 15 && Number(longTransition.slideTransition.duration) === 45_000 && !longTransition.warnings.some(warning => warning.includes('comb')), `Vertical comb must render animated bars and preserve explicit p14:dur: ${JSON.stringify(longTransition.slideTransition)}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(40)
   const fastTransition = await state()
   const horizontalCombFrames = fastTransition.slideTransition?.clipKeyframes || []
-  assert(fastTransition.slide?.startsWith('25 / 67') && horizontalCombFrames.length === 5 && horizontalCombFrames.every(frame => frame.startsWith('path(')) && (horizontalCombFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 8 && Number(fastTransition.slideTransition.duration) === 500 && !fastTransition.warnings.some(warning => warning.includes('comb')), `Horizontal comb must render animated bars and preserve fast transition timing: ${JSON.stringify(fastTransition.slideTransition)}`)
+  assert(fastTransition.slide?.startsWith('25 / 68') && horizontalCombFrames.length === 5 && horizontalCombFrames.every(frame => frame.startsWith('path(')) && (horizontalCombFrames[2].match(/M(?=\s*[-\d])/g) || []).length === 8 && Number(fastTransition.slideTransition.duration) === 500 && !fastTransition.warnings.some(warning => warning.includes('comb')), `Horizontal comb must render animated bars and preserve fast transition timing: ${JSON.stringify(fastTransition.slideTransition)}`)
   const autoFitFrames = fastTransition.textFrames.filter(frame => frame.name?.includes('auto-fit calibration') || frame.name === 'Auto fit calibration')
   assert(autoFitFrames.length === 2 && autoFitFrames.every(frame => frame.scrollHeight <= frame.clientHeight), `Auto-fit text at large and small font sizes must fit its frame: ${JSON.stringify(autoFitFrames)}`)
   assert(autoFitFrames.every(frame => frame.borderStyle === 'none' && frame.borderWidth === '0px'), `A 1pt noFill line must not render as a CSS border: ${JSON.stringify(autoFitFrames)}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '6' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const flash = await state()
-  assert(flash.slide?.startsWith('26 / 67') && flash.flashTransition?.opacityKeyframes?.map(Number).join(',') === '0,1,1,0' && Number(flash.flashTransition.duration) === 900 && flash.flashTransition.backgroundColor === 'rgb(255, 255, 255)' && !flash.warnings.some(warning => warning.includes('flash')), `p14:flash must be selected from its AlternateContent choice and render its white overlay using p14:dur: ${JSON.stringify({ transition: flash.flashTransition, warnings: flash.warnings })}`)
+  assert(flash.slide?.startsWith('26 / 68') && flash.flashTransition?.opacityKeyframes?.map(Number).join(',') === '0,1,1,0' && Number(flash.flashTransition.duration) === 900 && flash.flashTransition.backgroundColor === 'rgb(255, 255, 255)' && !flash.warnings.some(warning => warning.includes('flash')), `p14:flash must be selected from its AlternateContent choice and render its white overlay using p14:dur: ${JSON.stringify({ transition: flash.flashTransition, warnings: flash.warnings })}`)
   await delay(950)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const doors = await state()
-  assert(doors.slide?.startsWith('27 / 67') && doors.slideTransition?.clipKeyframes?.length === 2 && doors.slideTransition.clipKeyframes[0]?.includes('50%') && Number(doors.slideTransition.duration) === 600 && !doors.warnings.some(warning => warning.includes('doors')), `p14:doors must select its AlternateContent choice, open from the vertical center seam, and preserve p14:dur: ${JSON.stringify({ transition: doors.slideTransition, warnings: doors.warnings })}`)
+  assert(doors.slide?.startsWith('27 / 68') && doors.slideTransition?.clipKeyframes?.length === 2 && doors.slideTransition.clipKeyframes[0]?.includes('50%') && Number(doors.slideTransition.duration) === 600 && !doors.warnings.some(warning => warning.includes('doors')), `p14:doors must select its AlternateContent choice, open from the vertical center seam, and preserve p14:dur: ${JSON.stringify({ transition: doors.slideTransition, warnings: doors.warnings })}`)
   await delay(650)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '8' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(60)
   const windowTransition = await state()
-  assert(windowTransition.slide?.startsWith('28 / 67') && windowTransition.slideTransition?.clipKeyframes?.[0]?.includes('50%') && Number(windowTransition.slideTransition.duration) === 700 && !windowTransition.warnings.some(warning => warning.includes('window')), `p14:window must select its AlternateContent choice and expand from a centered aperture: ${JSON.stringify({ transition: windowTransition.slideTransition, warnings: windowTransition.warnings })}`)
+  assert(windowTransition.slide?.startsWith('28 / 68') && windowTransition.slideTransition?.clipKeyframes?.[0]?.includes('50%') && Number(windowTransition.slideTransition.duration) === 700 && !windowTransition.warnings.some(warning => warning.includes('window')), `p14:window must select its AlternateContent choice and expand from a centered aperture: ${JSON.stringify({ transition: windowTransition.slideTransition, warnings: windowTransition.warnings })}`)
   await delay(750)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const prism = await state()
-  assert(prism.slide?.startsWith('29 / 67') && prism.stageClasses.includes('is-prism-transition') && Number(prism.slideTransition?.duration) === 850 && prism.slideTransition?.keyframes[0]?.includes('rotate3d(0, 1, 0, 90deg)') && prism.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 1, 0, -90deg)') && prism.warnings.some(warning => warning.includes('isContent flag requests separate background and content planes')) && !prism.warnings.some(warning => warning.includes('prism slide transition falls back')), `p14:prism must animate the incoming and outgoing faces, apply isInverted, preserve p14:dur, and report the unsupported isContent split: ${JSON.stringify({ incoming: prism.slideTransition, outgoing: prism.transitionUnderlay, classes: prism.stageClasses, warnings: prism.warnings })}`)
+  assert(prism.slide?.startsWith('29 / 68') && prism.stageClasses.includes('is-prism-transition') && Number(prism.slideTransition?.duration) === 850 && prism.slideTransition?.keyframes[0]?.includes('rotate3d(0, 1, 0, 90deg)') && prism.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 1, 0, -90deg)') && prism.warnings.some(warning => warning.includes('isContent flag requests separate background and content planes')) && !prism.warnings.some(warning => warning.includes('prism slide transition falls back')), `p14:prism must animate the incoming and outgoing faces, apply isInverted, preserve p14:dur, and report the unsupported isContent split: ${JSON.stringify({ incoming: prism.slideTransition, outgoing: prism.transitionUnderlay, classes: prism.stageClasses, warnings: prism.warnings })}`)
   await delay(900)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const flip = await state()
-  assert(flip.slide?.startsWith('30 / 67') && flip.stageClasses.includes('is-flip-transition') && Number(flip.slideTransition?.duration) === 800 && flip.slideTransition?.keyframes[0]?.includes('rotate3d(0, 1, 0, 180deg)') && flip.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 1, 0, -180deg)') && !flip.warnings.some(warning => warning.includes('flip slide transition falls back')), `p14:flip must honor rightward direction and p14:dur while rotating incoming and outgoing slides in 3D: ${JSON.stringify({ incoming: flip.slideTransition, outgoing: flip.transitionUnderlay, classes: flip.stageClasses, warnings: flip.warnings })}`)
+  assert(flip.slide?.startsWith('30 / 68') && flip.stageClasses.includes('is-flip-transition') && Number(flip.slideTransition?.duration) === 800 && flip.slideTransition?.keyframes[0]?.includes('rotate3d(0, 1, 0, 180deg)') && flip.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 1, 0, -180deg)') && !flip.warnings.some(warning => warning.includes('flip slide transition falls back')), `p14:flip must honor rightward direction and p14:dur while rotating incoming and outgoing slides in 3D: ${JSON.stringify({ incoming: flip.slideTransition, outgoing: flip.transitionUnderlay, classes: flip.stageClasses, warnings: flip.warnings })}`)
   await delay(850)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const reveal = await state()
-  assert(reveal.slide?.startsWith('31 / 67') && reveal.stageClasses.includes('is-fading-through-black') && Number(reveal.slideTransition?.duration) === 1050 && reveal.slideTransition?.keyframes[0]?.includes('translateX(100%)') && reveal.slideTransition?.keyframes[1]?.includes('translateX(100%)') && reveal.slideTransition?.opacityKeyframes?.map(Number).join(',') === '0,0,1' && reveal.transitionUnderlay.keyframes?.at(-1)?.includes('translateX(-100%)') && reveal.transitionUnderlay.opacityKeyframes?.map(Number).join(',') === '1,0,0' && !reveal.warnings.some(warning => warning.includes('reveal slide transition falls back')), `p14:reveal must move left through a black midpoint and honor its direction, thruBlk, and p14:dur: ${JSON.stringify({ incoming: reveal.slideTransition, outgoing: reveal.transitionUnderlay, classes: reveal.stageClasses, warnings: reveal.warnings })}`)
+  assert(reveal.slide?.startsWith('31 / 68') && reveal.stageClasses.includes('is-fading-through-black') && Number(reveal.slideTransition?.duration) === 1050 && reveal.slideTransition?.keyframes[0]?.includes('translateX(100%)') && reveal.slideTransition?.keyframes[1]?.includes('translateX(100%)') && reveal.slideTransition?.opacityKeyframes?.map(Number).join(',') === '0,0,1' && reveal.transitionUnderlay.keyframes?.at(-1)?.includes('translateX(-100%)') && reveal.transitionUnderlay.opacityKeyframes?.map(Number).join(',') === '1,0,0' && !reveal.warnings.some(warning => warning.includes('reveal slide transition falls back')), `p14:reveal must move left through a black midpoint and honor its direction, thruBlk, and p14:dur: ${JSON.stringify({ incoming: reveal.slideTransition, outgoing: reveal.transitionUnderlay, classes: reveal.stageClasses, warnings: reveal.warnings })}`)
   await delay(1100)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const switchTransition = await state()
-  assert(switchTransition.slide?.startsWith('32 / 67') && switchTransition.stageClasses.includes('is-switch-transition') && Number(switchTransition.slideTransition?.duration) === 950 && switchTransition.slideTransition?.keyframes[0]?.includes('rotate3d(0, 1, 0, 90deg)') && switchTransition.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 1, 0, -90deg)') && !switchTransition.warnings.some(warning => warning.includes('switch slide transition falls back')), `p14:switch must honor rightward direction and p14:dur while rotating between slide planes: ${JSON.stringify({ incoming: switchTransition.slideTransition, outgoing: switchTransition.transitionUnderlay, classes: switchTransition.stageClasses, warnings: switchTransition.warnings })}`)
+  assert(switchTransition.slide?.startsWith('32 / 68') && switchTransition.stageClasses.includes('is-switch-transition') && Number(switchTransition.slideTransition?.duration) === 950 && switchTransition.slideTransition?.keyframes[0]?.includes('rotate3d(0, 1, 0, 90deg)') && switchTransition.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 1, 0, -90deg)') && !switchTransition.warnings.some(warning => warning.includes('switch slide transition falls back')), `p14:switch must honor rightward direction and p14:dur while rotating between slide planes: ${JSON.stringify({ incoming: switchTransition.slideTransition, outgoing: switchTransition.transitionUnderlay, classes: switchTransition.stageClasses, warnings: switchTransition.warnings })}`)
   await delay(1000)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const pan = await state()
-  assert(pan.slide?.startsWith('33 / 67') && Number(pan.slideTransition?.duration) === 900 && pan.slideTransition?.keyframes[0]?.includes('translate(100%, -100%)') && pan.transitionUnderlay.keyframes?.at(-1)?.includes('translate(-100%, 100%)') && !pan.warnings.some(warning => warning.includes('pan slide transition falls back')), `p14:pan must pair both slide planes in its left/down direction and honor p14:dur: ${JSON.stringify({ incoming: pan.slideTransition, outgoing: pan.transitionUnderlay, warnings: pan.warnings })}`)
+  assert(pan.slide?.startsWith('33 / 68') && Number(pan.slideTransition?.duration) === 900 && pan.slideTransition?.keyframes[0]?.includes('translate(100%, -100%)') && pan.transitionUnderlay.keyframes?.at(-1)?.includes('translate(-100%, 100%)') && !pan.warnings.some(warning => warning.includes('pan slide transition falls back')), `p14:pan must pair both slide planes in its left/down direction and honor p14:dur: ${JSON.stringify({ incoming: pan.slideTransition, outgoing: pan.transitionUnderlay, warnings: pan.warnings })}`)
   await delay(950)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
@@ -2316,7 +4879,7 @@ try {
   await delay(60)
   const rippleAdvancedPath = (await state()).slideTransition?.clipPath
   const rippleStartPoint = ripple.slideTransition?.clipKeyframes?.[0]?.match(/^path\("M\s*(-?[\d.]+)\s+(-?[\d.]+)/)
-  assert(ripple.slide?.startsWith('34 / 67') && Number(ripple.slideTransition?.duration) === 1200 && ripple.slideTransition.clipKeyframes?.length === 6 && rippleStartPoint && Number(rippleStartPoint[1]) > 0 && Number(rippleStartPoint[2]) === 0 && rippleMovingPath !== rippleAdvancedPath && ripple.slideTransition.clipKeyframes.at(-1)?.startsWith('path("M') && !ripple.warnings.some(warning => warning.includes('ripple')), `p14:ripple direction, timing, and path keyframes: ${JSON.stringify({ slide: ripple.slide, duration: ripple.slideTransition?.duration, frameCount: ripple.slideTransition?.clipKeyframes?.length, start: rippleStartPoint, last: ripple.slideTransition?.clipKeyframes?.at(-1), warnings: ripple.warnings })}`)
+  assert(ripple.slide?.startsWith('34 / 68') && Number(ripple.slideTransition?.duration) === 1200 && ripple.slideTransition.clipKeyframes?.length === 6 && rippleStartPoint && Number(rippleStartPoint[1]) > 0 && Number(rippleStartPoint[2]) === 0 && rippleMovingPath !== rippleAdvancedPath && ripple.slideTransition.clipKeyframes.at(-1)?.startsWith('path("M') && !ripple.warnings.some(warning => warning.includes('ripple')), `p14:ripple direction, timing, and path keyframes: ${JSON.stringify({ slide: ripple.slide, duration: ripple.slideTransition?.duration, frameCount: ripple.slideTransition?.clipKeyframes?.length, start: rippleStartPoint, last: ripple.slideTransition?.clipKeyframes?.at(-1), warnings: ripple.warnings })}`)
   await delay(1250)
   const tileStats = (path) => {
     const moves = path?.match(/\bM\b/g)?.length || 0
@@ -2331,13 +4894,13 @@ try {
   const glitterDiamondMovingPath = glitterDiamondLeft.slideTransition?.clipPath
   await delay(60)
   const glitterDiamondAdvancedPath = (await state()).slideTransition?.clipPath
-  assert(glitterDiamondLeft.slide?.startsWith('35 / 67') && Number(glitterDiamondLeft.slideTransition?.duration) === 1000 && glitterDiamondStats.tiles > 0 && glitterDiamondStats.pointsPerTile === 4 && glitterDiamondMovingPath !== glitterDiamondAdvancedPath && !glitterDiamondLeft.warnings.some(warning => warning.includes('glitter')), 'p14:glitter diamond must use four-point tiles, honor its left direction and duration, and interpolate.')
+  assert(glitterDiamondLeft.slide?.startsWith('35 / 68') && Number(glitterDiamondLeft.slideTransition?.duration) === 1000 && glitterDiamondStats.tiles > 0 && glitterDiamondStats.pointsPerTile === 4 && glitterDiamondMovingPath !== glitterDiamondAdvancedPath && !glitterDiamondLeft.warnings.some(warning => warning.includes('glitter')), 'p14:glitter diamond must use four-point tiles, honor its left direction and duration, and interpolate.')
   await delay(900)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '6' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const glitterDiamondRightDown = await state()
   const glitterRightDownPath = glitterDiamondRightDown.slideTransition?.clipKeyframes?.[2]
-  assert(glitterDiamondRightDown.slide?.startsWith('36 / 67') && Number(glitterDiamondRightDown.slideTransition?.duration) === 1100 && glitterDiamondRightDown.slideTransition?.clipKeyframes?.[2] !== glitterDiamondPath && !glitterDiamondRightDown.warnings.some(warning => warning.includes('glitter')), 'p14:glitter must order diamond tiles from the opposite corner when dir=rd.')
+  assert(glitterDiamondRightDown.slide?.startsWith('36 / 68') && Number(glitterDiamondRightDown.slideTransition?.duration) === 1100 && glitterDiamondRightDown.slideTransition?.clipKeyframes?.[2] !== glitterDiamondPath && !glitterDiamondRightDown.warnings.some(warning => warning.includes('glitter')), 'p14:glitter must order diamond tiles from the opposite corner when dir=rd.')
   await delay(1050)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
@@ -2347,7 +4910,7 @@ try {
   const glitterHexagonMovingPath = glitterHexagon.slideTransition?.clipPath
   await delay(60)
   const glitterHexagonAdvancedPath = (await state()).slideTransition?.clipPath
-  assert(glitterHexagon.slide?.startsWith('37 / 67') && Number(glitterHexagon.slideTransition?.duration) === 1200 && glitterHexagonStats.tiles > 0 && glitterHexagonStats.pointsPerTile === 6 && glitterHexagonMovingPath !== glitterHexagonAdvancedPath && !glitterHexagon.warnings.some(warning => warning.includes('glitter')), 'p14:glitter hexagon must use six-point tiles, preserve its down direction and duration, and interpolate.')
+  assert(glitterHexagon.slide?.startsWith('37 / 68') && Number(glitterHexagon.slideTransition?.duration) === 1200 && glitterHexagonStats.tiles > 0 && glitterHexagonStats.pointsPerTile === 6 && glitterHexagonMovingPath !== glitterHexagonAdvancedPath && !glitterHexagon.warnings.some(warning => warning.includes('glitter')), 'p14:glitter hexagon must use six-point tiles, preserve its down direction and duration, and interpolate.')
   await delay(1150)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '8' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
@@ -2358,7 +4921,7 @@ try {
   await delay(60)
   const shredStripAdvanced = await state()
   const shredStripAdvancedPath = shredStripAdvanced.slideTransition?.clipPath
-  assert(shredStrip.slide?.startsWith('38 / 67') && Number(shredStrip.slideTransition?.duration) === 1000 && shredStrip.slideTransition?.clipKeyframes?.length === 5 && shredStripStats.tiles === 16 && shredStripStats.pointsPerTile === 3 && shredStripMovingPath !== shredStripAdvancedPath && !shredStrip.warnings.some(warning => warning.includes('shred')), `p14:shred defaults to incoming vertical strips and honors p14:dur: ${JSON.stringify({ slide: shredStrip.slide, effect: shredStrip.transitionEffect, stageClasses: shredStrip.stageClasses, underlay: shredStrip.transitionUnderlay, transition: shredStrip.slideTransition, advancedTransition: shredStripAdvanced.slideTransition, shredStripStats, warnings: shredStrip.warnings, moving: shredStripMovingPath !== shredStripAdvancedPath })}`)
+  assert(shredStrip.slide?.startsWith('38 / 68') && Number(shredStrip.slideTransition?.duration) === 1000 && shredStrip.slideTransition?.clipKeyframes?.length === 5 && shredStripStats.tiles === 16 && shredStripStats.pointsPerTile === 3 && shredStripMovingPath !== shredStripAdvancedPath && !shredStrip.warnings.some(warning => warning.includes('shred')), `p14:shred defaults to incoming vertical strips and honors p14:dur: ${JSON.stringify({ slide: shredStrip.slide, effect: shredStrip.transitionEffect, stageClasses: shredStrip.stageClasses, underlay: shredStrip.transitionUnderlay, transition: shredStrip.slideTransition, advancedTransition: shredStripAdvanced.slideTransition, shredStripStats, warnings: shredStrip.warnings, moving: shredStripMovingPath !== shredStripAdvancedPath })}`)
   await delay(900)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '9' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
@@ -2369,48 +4932,48 @@ try {
     const stats = path => ({ tiles: (path?.match(/\\bM\\b/g) || []).length, pointsPerTile: (path?.match(/\\bL\\b/g) || []).length / Math.max(1, (path?.match(/\\bM\\b/g) || []).length) })
     return { slide: document.querySelector('.slide-position')?.textContent?.replace(/\\s+/g, ' ').trim(), className: underlay?.className, duration: outgoing?.getAnimations()[0]?.effect.getTiming().duration, start: stats(frames[0]), changed: frames[0] !== frames.at(-1), frameCount: frames.length }
   })()`)
-  assert(shredRectangleOut.slide?.startsWith('39 / 67') && Number(shredRectangleOut.duration) === 1000 && shredRectangleOut.frameCount === 5 && shredRectangleOut.start.tiles === 70 && shredRectangleOut.start.pointsPerTile === 3 && shredRectangleOut.changed && shredRectangleOut.className.includes('is-shredding-out'), `p14:shred rectangle out must animate the outgoing snapshot as 70 tiles: ${JSON.stringify(shredRectangleOut)}`)
+  assert(shredRectangleOut.slide?.startsWith('39 / 68') && Number(shredRectangleOut.duration) === 1000 && shredRectangleOut.frameCount === 5 && shredRectangleOut.start.tiles === 70 && shredRectangleOut.start.pointsPerTile === 3 && shredRectangleOut.changed && shredRectangleOut.className.includes('is-shredding-out'), `p14:shred rectangle out must animate the outgoing snapshot as 70 tiles: ${JSON.stringify(shredRectangleOut)}`)
   await delay(1000)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '0' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const flythroughIn = await state()
   const flythroughInOutgoing = await evaluate(`(() => { const underlay = document.querySelector('.slide-transition-underlay'); const host = underlay?.querySelector('.slide-host'); const animation = host?.getAnimations()[0]; return { className: underlay?.className, duration: animation?.effect.getTiming().duration, transforms: animation?.effect.getKeyframes().map(frame => frame.transform) } })()`)
-  assert(flythroughIn.slide?.startsWith('40 / 67') && Number(flythroughIn.slideTransition?.duration) === 900 && flythroughIn.slideTransition?.keyframes?.[0]?.includes('scale(2.4)') && Number(flythroughIn.slideTransition?.opacityKeyframes?.[0]) === 0 && flythroughIn.slideTransition?.keyframes?.at(-1)?.includes('scale(1)') && flythroughInOutgoing.className.includes('is-flythrough') && Number(flythroughInOutgoing.duration) === 900 && flythroughInOutgoing.transforms?.at(-1)?.includes('scale(0.35)') && !flythroughIn.warnings.some(warning => warning.includes('flythrough')), `p14:flythrough defaults to an unbounced inward movement of both slide planes: ${JSON.stringify({ slide: flythroughIn.slide, duration: flythroughIn.slideTransition?.duration, transforms: flythroughIn.slideTransition?.keyframes, opacity: flythroughIn.slideTransition?.opacityKeyframes, warnings: flythroughIn.warnings, outgoing: flythroughInOutgoing })}`)
+  assert(flythroughIn.slide?.startsWith('40 / 68') && Number(flythroughIn.slideTransition?.duration) === 900 && flythroughIn.slideTransition?.keyframes?.[0]?.includes('scale(2.4)') && Number(flythroughIn.slideTransition?.opacityKeyframes?.[0]) === 0 && flythroughIn.slideTransition?.keyframes?.at(-1)?.includes('scale(1)') && flythroughInOutgoing.className.includes('is-flythrough') && Number(flythroughInOutgoing.duration) === 900 && flythroughInOutgoing.transforms?.at(-1)?.includes('scale(0.35)') && !flythroughIn.warnings.some(warning => warning.includes('flythrough')), `p14:flythrough defaults to an unbounced inward movement of both slide planes: ${JSON.stringify({ slide: flythroughIn.slide, duration: flythroughIn.slideTransition?.duration, transforms: flythroughIn.slideTransition?.keyframes, opacity: flythroughIn.slideTransition?.opacityKeyframes, warnings: flythroughIn.warnings, outgoing: flythroughInOutgoing })}`)
   await delay(830)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const flythroughBounceOut = await state()
   const flythroughOutOutgoing = await evaluate(`(() => { const host = document.querySelector('.slide-transition-underlay > .slide-host'); const animation = host?.getAnimations()[0]; return { duration: animation?.effect.getTiming().duration, transforms: animation?.effect.getKeyframes().map(frame => frame.transform) } })()`)
-  assert(flythroughBounceOut.slide?.startsWith('41 / 67') && Number(flythroughBounceOut.slideTransition?.duration) === 900 && flythroughBounceOut.slideTransition?.keyframes?.length === 3 && flythroughBounceOut.slideTransition.keyframes[0]?.includes('scale(0.35)') && flythroughBounceOut.slideTransition.keyframes[1]?.includes('scale(1.08)') && Number(flythroughBounceOut.slideTransition.opacityKeyframes?.[0]) === 0 && Number(flythroughOutOutgoing.duration) === 900 && flythroughOutOutgoing.transforms?.at(-1)?.includes('scale(2.4)') && !flythroughBounceOut.warnings.some(warning => warning.includes('flythrough')), `p14:flythrough out honors hasBounce and animates the outgoing snapshot in front of the incoming slide: ${JSON.stringify({ slide: flythroughBounceOut.slide, duration: flythroughBounceOut.slideTransition?.duration, transforms: flythroughBounceOut.slideTransition?.keyframes, opacity: flythroughBounceOut.slideTransition?.opacityKeyframes, warnings: flythroughBounceOut.warnings, outgoing: flythroughOutOutgoing })}`)
+  assert(flythroughBounceOut.slide?.startsWith('41 / 68') && Number(flythroughBounceOut.slideTransition?.duration) === 900 && flythroughBounceOut.slideTransition?.keyframes?.length === 3 && flythroughBounceOut.slideTransition.keyframes[0]?.includes('scale(0.35)') && flythroughBounceOut.slideTransition.keyframes[1]?.includes('scale(1.08)') && Number(flythroughBounceOut.slideTransition.opacityKeyframes?.[0]) === 0 && Number(flythroughOutOutgoing.duration) === 900 && flythroughOutOutgoing.transforms?.at(-1)?.includes('scale(2.4)') && !flythroughBounceOut.warnings.some(warning => warning.includes('flythrough')), `p14:flythrough out honors hasBounce and animates the outgoing snapshot in front of the incoming slide: ${JSON.stringify({ slide: flythroughBounceOut.slide, duration: flythroughBounceOut.slideTransition?.duration, transforms: flythroughBounceOut.slideTransition?.keyframes, opacity: flythroughBounceOut.slideTransition?.opacityKeyframes, warnings: flythroughBounceOut.warnings, outgoing: flythroughOutOutgoing })}`)
   await delay(850)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const warpOut = await state()
   const warpOutSnapshot = await evaluate(`(() => { const underlay = document.querySelector('.slide-transition-underlay'); const host = underlay?.querySelector('.slide-host'); const animation = host?.getAnimations()[0]; return { className: underlay?.className, layerZIndex: getComputedStyle(underlay).zIndex, hostZIndex: getComputedStyle(document.querySelector('.stage-shell > .slide-host')).zIndex, duration: animation?.effect.getTiming().duration, transforms: animation?.effect.getKeyframes().map(frame => frame.transform), opacity: animation?.effect.getKeyframes().map(frame => frame.opacity) } })()`)
-  assert(warpOut.slide?.startsWith('42 / 67') && Number(warpOut.slideTransition?.duration) === 850 && warpOutSnapshot.className.includes('is-warping-out') && Number(warpOutSnapshot.layerZIndex) > Number(warpOutSnapshot.hostZIndex) && warpOutSnapshot.transforms?.[1]?.includes('perspective(1200px)') && warpOutSnapshot.transforms?.[1]?.includes('rotateY(-24deg)') && warpOutSnapshot.opacity?.join(',') === '1,0' && !warpOut.warnings.some(warning => warning.includes('warp')), `p14:warp defaults to out, animates the outgoing snapshot, and honors p14:dur: ${JSON.stringify({ slide: warpOut.slide, incoming: warpOut.slideTransition, outgoing: warpOutSnapshot, warnings: warpOut.warnings })}`)
+  assert(warpOut.slide?.startsWith('42 / 68') && Number(warpOut.slideTransition?.duration) === 850 && warpOutSnapshot.className.includes('is-warping-out') && Number(warpOutSnapshot.layerZIndex) > Number(warpOutSnapshot.hostZIndex) && warpOutSnapshot.transforms?.[1]?.includes('perspective(1200px)') && warpOutSnapshot.transforms?.[1]?.includes('rotateY(-24deg)') && warpOutSnapshot.opacity?.join(',') === '1,0' && !warpOut.warnings.some(warning => warning.includes('warp')), `p14:warp defaults to out, animates the outgoing snapshot, and honors p14:dur: ${JSON.stringify({ slide: warpOut.slide, incoming: warpOut.slideTransition, outgoing: warpOutSnapshot, warnings: warpOut.warnings })}`)
   await delay(850)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const warpIn = await state()
-  assert(warpIn.slide?.startsWith('43 / 67') && Number(warpIn.slideTransition?.duration) === 850 && warpIn.slideTransition?.keyframes?.[0]?.includes('rotateY(24deg)') && warpIn.slideTransition?.keyframes?.at(-1)?.includes('scale(1)') && warpIn.slideTransition.opacityKeyframes?.join(',') === '0,1,1' && !warpIn.warnings.some(warning => warning.includes('warp')), `p14:warp honors dir=in by warping the incoming slide: ${JSON.stringify({ slide: warpIn.slide, transition: warpIn.slideTransition, warnings: warpIn.warnings })}`)
+  assert(warpIn.slide?.startsWith('43 / 68') && Number(warpIn.slideTransition?.duration) === 850 && warpIn.slideTransition?.keyframes?.[0]?.includes('rotateY(24deg)') && warpIn.slideTransition?.keyframes?.at(-1)?.includes('scale(1)') && warpIn.slideTransition.opacityKeyframes?.join(',') === '0,1,1' && !warpIn.warnings.some(warning => warning.includes('warp')), `p14:warp honors dir=in by warping the incoming slide: ${JSON.stringify({ slide: warpIn.slide, transition: warpIn.slideTransition, warnings: warpIn.warnings })}`)
   await delay(850)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const vortexDefault = await state()
   const vortexDefaultSnapshot = await evaluate(`(() => { const underlay = document.querySelector('.slide-transition-underlay'); const host = underlay?.querySelector('.slide-host'); const animation = host?.getAnimations()[0]; return { className: underlay?.className, layerZIndex: getComputedStyle(underlay).zIndex, hostZIndex: getComputedStyle(document.querySelector('.stage-shell > .slide-host')).zIndex, duration: animation?.effect.getTiming().duration, transforms: animation?.effect.getKeyframes().map(frame => frame.transform), opacity: animation?.effect.getKeyframes().map(frame => frame.opacity) } })()`)
-  assert(vortexDefault.slide?.startsWith('44 / 67') && Number(vortexDefaultSnapshot.duration) === 850 && vortexDefaultSnapshot.className.includes('is-vortexing') && Number(vortexDefaultSnapshot.layerZIndex) > Number(vortexDefaultSnapshot.hostZIndex) && vortexDefaultSnapshot.transforms?.at(-1)?.includes('rotate3d(0, 0, 1, -540deg)') && vortexDefaultSnapshot.opacity?.join(',') === '1,0' && !vortexDefault.warnings.some(warning => warning.includes('vortex')), `p14:vortex defaults to dir=l and rotates the outgoing slide: ${JSON.stringify({ slide: vortexDefault.slide, snapshot: vortexDefaultSnapshot, warnings: vortexDefault.warnings })}`)
+  assert(vortexDefault.slide?.startsWith('44 / 68') && Number(vortexDefaultSnapshot.duration) === 850 && vortexDefaultSnapshot.className.includes('is-vortexing') && Number(vortexDefaultSnapshot.layerZIndex) > Number(vortexDefaultSnapshot.hostZIndex) && vortexDefaultSnapshot.transforms?.at(-1)?.includes('rotate3d(0, 0, 1, -540deg)') && vortexDefaultSnapshot.opacity?.join(',') === '1,0' && !vortexDefault.warnings.some(warning => warning.includes('vortex')), `p14:vortex defaults to dir=l and rotates the outgoing slide: ${JSON.stringify({ slide: vortexDefault.slide, snapshot: vortexDefaultSnapshot, warnings: vortexDefault.warnings })}`)
   await delay(850)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   const vortexRight = await state()
-  assert(vortexRight.slide?.startsWith('45 / 67') && vortexRight.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 0, 1, 540deg)') && vortexRight.transitionUnderlay.opacityKeyframes?.join(',') === '1,0' && Number(vortexRight.transitionUnderlay.duration) === 850 && !vortexRight.warnings.some(warning => warning.includes('vortex')), `p14:vortex honors dir=r and p14:dur: ${JSON.stringify({ slide: vortexRight.slide, snapshot: vortexRight.transitionUnderlay, warnings: vortexRight.warnings })}`)
+  assert(vortexRight.slide?.startsWith('45 / 68') && vortexRight.transitionUnderlay.keyframes?.at(-1)?.includes('rotate3d(0, 0, 1, 540deg)') && vortexRight.transitionUnderlay.opacityKeyframes?.join(',') === '1,0' && Number(vortexRight.transitionUnderlay.duration) === 850 && !vortexRight.warnings.some(warning => warning.includes('vortex')), `p14:vortex honors dir=r and p14:dur: ${JSON.stringify({ slide: vortexRight.slide, snapshot: vortexRight.transitionUnderlay, warnings: vortexRight.warnings })}`)
   await delay(850)
   const jumpToFixtureSlide = slideNumber => evaluate(`(() => { for (const key of '${slideNumber}') window.dispatchEvent(new KeyboardEvent('keydown', { key })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) })()`)
   const verifySideTransition = async (slideNumber, effect, className, incoming, outgoing) => {
     await jumpToFixtureSlide(slideNumber)
     await delay(80)
     const result = await state()
-    assert(result.slide?.startsWith(`${slideNumber} / 67`) && result.stageClasses.includes(className) && Number(result.slideTransition?.duration) === 850 && result.slideTransition?.keyframes?.[0]?.includes(incoming) && result.transitionUnderlay.keyframes?.at(-1)?.includes(outgoing) && !result.warnings.some(warning => warning.includes(`${effect} slide transition falls back`)), `p14:${effect} direction and p14:dur: ${JSON.stringify({ slide: result.slide, classes: result.stageClasses, incoming: result.slideTransition, outgoing: result.transitionUnderlay, warnings: result.warnings })}`)
+    assert(result.slide?.startsWith(`${slideNumber} / 68`) && result.stageClasses.includes(className) && Number(result.slideTransition?.duration) === 850 && result.slideTransition?.keyframes?.[0]?.includes(incoming) && result.transitionUnderlay.keyframes?.at(-1)?.includes(outgoing) && !result.warnings.some(warning => warning.includes(`${effect} slide transition falls back`)), `p14:${effect} direction and p14:dur: ${JSON.stringify({ slide: result.slide, classes: result.stageClasses, incoming: result.slideTransition, outgoing: result.transitionUnderlay, warnings: result.warnings })}`)
     await delay(850)
   }
   await verifySideTransition(46, 'ferris', 'is-ferris-transition', 'rotateZ(180deg)', 'rotateZ(-180deg)')
@@ -2423,27 +4986,40 @@ try {
   await delay(80)
   const morph = await state()
   const morphSnapshot = await evaluate(`(() => { const current = document.querySelector('.stage-shell > .slide-host'); const outgoing = document.querySelector('.slide-transition-underlay > .slide-host'); const incomingShape = current?.querySelector('.slide-element[data-element-name="Conveyor right"]'); const outgoingShape = outgoing?.querySelector('.slide-element[data-element-name="Conveyor right"]'); const animation = incomingShape?.getAnimations()[0]; return { className: document.querySelector('.stage-shell')?.className, duration: animation?.effect.getTiming().duration, left: animation?.effect.getKeyframes().map(frame => frame.left), top: animation?.effect.getKeyframes().map(frame => frame.top), width: animation?.effect.getKeyframes().map(frame => frame.width), oldOpacity: outgoingShape?.getAnimations()[0]?.effect.getKeyframes().map(frame => frame.opacity) } })()`)
-  assert(morph.slide?.startsWith('52 / 67') && morphSnapshot.className.includes('is-morph-transition') && Number(morphSnapshot.duration) === 1000 && morphSnapshot.left?.[0] !== morphSnapshot.left?.at(-1) && morphSnapshot.top?.[0] !== morphSnapshot.top?.at(-1) && morphSnapshot.width?.[0] !== morphSnapshot.width?.at(-1) && morphSnapshot.oldOpacity?.join(',') === '1,0' && !morph.warnings.some(warning => warning.includes('Morph byObject')), `p159:morph byObject must animate a uniquely named matching shape and honor p14:dur: ${JSON.stringify({ slide: morph.slide, snapshot: morphSnapshot, warnings: morph.warnings })}`)
+  assert(morph.slide?.startsWith('52 / 68') && morphSnapshot.className.includes('is-morph-transition') && Number(morphSnapshot.duration) === 1000 && morphSnapshot.left?.[0] !== morphSnapshot.left?.at(-1) && morphSnapshot.top?.[0] !== morphSnapshot.top?.at(-1) && morphSnapshot.width?.[0] !== morphSnapshot.width?.at(-1) && morphSnapshot.oldOpacity?.join(',') === '1,0' && !morph.warnings.some(warning => warning.includes('Morph byObject')), `p159:morph byObject must animate a uniquely named matching shape and honor p14:dur: ${JSON.stringify({ slide: morph.slide, snapshot: morphSnapshot, warnings: morph.warnings })}`)
   await delay(1_000)
   assert(!(await evaluate(`document.querySelector('.stage-shell')?.classList.contains('is-morph-transition')`)) && !(await evaluate(`document.querySelector('.slide-transition-underlay')?.firstElementChild`)), 'The morph transition must clear its temporary slide snapshot when finished.')
   await jumpToFixtureSlide(53)
   await delay(80)
   const morphByWord = await state()
-  assert(morphByWord.slide?.startsWith('53 / 67') && morphByWord.transitionEffect === 'morph' && Number(morphByWord.slideTransition?.duration) === 650 && morphByWord.slideTransition.opacityKeyframes?.join(',') === '0,1' && morphByWord.transitionUnderlay.opacityKeyframes?.join(',') === '1,0' && morphByWord.warnings.some(warning => warning.includes('Morph byWord matching is not rendered yet; the slide uses a crossfade.')), `p159:morph byWord must be explicitly warned and crossfade: ${JSON.stringify({ slide: morphByWord.slide, transition: morphByWord.slideTransition, outgoing: morphByWord.transitionUnderlay, warnings: morphByWord.warnings })}`)
+  const morphWordSnapshot = await evaluate(`(() => { const incoming = document.querySelector('.stage-shell > .slide-host [data-element-name="Morph Words"] .text-frame'); const outgoing = document.querySelector('.slide-transition-underlay > .slide-host [data-element-name="Morph Words"] .text-frame'); const tokens = [...(incoming?.querySelectorAll('.morph-text-token') || [])]; return { hidden: [...(incoming?.querySelectorAll('.text-run') || [])].length > 0 && [...incoming.querySelectorAll('.text-run')].every(run => getComputedStyle(run).visibility === 'hidden'), outgoingHidden: [...(outgoing?.querySelectorAll('.text-run') || [])].every(run => getComputedStyle(run).visibility === 'hidden'), tokens: tokens.map(node => { const frames = node.getAnimations()[0]?.effect.getKeyframes() || []; const animation = node.getAnimations()[0]; return { text: node.dataset.morphToken, key: node.dataset.morphMatch, left: frames.map(frame => frame.left), opacity: frames.map(frame => frame.opacity), duration: animation?.effect.getTiming().duration } }) } })()`)
+  const movedWord = morphWordSnapshot.tokens.find(token => token.key === 'The')
+  const removedWord = morphWordSnapshot.tokens.find(token => token.key === 'brown')
+  const addedWord = morphWordSnapshot.tokens.find(token => token.key === 'jumps')
+  assert(morphByWord.slide?.startsWith('53 / 68') && morphByWord.transitionEffect === 'morph' && Number(morphWordSnapshot.tokens[0]?.duration) === 650 && morphWordSnapshot.hidden && morphWordSnapshot.outgoingHidden && movedWord?.left?.[0] !== movedWord?.left?.at(-1) && removedWord?.opacity?.join(',') === '1,0' && addedWord?.opacity?.join(',') === '0,1' && !morphByWord.warnings.some(warning => warning.includes('Morph byWord matching is not rendered yet')), `p159:morph byWord must move matching words and fade unmatched words: ${JSON.stringify({ slide: morphByWord.slide, transition: morphByWord.slideTransition, snapshot: morphWordSnapshot, warnings: morphByWord.warnings })}`)
   await delay(700)
-  assert(!(await evaluate(`document.querySelector('.stage-shell')?.classList.contains('is-morph-transition')`)) && !(await evaluate(`document.querySelector('.slide-transition-underlay')?.firstElementChild`)), 'The byWord fallback crossfade must clear its temporary slide snapshot when finished.')
+  assert(!(await evaluate(`document.querySelector('.stage-shell')?.classList.contains('is-morph-transition')`)) && !(await evaluate(`document.querySelector('.slide-transition-underlay')?.firstElementChild`)), 'The byWord transition must clear its temporary slide snapshot when finished.')
+  await jumpToFixtureSlide(68)
+  await delay(80)
+  const morphByChar = await state()
+  const morphCharSnapshot = await evaluate(`(() => { const incoming = document.querySelector('.stage-shell > .slide-host [data-element-name="Morph Characters"] .text-frame'); const tokens = [...(incoming?.querySelectorAll('.morph-text-token') || [])]; return { hidden: [...(incoming?.querySelectorAll('.text-run') || [])].length > 0 && [...incoming.querySelectorAll('.text-run')].every(run => getComputedStyle(run).visibility === 'hidden'), tokens: tokens.map(node => { const frames = node.getAnimations()[0]?.effect.getKeyframes() || []; const animation = node.getAnimations()[0]; return { text: node.dataset.morphToken, key: node.dataset.morphMatch, left: frames.map(frame => frame.left), opacity: frames.map(frame => frame.opacity), duration: animation?.effect.getTiming().duration } }) } })()`)
+  const movedCharacter = morphCharSnapshot.tokens.find(token => token.key === 'S')
+  const addedCharacter = morphCharSnapshot.tokens.find(token => token.key === '!')
+  assert(morphByChar.slide?.startsWith('68 / 68') && morphByChar.transitionEffect === 'morph' && Number(morphCharSnapshot.tokens[0]?.duration) === 800 && morphCharSnapshot.hidden && morphCharSnapshot.tokens.length === 7 && movedCharacter?.left?.[0] !== movedCharacter?.left?.at(-1) && addedCharacter?.opacity?.join(',') === '0,1' && !morphByChar.warnings.some(warning => warning.includes('Morph byChar matching is not rendered yet')), `p159:morph byChar must move matching characters and fade new characters: ${JSON.stringify({ slide: morphByChar.slide, transition: morphByChar.slideTransition, snapshot: morphCharSnapshot, warnings: morphByChar.warnings })}`)
+  await delay(850)
+  assert(!(await evaluate(`document.querySelector('.stage-shell')?.classList.contains('is-morph-transition')`)) && !(await evaluate(`document.querySelector('.slide-transition-underlay')?.firstElementChild`)), 'The byChar transition must clear its temporary slide snapshot when finished.')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(800)
   await evaluate(`document.querySelector('[data-tool=speaker]').click()`)
   const presenter = await evaluate(`(() => ({ visible: !!document.querySelector('[data-presenter-view]'), current: document.querySelector('.presenter-current-panel .presenter-panel-title')?.innerText, next: document.querySelector('.presenter-next-panel .presenter-panel-title')?.innerText, notes: document.querySelector('[data-presenter-notes]')?.textContent }))()`)
-  assert(presenter.visible && presenter.current?.includes('17 / 67') && presenter.next?.includes('18 / 67') && presenter.notes?.includes('Introduce the main point.\nPause for questions.'), `Speaker view must show the current slide, next slide, and notes from the linked notes slide: ${JSON.stringify(presenter)}`)
+  assert(presenter.visible && presenter.current?.includes('17 / 68') && presenter.next?.includes('18 / 68') && presenter.notes?.includes('Introduce the main point.\nPause for questions.'), `Speaker view must show the current slide, next slide, and notes from the linked notes slide: ${JSON.stringify(presenter)}`)
   await delay(1_050)
   const presenterClock = await evaluate(`document.querySelector('.presenter-clock')?.textContent?.trim()`)
   const elapsedSeconds = presenterClock?.split(':').reduce((total, part) => total * 60 + Number(part), 0) || 0
   assert(elapsedSeconds >= 1, `The speaker view elapsed timer must advance: ${presenterClock}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
   const presenterNavigation = await evaluate(`document.querySelector('.presenter-current-panel .presenter-panel-title')?.innerText`)
-  assert(presenterNavigation?.includes('18 / 67'), 'Arrow-key navigation must update the active slide while speaker view is open.')
+  assert(presenterNavigation?.includes('18 / 68'), 'Arrow-key navigation must update the active slide while speaker view is open.')
   const projectorButtonPoint = await evaluate(`(() => { const rect = document.querySelector('[data-open-projector]')?.getBoundingClientRect(); return rect && { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } })()`)
   assert(projectorButtonPoint, 'Speaker view must expose a second-display button.')
   await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...projectorButtonPoint })
@@ -2457,6 +5033,76 @@ try {
     await delay(100)
   }
   assert(projector?.connected === 'true' && projector.number === 18, `The separate projector window must load and acknowledge the active slide: ${JSON.stringify(projector)}`)
+  if (embeddedFontTestPath && !inputPptx) {
+    const projectorFaces = await evaluate(`(() => {
+      const projectorWindow = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
+      return Array.from(projectorWindow?.document.fonts || []).map(face => ({ family: face.family, weight: face.weight, style: face.style, status: face.status }))
+    })()`)
+    const fixtureFaces = projectorFaces.filter(face => face.family.replace(/^['\"]|['\"]$/g, '') === 'Deckline Font Runtime Check')
+    assert(fixtureFaces.length === 1 && fixtureFaces[0].weight === '400' && fixtureFaces[0].style === 'normal' && fixtureFaces[0].status === 'loaded',
+      `The projector window must load the embedded font before rendering slides: ${JSON.stringify(projectorFaces)}`)
+  }
+  const pressProjectorKey = (key, { shiftKey = false, ctrlKey = false, altKey = false, metaKey = false } = {}) => evaluate(`(() => {
+    const target = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
+    target?.dispatchEvent(new target.KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shiftKey}, ctrlKey: ${ctrlKey}, altKey: ${altKey}, metaKey: ${metaKey}, cancelable: true }))
+    return Boolean(target)
+  })()`)
+  const waitForProjectorNumber = async number => {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      projector = await projectorStatus()
+      if (projector?.number === number) return projector
+      await delay(80)
+    }
+    return projector
+  }
+  await pressProjectorKey('PageDown', { ctrlKey: true })
+  await pressProjectorKey('b', { metaKey: true })
+  await delay(100)
+  projector = await projectorStatus()
+  assert(projector?.number === 18 && !projector.blank, `Browser modifier shortcuts must not navigate or blank the projector: ${JSON.stringify(projector)}`)
+  const pressProjectorKeyAndWaitForBlank = async (key, blank) => {
+    await pressProjectorKey(key)
+    for (let attempt = 0; attempt < 25; attempt++) {
+      projector = await projectorStatus()
+      if (projector?.blank === blank) return projector
+      await delay(80)
+    }
+    return projector
+  }
+  assert(await pressProjectorKey('End'), 'The projector window must receive its own keyboard input.')
+  projector = await waitForProjectorNumber(68)
+  assert(projector?.number === 68, `End in the projector window must jump to the last slide: ${JSON.stringify(projector)}`)
+  await pressProjectorKey('Home')
+  projector = await waitForProjectorNumber(1)
+  assert(projector?.number === 1, `Home in the projector window must jump to the first slide: ${JSON.stringify(projector)}`)
+  await pressProjectorKey('1')
+  await pressProjectorKey('8')
+  await pressProjectorKey('Enter')
+  projector = await waitForProjectorNumber(18)
+  assert(projector?.number === 18, `Number plus Enter in the projector window must jump to the requested slide: ${JSON.stringify(projector)}`)
+  await pressProjectorKey('F5')
+  projector = await waitForProjectorNumber(1)
+  assert(projector?.number === 1, `F5 in the projector window must start from the first slide: ${JSON.stringify(projector)}`)
+  await pressProjectorKey('ArrowRight')
+  for (let attempt = 0; attempt < 30; attempt++) {
+    projector = await projectorStatus()
+    if (projector?.number === 1 && Number(projector?.step) === 1) break
+    await delay(80)
+  }
+  assert(projector?.number === 1 && Number(projector?.step) === 1, `The projector must be on an in-progress animation before the Shift+F5 check: ${JSON.stringify(projector)}`)
+  await pressProjectorKey('F5', { shiftKey: true })
+  for (let attempt = 0; attempt < 10; attempt++) {
+    projector = await projectorStatus()
+    if (projector?.number === 1 && Number(projector?.step) === 1) break
+    await delay(20)
+  }
+  assert(projector?.number === 1 && Number(projector?.step) === 1, `Shift+F5 in the projector window must preserve the current slide and animation step: ${JSON.stringify(projector)}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+  projector = await waitForProjectorNumber(25)
+  assert(projector?.number === 25, `The speaker controller must select slide 25 before the projector F5 check: ${JSON.stringify(projector)}`)
+  await pressProjectorKey('F5')
+  projector = await waitForProjectorNumber(1)
+  assert(projector?.number === 1, `F5 in the projector window must start from the first slide: ${JSON.stringify(projector)}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
   const speakerState = await evaluate(`(() => { const view = document.querySelector('[data-presenter-view]'); return { number: Number(view?.dataset.currentSlide), step: Number(view?.dataset.animationStep) } })()`)
   for (let attempt = 0; attempt < 30; attempt++) {
@@ -2512,12 +5158,6 @@ try {
     && buildPreview.mainOpacity !== null && buildPreview.speakerOpacity !== null && Math.abs(buildPreview.mainOpacity - buildPreview.speakerOpacity) < 0.2,
     `Speaker and projector previews must advance the same build with synchronized timing: ${JSON.stringify({ projector, buildPreview })}`)
   await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale emphasis"]')?.click()`)
-  for (let attempt = 0; attempt < 40; attempt++) {
-    projector = await projectorStatus()
-    if (projector?.triggerCount === 1) break
-    await delay(50)
-  }
-  assert(projector?.triggerCount === 1, `A shape-triggered animation must reach the projector state: ${JSON.stringify(projector)}`)
   await delay(400)
   const triggeredPreview = await evaluate(`(() => {
     const opacity = (root, getStyle = getComputedStyle) => {
@@ -2550,11 +5190,79 @@ try {
   for (let attempt = 0; attempt < 25 && (await projectorStatus())?.blank !== ''; attempt++) await delay(80)
   projector = await projectorStatus()
   assert(projector?.blank === '', `Clearing the screen blank must synchronize to the projector: ${JSON.stringify(projector)}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))`)
+  for (let attempt = 0; attempt < 25 && (await projectorStatus())?.blank !== 'white'; attempt++) await delay(80)
+  projector = await projectorStatus()
+  const whiteScreenState = await state()
+  assert(projector?.blank === 'white' && whiteScreenState.screenOverlay?.includes('is-white'), `W must show a white screen locally and on the projector: ${JSON.stringify({ projector, screenOverlay: whiteScreenState.screenOverlay })}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))`)
+  for (let attempt = 0; attempt < 25 && (await projectorStatus())?.blank !== ''; attempt++) await delay(80)
+  projector = await projectorStatus()
+  assert(projector?.blank === '' && !(await state()).screenOverlay, `Pressing W again must restore the slide locally and on the projector: ${JSON.stringify(projector)}`)
+  projector = await pressProjectorKeyAndWaitForBlank('.', 'black')
+  assert(projector?.blank === 'black' && (await state()).screenOverlay?.includes('is-black'), `Period in the projector window must show the synchronized black screen: ${JSON.stringify(projector)}`)
+  projector = await pressProjectorKeyAndWaitForBlank('.', '')
+  assert(projector?.blank === '' && !(await state()).screenOverlay, `Period again in the projector window must restore the synchronized slide: ${JSON.stringify(projector)}`)
+  projector = await pressProjectorKeyAndWaitForBlank(',', 'white')
+  assert(projector?.blank === 'white' && (await state()).screenOverlay?.includes('is-white'), `Comma in the projector window must show the synchronized white screen: ${JSON.stringify(projector)}`)
+  projector = await pressProjectorKeyAndWaitForBlank(',', '')
+  assert(projector?.blank === '' && !(await state()).screenOverlay, `Comma again in the projector window must restore the synchronized slide: ${JSON.stringify(projector)}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   assert(!await evaluate(`!!document.querySelector('[data-presenter-view]')`), 'Escape must close speaker view.')
+  const annotationTarget = await evaluate(`(() => {
+    const layer = document.querySelector('.stage-shell > .slide-host .ink-layer')
+    const rect = layer?.getBoundingClientRect()
+    return rect && { x: rect.left + rect.width * .4, y: rect.top + rect.height * .45, expectedX: layer.viewBox.baseVal.width * .4, expectedY: layer.viewBox.baseVal.height * .45 }
+  })()`)
+  assert(annotationTarget, 'The active slide must expose its annotation surface.')
+  await evaluate(`document.querySelector('[data-tool=laser]')?.click()`)
+  await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: annotationTarget.x, y: annotationTarget.y })
+  let projectorLaser = null
+  for (let attempt = 0; attempt < 30; attempt++) {
+    projectorLaser = await evaluate(`(() => {
+      const target = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
+      const point = target?.document.querySelector('.projector-ink-layer circle')
+      return point && { x: Number(point.getAttribute('cx')), y: Number(point.getAttribute('cy')) }
+    })()`)
+    if (projectorLaser) break
+    await delay(30)
+  }
+  assert(projectorLaser && Math.abs(projectorLaser.x - annotationTarget.expectedX) < 1 && Math.abs(projectorLaser.y - annotationTarget.expectedY) < 1,
+    `The second display must mirror the live laser position in slide coordinates: ${JSON.stringify({ annotationTarget, projectorLaser })}`)
+  await evaluate(`document.querySelector('[data-tool=pen]')?.click()`)
+  await evaluate(`(() => {
+    const layer = document.querySelector('.stage-shell > .slide-host .ink-layer')
+    const rect = layer.getBoundingClientRect()
+    const start = { x: rect.left + rect.width * .25, y: rect.top + rect.height * .3 }
+    const end = { x: rect.left + rect.width * .35, y: rect.top + rect.height * .4 }
+    const dispatch = (type, point, buttons) => layer.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 77, pointerType: 'mouse', clientX: point.x, clientY: point.y, buttons }))
+    dispatch('pointerdown', start, 1)
+    dispatch('pointermove', end, 1)
+    dispatch('pointerup', end, 0)
+  })()`)
+  let projectorInk = null
+  for (let attempt = 0; attempt < 30; attempt++) {
+    projectorInk = await evaluate(`(() => {
+      const target = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
+      return target?.document.querySelector('.projector-ink-layer polyline')?.getAttribute('points') || null
+    })()`)
+    if (projectorInk?.includes(' ')) break
+    await delay(30)
+  }
+  assert(projectorInk?.includes(' '), `The second display must retain a completed pen stroke: ${projectorInk}`)
+  await evaluate(`document.querySelector('[data-tool=clear]')?.click()`)
+  for (let attempt = 0; attempt < 30; attempt++) {
+    projectorInk = await evaluate(`(() => {
+      const target = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
+      return target?.document.querySelector('.projector-ink-layer polyline')?.getAttribute('points') || null
+    })()`)
+    if (!projectorInk) break
+    await delay(30)
+  }
+  assert(!projectorInk, 'Clearing slide annotations must clear the second display too.')
   await evaluate(`document.querySelector('[data-tool=sorter]').click()`)
   const sorterBefore = await evaluate(`(() => ({ visible: !!document.querySelector('[data-sorter-view]'), cards: document.querySelectorAll('.sorter-card').length, range: document.querySelector('.sorter-header span')?.textContent, first: document.querySelector('.sorter-card .sorter-slide-button')?.getAttribute('aria-label'), second: document.querySelectorAll('.sorter-card .sorter-slide-button')[1]?.getAttribute('aria-label') }))()`)
-  assert(sorterBefore.visible && sorterBefore.cards === 48 && sorterBefore.range?.includes('1–48 / 67'), `The slide sorter must show the first bounded group and total deck size: ${JSON.stringify(sorterBefore)}`)
+  assert(sorterBefore.visible && sorterBefore.cards === 48 && sorterBefore.range?.includes('1–48 / 68'), `The slide sorter must show the first bounded group and total deck size: ${JSON.stringify(sorterBefore)}`)
   const sorterBeforeOrder = await evaluate(`([...document.querySelectorAll('.sorter-card .sorter-slide-button')].slice(0, 2).map(button => button.getAttribute('aria-label')))`)
   await evaluate(`(() => { const cards = [...document.querySelectorAll('.sorter-card')]; const transfer = new DataTransfer(); cards[0].dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer })); cards[1].dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer })) })()`)
   await delay(20)
@@ -2568,22 +5276,23 @@ try {
   assert(!await evaluate(`!!document.querySelector('[data-sorter-view]')`), 'Escape must close slide sorter.')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '2' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(50)
-  assert((await state()).slide?.startsWith('24 / 67'), 'The timed-advance fixture slide must be active.')
+  assert((await state()).slide?.startsWith('24 / 68'), 'The timed-advance fixture slide must be active.')
   await evaluate(`document.querySelector('.stage-shell').click()`)
   await delay(50)
-  assert((await state()).slide?.startsWith('24 / 67'), 'A slide with advClick="0" must ignore stage clicks after its build steps.')
+  assert((await state()).slide?.startsWith('24 / 68'), 'A slide with advClick="0" must ignore stage clicks after its build steps.')
   await delay(5_100)
-  assert((await state()).slide?.startsWith('25 / 67'), 'advTm must automatically advance to the next slide after its delay.')
+  assert((await state()).slide?.startsWith('25 / 68'), 'advTm must automatically advance to the next slide after its delay.')
   await evaluate(`window.__decklineFullscreenOriginal = HTMLElement.prototype.requestFullscreen; HTMLElement.prototype.requestFullscreen = function () { return Promise.resolve() }; window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', shiftKey: true }))`)
   await delay(50)
-  assert((await state()).slide?.startsWith('25 / 67'), 'Shift+F5 must present the current slide.')
+  assert((await state()).slide?.startsWith('25 / 68'), 'Shift+F5 must present the current slide.')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5' }))`)
   await delay(50)
-  assert((await state()).slide?.startsWith('01 / 67'), 'F5 must start the presentation from its first slide.')
+  assert((await state()).slide?.startsWith('01 / 68'), 'F5 must start the presentation from its first slide.')
   await jumpToFixtureSlide(67)
   await delay(80)
   const textRangeSlide = await state()
   assert(!textRangeSlide.warnings.some(warning => warning.includes('Text-range motion animations are not rendered yet.')), 'Character-range motion must not be skipped by the parser.')
+  assert(textRangeSlide.warnings.some(warning => warning.includes('unsupported object-effect filter was approximated as a fade.')) && !textRangeSlide.warnings.some(warning => warning.includes('vendorCustom object animation is not rendered')), `An unknown in-transition filter must degrade to a warned fade: ${JSON.stringify(textRangeSlide.warnings)}`)
   const textRangeRuns = () => evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Character transform target"] .text-run') || [])].map(run => ({ text: run.textContent, start: Number(run.dataset.charStart), end: Number(run.dataset.charEnd), transform: getComputedStyle(run).transform, clipPath: getComputedStyle(run).clipPath, maskImage: getComputedStyle(run).maskImage, color: getComputedStyle(run).color, opacity: Number(getComputedStyle(run).opacity), visibility: getComputedStyle(run).visibility, display: getComputedStyle(run).display })))()`)
   const textParagraphMask = title => evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"] .text-paragraph'); return target ? getComputedStyle(target).maskImage : 'missing' })()`)
   const textParagraphClip = title => evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"] .text-paragraph'); return target ? getComputedStyle(target).clipPath : 'missing' })()`)
@@ -2598,7 +5307,7 @@ try {
   const paragraphWheelStart = await textParagraphMask('Paragraph wheel target')
   const characterWedgeStart = await textRangeMasks('Character wedge target')
   const paragraphShapeStart = await textParagraphClip('Paragraph shape target')
-  assert(textRangeSlide.slide?.startsWith('67 / 67') && textRangeBefore.length === 4 && textRangeBefore.map(run => run.text).join('') === 'PPTX' && !textRangeSlide.warnings.some(warning => warning.includes('unsupported target or text range was skipped') || warning.includes('unsupported target or property was skipped')), `Text-range scale and rotation targets must parse without a fallback warning: ${JSON.stringify({ slide: textRangeSlide.slide, runs: textRangeBefore, warnings: textRangeSlide.warnings })}`)
+  assert(textRangeSlide.slide?.startsWith('67 / 68') && textRangeBefore.length === 4 && textRangeBefore.map(run => run.text).join('') === 'PPTX' && !textRangeSlide.warnings.some(warning => warning.includes('unsupported target or text range was skipped') || warning.includes('unsupported target or property was skipped')), `Text-range scale and rotation targets must parse without a fallback warning: ${JSON.stringify({ slide: textRangeSlide.slide, runs: textRangeBefore, warnings: textRangeSlide.warnings })}`)
   assert(paragraphBarnStart.startsWith('inset(') && paragraphBarnStart.includes('50%') && !textRangeSlide.warnings.some(warning => warning.includes('text-range') && warning.includes('barn')), `A paragraph-range barn entrance must start closed and parse without an unsupported-range warning: ${JSON.stringify({ paragraphBarnStart, warnings: textRangeSlide.warnings })}`)
   assert(paragraphRandomBarsStart.includes('data:image/svg+xml') && !textRangeSlide.warnings.some(warning => warning.includes('text-range random bars')), `A paragraph-range random-bars entrance must start masked without an unsupported-range warning: ${JSON.stringify({ paragraphRandomBarsStart: paragraphRandomBarsStart.slice(0, 80), warnings: textRangeSlide.warnings })}`)
   assert(paragraphStripsStart.includes('data:image/svg+xml') && characterStripsStart.length === 3 && characterStripsStart[0]?.mask === 'none' && characterStripsStart[1]?.text === 'BC' && characterStripsStart[1]?.mask.includes('data:image/svg+xml') && characterStripsStart[2]?.mask === 'none' && !textRangeSlide.warnings.some(warning => warning.includes('unsupported text-range') && warning.includes('strips')), `Paragraph- and character-range strips must mask only their targets without an unsupported-range warning: ${JSON.stringify({ paragraphStripsStart: paragraphStripsStart.slice(0, 80), characterStripsStart, warnings: textRangeSlide.warnings })}`)
@@ -2607,6 +5316,7 @@ try {
   assert(characterBarnBefore[0] === 'none' && characterBarnBefore[1]?.startsWith('inset(') && characterBarnBefore[1]?.includes('50%') && characterBarnBefore[2]?.startsWith('inset(') && characterBarnBefore[2]?.includes('50%') && characterBarnBefore[3] === 'none', `A character-range barn entrance must clip only the selected runs: ${JSON.stringify(characterBarnBefore)}`)
   await evaluate(`document.querySelector('[aria-label="Next animation step or slide"]')?.click()`)
   await delay(150)
+  const characterBarnDuring = (await textRangeRuns()).map(run => run.clipPath)
   const textRangeFilterDuring = await evaluate(`(() => {
     const find = (title, selector) => document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + '] ' + selector)
     const paragraphMask = title => getComputedStyle(find(title, '.text-paragraph')).maskImage
@@ -2617,6 +5327,7 @@ try {
       characterDissolve: runs('Character dissolve target'),
       paragraphWheel: paragraphMask('Paragraph wheel target'),
       characterWedge: runs('Character wedge target'),
+      fallbackObjectOpacity: Number(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Unsupported filter fallback target"]')).opacity),
     }
   })()`)
   const paragraphShapeDuring = textRangeFilterDuring.paragraphShape
@@ -2624,12 +5335,13 @@ try {
   const characterDissolveDuring = textRangeFilterDuring.characterDissolve
   const paragraphWheelDuring = textRangeFilterDuring.paragraphWheel
   const characterWedgeDuring = textRangeFilterDuring.characterWedge
+  const fallbackObjectOpacityDuring = textRangeFilterDuring.fallbackObjectOpacity
   const paragraphBarnDuring = await textParagraphClip('Paragraph barn target')
   const paragraphRandomBarsDuring = await textParagraphMask('Paragraph random bars target')
   const paragraphStripsDuring = await textParagraphMask('Paragraph strips target')
   const characterStripsDuring = await textRangeMasks('Character strips target')
-  const characterBarnDuring = (await textRangeRuns()).map(run => run.clipPath)
   await delay(450)
+  const fallbackObjectOpacityComplete = Number(await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Unsupported filter fallback target"]')).opacity`))
   const textRangeAfter = await textRangeRuns()
   assert(textRangeAfter[0]?.opacity > 0.3 && textRangeAfter[0]?.opacity < 0.8
     && textRangeAfter[1]?.opacity > 0.3 && textRangeAfter[1]?.opacity < 0.8
@@ -2640,6 +5352,7 @@ try {
     `Generic style.visibility must hide only its p:charRg target: ${JSON.stringify(textRangeAfter.map(run => ({ range: [run.start, run.end], visibility: run.visibility })))}`)
   const paragraphVisibilityAfter = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Paragraph blinds target"] .text-paragraph')).visibility`)
   assert(paragraphVisibilityAfter === 'hidden', `Generic style.visibility must apply to its p:pRg target: ${paragraphVisibilityAfter}`)
+  assert(Math.abs(fallbackObjectOpacityDuring - 0.5) < 0.02 && Math.abs(fallbackObjectOpacityComplete - 0.5) < 0.02, `p:progress must hold a fixed halfway fade state during and after an unsupported entrance filter: ${JSON.stringify({ fallbackObjectOpacityDuring, fallbackObjectOpacityComplete })}`)
   const rangeMatrix = transform => transform.match(/^matrix\(([^)]+)\)$/)?.[1].split(',').map(Number)
   const scaleOnly = rangeMatrix(textRangeAfter[0]?.transform || '')
   const scaleAndRotation = rangeMatrix(textRangeAfter[1]?.transform || '')
@@ -2658,7 +5371,7 @@ try {
   const characterBarnComplete = textRangeAfter.map(run => run.clipPath)
   const textRangeMaskKinds = textRangeAfter.map(run => run.maskImage.includes('data:image/svg+xml') ? 'checker' : run.maskImage !== 'none' ? 'other' : 'none')
   const textRangeChecks = {
-    slide: (await state()).slide?.startsWith('67 / 67'),
+    slide: (await state()).slide?.startsWith('67 / 68'),
     runRanges: textRangeAfter.map(run => `${run.start}-${run.end}`).join(',') === '0-1,1-2,2-3,3-4',
     scale: Boolean(scaleOnly && Math.hypot(scaleOnly[0], scaleOnly[1]) > 1.1 && Math.hypot(scaleOnly[2], scaleOnly[3]) > 1.05),
     rotation: Boolean(scaleAndRotation && Math.abs(scaleAndRotation[1]) > 0.01 && presetScaleAndRotation && Math.abs(presetScaleAndRotation[1]) > 0.01 && Math.hypot(presetScaleAndRotation[0], presetScaleAndRotation[1]) > 1.1),
@@ -2703,7 +5416,7 @@ try {
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
     return result
   })()`)
-  assert(bottomThumbnailWindow.rendered > 0 && bottomThumbnailWindow.rendered < 67 && bottomThumbnailWindow.last >= 63,
+  assert(bottomThumbnailWindow.rendered > 0 && bottomThumbnailWindow.rendered < 68 && bottomThumbnailWindow.last >= 63,
     `Scrolling to the final slide must virtualize around the tail of the deck: ${JSON.stringify(bottomThumbnailWindow)}`)
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
   const mobileThumbnailWindow = await evaluate(`(async () => {
@@ -2720,7 +5433,258 @@ try {
     && mobileThumbnailWindow.rendered < mobileThumbnailWindow.total && mobileThumbnailWindow.last >= 63,
     `The mobile horizontal thumbnail strip must virtualize around the end of the deck: ${JSON.stringify(mobileThumbnailWindow)}`)
 
-  console.log('Animation, media, presenter, and sorter verification passed: custom-geometry arcs, cached-data bar/line/area/pie/scatter/bubble and HLC/OHLC stock charts, column/line/area combo charts with primary and secondary axes, stacked line and area modes, and multi-series doughnut rings, timing, four-direction slide filters, character-range wipe and by-letter/by-word/by-shape iteration, linear/discrete font-size and opacity tavLst keyframes, linear opacity/font-size/font-weight p:tav formulas, numeric opacity attributes, text-range opacity and p:set, p:set visibility, fixed font-size, opacity, and colors, style/fill/stroke/shadow color and opacity animation, and line breaks, object blinds, checkerboard, random bars, four-direction object strips, four barn-door object filters, circle, diamond, box, plus, dissolve, wheel, wheelReverse, wedge and wipe effects, click/double-click/mouse-over/mouse-out shape triggers, fades, cut, blinds, checkerboard, comb, dissolve, wheel, wheelReverse, random-bar, strips, plus and wedge, newsflash, flash, doors, window, prism, directional p14 pan/ripple/glitter/shred/flythrough/warp/vortex/ferris/gallery/conveyor transitions, p159 morph byObject geometry matching and warned byWord fallback, random selection, cover, pull, split in/out, circle, diamond, honeycomb, paired push, zoom transitions, linked slide notes, current/next presenter view, speaker navigation, slide sorting by drag and keyboard, embedded media loading and controls, scale, rotation, RGB/HSL color, straight and cubic motion, tables, groups, controls, and ink.')
+  await evaluate(`document.querySelector('[aria-label="Zoom in"]')?.click()`)
+  await delay(50)
+  const editorScale = await evaluate(`document.querySelector('.stage-shell > .slide-host')?.style.transform`)
+  await evaluate(`document.querySelector('[data-tool="reading"]')?.click()`)
+  const readingViewState = await evaluate(`(() => ({
+    active: document.querySelector('.app-shell')?.classList.contains('is-reading-view'),
+    sidebar: getComputedStyle(document.querySelector('.deck-sidebar')).display,
+    toolbar: getComputedStyle(document.querySelector('.deck-toolbar')).display,
+    exit: Boolean(document.querySelector('[data-reading-exit]')),
+    scale: document.querySelector('.stage-shell > .slide-host')?.style.transform
+  }))()`)
+  assert(editorScale === 'scale(1.25)' && readingViewState.active && readingViewState.sidebar === 'none' && readingViewState.toolbar === 'none' && readingViewState.exit && readingViewState.scale === 'scale(1)',
+    `Reading view must focus the player and fit the full slide regardless of editor zoom: ${JSON.stringify({editorScale, readingViewState})}`)
+  await evaluate(`document.querySelector('[data-reading-notes]')?.click()`)
+  const readingNotesState = await evaluate(`({ expanded: document.querySelector('[data-reading-notes]')?.getAttribute('aria-expanded'), notes: Boolean(document.querySelector('[data-reading-notes-panel]')) })`)
+  assert(readingNotesState.expanded === 'true' && readingNotesState.notes, `Reading view must expose speaker notes on demand: ${JSON.stringify(readingNotesState)}`)
+  const projectorEscape = await evaluate(`(() => {
+    const target = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
+    if (!target) return { found: false, fullscreen: false }
+    Object.defineProperty(target.document, 'fullscreenElement', { configurable: true, value: target.document.documentElement })
+    const fullscreen = Boolean(target.document.fullscreenElement)
+    target.dispatchEvent(new target.KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))
+    return { found: true, fullscreen }
+  })()`)
+  let projectorClosed = await evaluate(`(() => { const target = globalThis.__decklineOpenedWindows?.find(candidate => candidate.document?.querySelector('[data-projector-window]')); return !target || target.closed })()`)
+  for (let attempt = 0; attempt < 20 && !projectorClosed; attempt++) {
+    await delay(50)
+    projectorClosed = await evaluate(`(() => { const target = globalThis.__decklineOpenedWindows?.find(candidate => candidate.document?.querySelector('[data-projector-window]')); return !target || target.closed })()`)
+  }
+  assert(projectorEscape.found && projectorEscape.fullscreen && projectorClosed, `Escape in the fullscreen projector must close the synchronized projector window: ${JSON.stringify({ projectorEscape, projectorClosed })}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  const readingExitState = await evaluate(`({ active: document.querySelector('.app-shell')?.classList.contains('is-reading-view'), focus: document.activeElement?.getAttribute('data-tool'), scale: document.querySelector('.stage-shell > .slide-host')?.style.transform })`)
+  assert(!readingExitState.active && readingExitState.focus === 'reading' && readingExitState.scale === 'scale(1.25)', `Escape must leave reading view, restore focus, and restore editor zoom: ${JSON.stringify(readingExitState)}`)
+  await evaluate(`document.querySelector('[aria-label="Zoom out"]')?.click()`)
+  await delay(50)
+  const resetEditorZoom = await evaluate(`({ scale: document.querySelector('.stage-shell > .slide-host')?.style.transform, label: document.querySelector('.zoom-value')?.textContent?.trim() })`)
+  assert(resetEditorZoom.scale === 'scale(1)' && resetEditorZoom.label === '100%', `Reading view must restore the default editor zoom cleanly: ${JSON.stringify(resetEditorZoom)}`)
+  const focusedControlBefore = await evaluate(`({ slide: document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber, active: document.querySelector('[data-tool="pen"]')?.classList.contains('is-active') })`)
+  await evaluate(`document.querySelector('[data-tool="pen"]')?.focus()`)
+  await call('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+  await call('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32 })
+  const focusedControlAfter = await evaluate(`({ slide: document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber, active: document.querySelector('[data-tool="pen"]')?.classList.contains('is-active') })`)
+  assert(focusedControlAfter.active && focusedControlAfter.slide === focusedControlBefore.slide, `Space on a focused toolbar button must activate that control without changing slides: ${JSON.stringify({focusedControlBefore, focusedControlAfter})}`)
+
+  await jumpToFixtureSlide(15)
+  await delay(80)
+  const connectorSlideState = await state()
+  assert(connectorSlideState.slide?.startsWith('15 /'), `The isolated connector fixture must be on slide 15: ${connectorSlideState.slide}`)
+  await delay(600)
+  const gradientOpacityStartedAt = await evaluate(`(() => { const trigger = document.querySelector('.stage-shell > .slide-host [title="Gradient p:set opacity"]'); if (!trigger) throw new Error('The isolated gradient opacity trigger is missing.'); const started = performance.now(); trigger.click(); return started })()`)
+  const stringFontWeightNormal = await stateAtElapsed(gradientOpacityStartedAt, 100)
+  const stringFontWeightNone = await stateAtElapsed(gradientOpacityStartedAt, 200)
+  const gradientOpacityDuring = await stateAtElapsed(gradientOpacityStartedAt, 150)
+  const stringWeight = (snapshot, name) => Number(snapshot.textRuns.find(run => run.name === name)?.fontWeight)
+  assert(stringWeight(stringFontWeightNormal, 'String font weight keyframes') === 400 && stringWeight(stringFontWeightNone, 'String font weight keyframes') === 700, `String font-weight keyframes must apply normal and reset none to the run's static bold weight: ${JSON.stringify({normal: stringWeight(stringFontWeightNormal, 'String font weight keyframes'), none: stringWeight(stringFontWeightNone, 'String font weight keyframes')})}`)
+  assert(stringWeight(stringFontWeightNormal, 'String font weight from-to') === 700, `A string from/to font-weight animation must apply its active bold value: ${stringWeight(stringFontWeightNormal, 'String font weight from-to')}`)
+  const gradientOpacityDuringAlphas = gradientStopAlphas(shape(gradientOpacityDuring, 'Gradient opacity').backgroundImage)
+  const customGradientOpacityDuring = shape(gradientOpacityDuring, 'Custom gradient opacity').customPaths[0]?.gradientStops
+  assert(gradientOpacityDuringAlphas.length === 2 && gradientOpacityDuringAlphas[0] > 0.5 && gradientOpacityDuringAlphas[0] < 1 && gradientOpacityDuringAlphas[1] > 0.25 && gradientOpacityDuringAlphas[1] < 0.5, `A generic fill.opacity animation must multiply each CSS gradient stop alpha during playback: ${JSON.stringify({ alphas: gradientOpacityDuringAlphas })}`)
+  assert(customGradientOpacityDuring?.length === 2 && customGradientOpacityDuring[0] > 0.5 && customGradientOpacityDuring[0] < 1 && customGradientOpacityDuring[1] > 0.25 && customGradientOpacityDuring[1] < 0.5, `A generic fill.opacity animation must multiply each SVG custom-gradient stop alpha during playback: ${JSON.stringify(customGradientOpacityDuring)}`)
+  const gradientOpacityComplete = await stateAtElapsed(gradientOpacityStartedAt, 350)
+  assert(stringWeight(gradientOpacityComplete, 'String font weight keyframes') === 400 && stringWeight(gradientOpacityComplete, 'String font weight from-to') === 400, `String font-weight keyframes and from/to animations must hold their final normal values: ${JSON.stringify({keyframes: stringWeight(gradientOpacityComplete, 'String font weight keyframes'), fromTo: stringWeight(gradientOpacityComplete, 'String font weight from-to')})}`)
+  const gradientOpacityEnd = gradientStopAlphas(shape(gradientOpacityComplete, 'Gradient opacity').backgroundImage)
+  const customGradientOpacityEnd = shape(gradientOpacityComplete, 'Custom gradient opacity').customPaths[0]?.gradientStops
+  const gradientSetOpacityEnd = gradientStopAlphas(shape(gradientOpacityComplete, 'Gradient p:set opacity').backgroundImage)
+  assert(gradientOpacityEnd.length === 2 && Math.abs(gradientOpacityEnd[0] - 0.5) < 0.03 && Math.abs(gradientOpacityEnd[1] - 0.25) < 0.03, `A held fill.opacity animation must multiply CSS gradient stop alphas: ${JSON.stringify(gradientOpacityEnd)}`)
+  assert(customGradientOpacityEnd?.length === 2 && Math.abs(customGradientOpacityEnd[0] - 0.5) < 0.03 && Math.abs(customGradientOpacityEnd[1] - 0.25) < 0.03, `A held fill.opacity animation must multiply SVG custom-gradient stop alphas: ${JSON.stringify(customGradientOpacityEnd)}`)
+  assert(gradientSetOpacityEnd.length === 2 && Math.abs(gradientSetOpacityEnd[0] - 0.25) < 0.03 && Math.abs(gradientSetOpacityEnd[1] - 0.125) < 0.03, `A p:set fill.opacity value must multiply CSS gradient stop alphas: ${JSON.stringify(gradientSetOpacityEnd)}`)
+  const connectorPaths = await evaluate(`Object.fromEntries([...document.querySelectorAll('.slide-host .slide-element')].filter(element => /^(?:Bent|Curved) connector [2-5]$/.test(element.dataset.elementName || '')).map(element => [element.dataset.elementName, element.querySelector('.line-render path')?.getAttribute('d') || '']))`)
+  const additionalConnectorPaths = await evaluate(`Object.fromEntries(['Custom bound connector', 'Grouped bound connector'].map(name => { const element = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === name); return [name, element?.querySelector('.line-render path')?.getAttribute('d') || ''] }))`)
+  assert(additionalConnectorPaths['Custom bound connector'] === 'M 0 0 L 833.3333 500'
+    && additionalConnectorPaths['Grouped bound connector'] === 'M 0 0 L 500 400',
+  `Custom and grouped connection sites must resolve through their coordinate transforms: ${JSON.stringify({paths: additionalConnectorPaths, warnings: connectorSlideState.warnings.filter(warning => /Connector|connection site/.test(warning))})}`)
+  const patternFillState = await evaluate(`(() => { const find = name => [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === name); const horizontal = find('Horizontal pattern fill'), percent = find('Percent pattern fill'), svg = find('SVG pattern fill fallback')?.querySelector('svg path'), text = find('Pattern-filled text')?.querySelector('.text-run'); const textStyle = text && getComputedStyle(text); return {horizontal: getComputedStyle(horizontal).backgroundImage, percent: getComputedStyle(percent).backgroundImage, svgFill: svg?.getAttribute('fill'), textPattern: textStyle?.backgroundImage, textPatternVariable: textStyle?.getPropertyValue('--pptx-text-pattern'), textClip: textStyle?.backgroundClip, textBackground: textStyle?.backgroundColor, textFill: textStyle?.getPropertyValue('-webkit-text-fill-color')} })()`)
+  assert(patternFillState.horizontal.includes('repeating-linear-gradient') && patternFillState.percent.includes('radial-gradient')
+    && patternFillState.svgFill && !patternFillState.svgFill.includes('gradient')
+    && patternFillState.textPattern.includes('repeating-linear-gradient') && patternFillState.textClip.includes('text')
+    && patternFillState.textBackground === 'rgb(255, 247, 237)'
+    && patternFillState.textFill === 'rgba(0, 0, 0, 0)'
+    && connectorSlideState.warnings.some(warning => warning.includes('SVG path fills fall back to a solid color')),
+  `Common DrawingML patterns must render on CSS shapes, use a visible SVG fallback, and report approximation: ${JSON.stringify(patternFillState)}`)
+  assert(Object.keys(connectorPaths).length === 8
+    && connectorPaths['Bent connector 2'] === 'M 0 0 L 1000 0 L 1000 1000'
+    && connectorPaths['Bent connector 3'].includes('L 250 0')
+    && connectorPaths['Bent connector 4'].includes('L 300 600')
+    && connectorPaths['Bent connector 5'].includes('L 800 500')
+    && (connectorPaths['Curved connector 2'].match(/C/g) || []).length === 1
+    && connectorPaths['Curved connector 3'].includes('C 200 0 400 250 400 500')
+    && connectorPaths['Curved connector 4'].includes('C 200 0 400 150 400 300')
+    && connectorPaths['Curved connector 5'].includes('C 150 0 300 100 300 200')
+    && [3, 4, 5].every(number => (connectorPaths[`Curved connector ${number}`].match(/C/g) || []).length === number - 1),
+  `ECMA-376 bent/curved connector paths must retain preset routing and custom adjustments: ${JSON.stringify(connectorPaths)}`)
+
+  const effectDagStyles = await evaluate(`Object.fromEntries(['Sibling effect DAG', 'Tree effect DAG', 'Nested effect DAG', 'Sibling text effect DAG', 'Tree text effect DAG', 'Nested text effect DAG', 'Single text tree effect DAG'].map(name => { const host = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.dataset.elementName === name); const rendered = name.includes('text') ? host?.querySelector('.text-run') : host; const style = rendered && getComputedStyle(rendered); return [name, { shadow: style?.boxShadow, filter: style?.filter, textShadow: style?.textShadow }] }))`)
+  assert(effectDagStyles['Sibling effect DAG'].shadow?.includes('rgba(18, 52, 86, 0.6)')
+    && effectDagStyles['Sibling effect DAG'].shadow?.includes('rgb(0, 255, 0)')
+    && effectDagStyles['Sibling effect DAG'].filter?.includes('drop-shadow(')
+    && effectDagStyles['Sibling effect DAG'].filter?.includes('rgb(255, 0, 0)')
+    && effectDagStyles['Sibling effect DAG'].filter?.includes('rgb(0, 0, 255)')
+    && effectDagStyles['Tree effect DAG'].shadow === 'none'
+    && effectDagStyles['Tree effect DAG'].filter === 'none'
+    && effectDagStyles['Nested effect DAG'].shadow === 'none'
+    && effectDagStyles['Nested effect DAG'].filter === 'none',
+  `Sibling shape effects must render independently while composed tree and nested containers stay explicit fallbacks: ${JSON.stringify(effectDagStyles)}`)
+  assert(effectDagStyles['Sibling text effect DAG'].textShadow?.includes('rgba(18, 52, 86, 0.6)')
+    && effectDagStyles['Sibling text effect DAG'].textShadow?.includes('rgb(0, 255, 0)')
+    && effectDagStyles['Sibling text effect DAG'].textShadow?.includes('rgb(255, 0, 0)')
+    && effectDagStyles['Sibling text effect DAG'].textShadow?.includes('rgb(0, 0, 255)')
+    && effectDagStyles['Tree text effect DAG'].textShadow === 'none'
+    && effectDagStyles['Nested text effect DAG'].textShadow === 'none'
+    && effectDagStyles['Single text tree effect DAG'].textShadow?.includes('rgba(18, 52, 86, 0.6)'),
+  `Text-run effect DAGs must render supported sibling effects and skip unsupported compositions: ${JSON.stringify(effectDagStyles)}`)
+  const effectDagWarnings = (await state()).warnings
+  assert(effectDagWarnings.some(warning => warning.includes('Multi-effect tree-ordered shape effect DAGs'))
+    && effectDagWarnings.some(warning => warning.includes('Multiple shape glows use layered CSS drop-shadows'))
+    && effectDagWarnings.some(warning => warning.includes('Nested shape effect DAG containers'))
+    && effectDagWarnings.some(warning => warning.includes('Multi-effect tree-ordered text effect DAGs'))
+    && effectDagWarnings.some(warning => warning.includes('Nested text effect DAG containers')),
+  `Unsupported effect DAG compositions must report their fallback: ${JSON.stringify(effectDagWarnings)}`)
+  const innerShadowStyles = await evaluate(`Object.fromEntries(['Shape inner effect list', 'Shape inner effect DAG', 'Unsupported polygon inner shadow', 'Direct text inner shadow', 'DAG text inner shadow'].map(name => { const host = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.dataset.elementName === name); const run = host?.querySelector('.text-run'); return [name, { boxShadow: host && getComputedStyle(host).boxShadow, textShadow: run && getComputedStyle(run).textShadow }] }))`)
+  const listedShapeShadow = innerShadowStyles['Shape inner effect list'].boxShadow
+  const dagShapeShadow = innerShadowStyles['Shape inner effect DAG'].boxShadow
+  await jumpToFixtureSlide(15)
+  await delay(80)
+  await evaluate(`(() => {
+    const video = document.querySelector('.slide-video[data-media-id="2"]')
+    if (!video || video.dataset.mediaSlideCount !== '2') throw new Error('Expected the numSld=2 video fixture on slide 15.')
+    video.dataset.mediaActionEndAt = String(performance.now() + 10000)
+    video.__decklineMockPaused = false
+    Object.defineProperty(video, 'paused', { configurable: true, get() { return this.__decklineMockPaused } })
+    Object.defineProperty(video, 'ended', { configurable: true, value: false })
+    let sourceTime = 0.4
+    Object.defineProperty(video, 'currentTime', { configurable: true, get() { return sourceTime }, set(value) { sourceTime = value } })
+    const sourceFrame = video.closest('.slide-element')
+    const slideFrame = video.closest('.slide-frame')
+    const sourceStyle = getComputedStyle(sourceFrame)
+    window.__crossSlideVideoPlacement = {
+      left: String(sourceFrame.offsetLeft / slideFrame.offsetWidth * 100) + '%',
+      top: String(sourceFrame.offsetTop / slideFrame.offsetHeight * 100) + '%',
+      width: String(sourceFrame.offsetWidth / slideFrame.offsetWidth * 100) + '%',
+      height: String(sourceFrame.offsetHeight / slideFrame.offsetHeight * 100) + '%',
+      transform: sourceStyle.transform,
+      transformOrigin: sourceStyle.transformOrigin,
+      opacity: sourceStyle.opacity,
+      clipPath: sourceStyle.clipPath,
+      mediaStyle: video.style.cssText,
+    }
+    window.__decklineNativePlay = HTMLMediaElement.prototype.play
+    window.__decklineNativePause = HTMLMediaElement.prototype.pause
+    HTMLMediaElement.prototype.play = function () {
+      let time = Number(this.currentTime) || 0
+      let startedAt = performance.now()
+      Object.defineProperty(this, 'paused', { configurable: true, get() { return this.__decklineMockPaused } })
+      Object.defineProperty(this, 'currentTime', { configurable: true, get() { return time + (performance.now() - startedAt) / 1000 }, set(value) { time = Number(value); startedAt = performance.now() } })
+      this.__decklineMockPaused = false
+      return Promise.resolve()
+    }
+    HTMLMediaElement.prototype.pause = function () { this.__decklineMockPaused = true }
+    video.dispatchEvent(new Event('play'))
+    window.__crossSlideVideoStartTime = sourceTime
+  })()`)
+  const crossSlideVideoStartTime = await evaluate(`window.__crossSlideVideoStartTime`)
+  await jumpToFixtureSlide(16)
+  await delay(80)
+  await evaluate(`(() => {
+    const video = document.querySelector('.continuing-video-frame .slide-video[data-media-id="2"]')
+    if (!video) throw new Error('The playing video was not cloned into the cross-slide overlay.')
+    Object.defineProperty(video, 'readyState', { configurable: true, value: 1 })
+    Object.defineProperty(video, 'duration', { configurable: true, value: 10 })
+    video.dispatchEvent(new Event('loadedmetadata'))
+    window.__crossSlideVideo = video
+  })()`)
+  await delay(900)
+  const crossSlideVideo = await evaluate(`(() => {
+    const video = window.__crossSlideVideo
+    const layer = document.querySelector('.continuing-media-host')
+    const slide = document.querySelector('.stage-shell > .slide-host')
+    const frame = video?.closest('.continuing-video-frame')
+    const placement = window.__crossSlideVideoPlacement
+    const layerRect = layer.getBoundingClientRect()
+    const slideRect = slide.getBoundingClientRect()
+    const matchesPercent = (actual, expected) => actual.endsWith('%') && expected.endsWith('%') && Math.abs(parseFloat(actual) - parseFloat(expected)) < 0.001
+    return {
+      connected: video?.isConnected,
+      paused: video?.paused,
+      currentTime: video?.currentTime,
+      controls: video?.controls,
+      layerAboveSlide: Number(getComputedStyle(layer).zIndex) > Number(getComputedStyle(slide).zIndex),
+      overlayAligned: Math.abs(layerRect.left - slideRect.left) < 1 && Math.abs(layerRect.top - slideRect.top) < 1 && Math.abs(layerRect.width - slideRect.width) < 1 && Math.abs(layerRect.height - slideRect.height) < 1,
+      placementMatches: {
+        left: matchesPercent(frame?.style.left || '', placement.left),
+        top: matchesPercent(frame?.style.top || '', placement.top),
+        width: matchesPercent(frame?.style.width || '', placement.width),
+        height: matchesPercent(frame?.style.height || '', placement.height),
+        transform: frame?.style.transform === placement.transform,
+        transformOrigin: frame?.style.transformOrigin === placement.transformOrigin,
+        opacity: frame?.style.opacity === placement.opacity,
+        clipPath: frame?.style.clipPath === placement.clipPath,
+        mediaStyle: video?.style.cssText === placement.mediaStyle,
+      },
+    }
+  })()`)
+  assert(crossSlideVideo.connected && !crossSlideVideo.paused && crossSlideVideo.controls && crossSlideVideo.currentTime > crossSlideVideoStartTime + 0.1 && crossSlideVideo.layerAboveSlide && crossSlideVideo.overlayAligned && Object.values(crossSlideVideo.placementMatches).every(Boolean),
+    `numSld=2 video must keep playing with its source frame geometry in an aligned, interactive top layer: ${JSON.stringify(crossSlideVideo)}`)
+  await evaluate(`window.__crossSlideVideo.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); window.__crossSlideVideo.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))`)
+  assert((await state()).slide?.startsWith('16 / 68'), 'Interactions with the cross-slide video must not advance the presentation.')
+  await jumpToFixtureSlide(17)
+  await delay(80)
+  const crossSlideVideoLimit = await evaluate(`({ connected: window.__crossSlideVideo.isConnected, paused: window.__crossSlideVideo.paused })`)
+  assert(!crossSlideVideoLimit.connected && crossSlideVideoLimit.paused, `numSld=2 video must stop after the second slide: ${JSON.stringify(crossSlideVideoLimit)}`)
+  await evaluate(`HTMLMediaElement.prototype.play = window.__decklineNativePlay; HTMLMediaElement.prototype.pause = window.__decklineNativePause`)
+  await jumpToFixtureSlide(2)
+  let longAnimationSlide
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await delay(100)
+    longAnimationSlide = await state()
+    if (longAnimationSlide.slide?.replace(/^0+/, '').startsWith('2 / 68') && shape(longAnimationSlide, 'Dynamic formula motion path')) break
+  }
+  assert(longAnimationSlide.slide?.replace(/^0+/, '').startsWith('2 / 68') && shape(longAnimationSlide, 'Dynamic formula motion path'), `The long-animation target must render on the reordered first slide: ${JSON.stringify({ slide: longAnimationSlide.slide, matchingShapes: longAnimationSlide.shapes.filter(element => /Dynamic/.test(element.name)).map(element => element.name) })}`)
+  const longAnimationStartedAt = await evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="Dynamic formula motion path"]'); if (!target) throw new Error('The long-animation shape has not rendered.'); const started = performance.now(); target.click(); return started })()`)
+  await delay(8000)
+  const longAnimationState = await state()
+  const longAnimationInProgress = Number(shape(longAnimationState, 'Dynamic formula motion path')?.opacity)
+  assert(longAnimationInProgress > 0.05 && longAnimationInProgress < 0.24, `A 40-second animation at half speed must still be progressing after eight seconds: ${JSON.stringify({ elapsed: longAnimationState.now - longAnimationStartedAt, opacity: longAnimationInProgress })}`)
+  const innerShadowWarnings = (await state()).warnings
+  assert(listedShapeShadow?.includes('inset') && listedShapeShadow.includes('255, 255, 0')
+    && dagShapeShadow?.includes('inset') && dagShapeShadow.includes('255, 255, 0')
+    && dagShapeShadow.includes('rgba(18, 52, 86, 0.6)')
+    && innerShadowStyles['Unsupported polygon inner shadow'].boxShadow === 'none'
+    && innerShadowStyles['Direct text inner shadow'].textShadow === 'none'
+    && innerShadowStyles['DAG text inner shadow'].textShadow === 'none'
+    && innerShadowWarnings.some(warning => warning.includes('inner shadows on text runs'))
+    && innerShadowWarnings.some(warning => warning.includes('non-rectangular shape geometry')),
+  `Effect-list and sibling-DAG inner shadows must render on supported shapes and explicitly skip text and polygon fallbacks: ${JSON.stringify({innerShadowStyles, warnings: innerShadowWarnings.filter(warning => warning.includes('inner shadow'))})}`)
+
+  const beforePendingNumberCancel = await state()
+  const currentKeyboardSlide = Number(beforePendingNumberCancel.slide?.split('/')[0].trim())
+  const totalKeyboardSlides = Number(beforePendingNumberCancel.slide?.split('/')[1].trim())
+  const pendingKeyboardTarget = (currentKeyboardSlide + 9) % totalKeyboardSlides + 1
+  for (const digit of String(pendingKeyboardTarget)) await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(digit)} }))`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
+  await delay(50)
+  const afterPendingNumberNavigation = await state()
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+  await delay(50)
+  const afterPendingNumberEnter = await state()
+  assert(Number.isFinite(currentKeyboardSlide) && totalKeyboardSlides > 1
+    && afterPendingNumberEnter.slide === afterPendingNumberNavigation.slide,
+  `Arrow navigation must cancel an uncommitted slide number so a later Enter cannot jump unexpectedly: ${JSON.stringify({target: pendingKeyboardTarget, afterNavigation: afterPendingNumberNavigation.slide, afterEnter: afterPendingNumberEnter.slide})}`)
+
+  console.log('Animation, media, presenter, and sorter verification passed: custom-geometry arcs, cached-data bar/line/area/pie/scatter/bubble and HLC/OHLC stock charts, column/line/area combo charts with primary and secondary axes, stacked line and area modes, and multi-series doughnut rings, timing, four-direction slide filters, character-range wipe and by-letter/by-word/by-shape iteration, linear/discrete font-size and opacity tavLst keyframes, linear opacity/font-size/font-weight p:tav formulas, numeric opacity attributes, text-range opacity and p:set, p:set visibility, fixed font-size, opacity, and colors, style/fill/stroke/shadow color and opacity animation, and line breaks, object blinds, checkerboard, random bars, four-direction object strips, four barn-door object filters, circle, diamond, box, plus, dissolve, wheel, wheelReverse, wedge and wipe effects, click/double-click/mouse-over/mouse-out shape triggers, fades, cut, blinds, checkerboard, comb, dissolve, wheel, wheelReverse, random-bar, strips, plus and wedge, newsflash, flash, doors, window, prism, directional p14 pan/ripple/glitter/shred/flythrough/warp/vortex/ferris/gallery/conveyor transitions, p159 morph byObject geometry and byWord/byChar text matching, random selection, cover, pull, split in/out, circle, diamond, honeycomb, paired push, zoom transitions, linked slide notes, current/next presenter view, speaker navigation, slide sorting by drag and keyboard, embedded media loading and controls, scale, rotation, RGB/HSL color, straight and cubic motion, tables, groups, controls, and ink.')
+  }
   }
 } finally {
   await Promise.race([closeBrowser(), delay(1_000)])

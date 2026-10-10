@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, useId, watch, type CSSProperties } from 'vue'
-import { formatChartNumber } from '~/utils/chart-number-format'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch, type CSSProperties } from 'vue'
+import { formatChartNumber, getChartDateAxisMajorTicks } from '~/utils/chart-number-format'
+import { paragraphEntries } from '~/utils/paragraph-bullets'
 import { hslToRgb } from '~/utils/color'
-import { getPptxChartStacking } from '~/utils/pptx'
-import type { PptxAnimation, PptxChart, PptxChartDataLabelPosition, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxHyperlink, PptxParagraph, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx'
+import { characterScript, cssFontFamily, type ScriptFont } from '~/utils/text-fonts'
+import { getPptxChartStacking, presetEllipsePoint } from '~/utils/pptx'
+import type { PptxAnimation, PptxChart, PptxChartDataLabelPosition, PptxChartDataLabelStyle, PptxChartMarkerSymbol, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxHyperlink, PptxParagraph, PptxShadow, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx-model'
 import { inverseTimingProgress, timingProgress } from '~/utils/animation-timing'
 import { barnClipPath, clipPathMaskImage, dissolveClipPath, gridTransitionClipPath, gridTransitionMaskImage, randomBarClipPath, shapeEffectClipPath, stripsClipPath, wheelClipPath } from '~/utils/transitionMasks'
 
 const EMU_PER_POINT = 12_700
-const EAST_ASIAN_SCRIPT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u
-const COMPLEX_SCRIPT = /[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Devanagari}\p{Script=Bengali}\p{Script=Gurmukhi}\p{Script=Gujarati}\p{Script=Oriya}\p{Script=Tamil}\p{Script=Telugu}\p{Script=Kannada}\p{Script=Malayalam}\p{Script=Sinhala}\p{Script=Thai}\p{Script=Lao}\p{Script=Tibetan}\p{Script=Myanmar}\p{Script=Khmer}\p{Script=Mongolian}]/u
 const customGradientScope = `pptx-${useId()}`.replace(/[^a-zA-Z0-9_-]/g, '_')
 
 interface CustomSvgGradientStop { offset: string; color: string; opacity: number }
@@ -36,7 +36,7 @@ interface ChartVisual {
   plot: { left: number; top: number; width: number; height: number }
   ticks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
   xTicks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
-  axisTicks: Array<{ axis: 'category' | 'value' | 'valueSecondary' | 'xValue'; axisId?: string; x1: number; y1: number; x2: number; y2: number }>
+  axisTicks: Array<{ axis: 'category' | 'value' | 'valueSecondary' | 'xValue'; axisId?: string; minor?: boolean; x1: number; y1: number; x2: number; y2: number }>
   secondaryValueAxes: Array<{
     id: string
     horizontal: boolean
@@ -44,19 +44,22 @@ interface ChartVisual {
     ticks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
     majorGridlines: boolean
     majorTickMark?: PptxChartTickMark
+    minorTickMark?: PptxChartTickMark
+    minorTicks: Array<{x: number; y: number}>
     deleted?: boolean
   }>
   radarGrid: Array<{ d: string }>
   radarSpokes: Array<{ x1: number; y1: number; x2: number; y2: number }>
+  categoryGridlines: Array<{ x1: number; y1: number; x2: number; y2: number }>
   categories: Array<{ text: string; x: number; y: number; anchor: string }>
   bars: Array<{ x: number; y: number; width: number; height: number; color: string; stroke?: string }>
   areas: Array<{ d: string; color: string; opacity?: number }>
   lines: Array<{ d: string; color: string; width?: number }>
-  markers: Array<{ x: number; y: number; color: string; radius?: number }>
+  markers: Array<{ x: number; y: number; color: string; radius?: number; symbol?: PptxChartMarkerSymbol }>
   slices: Array<{ d: string; color: string }>
   legend: Array<{ text: string; x: number; y: number; color: string }>
   legendClip?: { id: string; x: number; y: number; width: number; height: number }
-  dataLabels: Array<{ text: string; lines: string[]; x: number; y: number; anchor: string }>
+  dataLabels: Array<{ text: string; lines: string[]; x: number; y: number; anchor: string; legendKey?: {color: string}; style?: PptxChartDataLabelStyle }>
   baseline: { x1: number; y1: number; x2: number; y2: number }
   valueAxisLine?: { x1: number; y1: number; x2: number; y2: number }
 }
@@ -66,6 +69,32 @@ type ChartLegendPosition = NonNullable<PptxChart['legend']>['position']
 function defaultLegendOrigin(position: ChartLegendPosition | undefined, axis: 'x' | 'y') {
   if (axis === 'x') return position === 'left' ? 88 : position === 'right' ? 780 : position === 'topRight' ? 760 : 88
   return position === 'left' || position === 'right' ? 105 : position === 'top' ? 77 : position === 'topRight' ? 92 : 530
+}
+
+function chartMarkerPath(marker: ChartVisual['markers'][number]) {
+  const { x, y } = marker
+  const radius = marker.radius ?? 5
+  const symbol = marker.symbol ?? 'circle'
+  if (symbol === 'square') return `M ${x - radius} ${y - radius} h ${radius * 2} v ${radius * 2} h ${-radius * 2} Z`
+  if (symbol === 'diamond') return `M ${x} ${y - radius} L ${x + radius} ${y} L ${x} ${y + radius} L ${x - radius} ${y} Z`
+  if (symbol === 'triangle') return `M ${x} ${y - radius} L ${x + radius} ${y + radius} L ${x - radius} ${y + radius} Z`
+  if (symbol === 'dash') return `M ${x - radius} ${y - radius * 0.22} h ${radius * 2} v ${radius * 0.44} h ${-radius * 2} Z`
+  if (symbol === 'plus') {
+    const arm = radius * 0.28
+    return `M ${x - arm} ${y - radius} H ${x + arm} V ${y - arm} H ${x + radius} V ${y + arm} H ${x + arm} V ${y + radius} H ${x - arm} V ${y + arm} H ${x - radius} V ${y - arm} H ${x - arm} Z`
+  }
+  if (symbol === 'x') {
+    const arm = radius * 0.28
+    return `M ${x - radius} ${y - radius + arm} L ${x - radius + arm} ${y - radius} L ${x} ${y - arm} L ${x + radius - arm} ${y - radius} L ${x + radius} ${y - radius + arm} L ${x + arm} ${y} L ${x + radius} ${y + radius - arm} L ${x + radius - arm} ${y + radius} L ${x} ${y + arm} L ${x - radius + arm} ${y + radius} L ${x - radius} ${y + radius - arm} L ${x - arm} ${y} Z`
+  }
+  if (symbol === 'star') {
+    return Array.from({ length: 10 }, (_, index) => {
+      const angle = -Math.PI / 2 + index * Math.PI / 5
+      const pointRadius = radius * (index % 2 ? 0.45 : 1)
+      return `${index ? 'L' : 'M'} ${x + Math.cos(angle) * pointRadius} ${y + Math.sin(angle) * pointRadius}`
+    }).join(' ') + ' Z'
+  }
+  return ''
 }
 
 function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
@@ -122,6 +151,28 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     }
   }
   const stackedSegmentFor = (seriesIndex: number) => combo ? stackedSegments.get(seriesIndex) : stacking?.segments[seriesIndex]
+  const axisScaleFraction = (value: number, minimum: number, maximum: number, axis: PptxChart['valueAxis']) => {
+    if (!axis?.logBase) return (value - minimum) / (maximum - minimum)
+    const positiveValue = value > 0 ? value : minimum
+    return (Math.log(positiveValue) - Math.log(minimum)) / (Math.log(maximum) - Math.log(minimum))
+  }
+  const axisMajorTickValues = (axis: PptxChart['valueAxis'], minimum: number, maximum: number) => {
+    if (!axis?.logBase) {
+      const unit = axis?.majorUnit
+      return unit
+        ? Array.from({length: Math.min(101, Math.floor((maximum - minimum) / unit + 1e-9) + 1)}, (_, index) => Number((minimum + index * unit).toPrecision(12)))
+        : Array.from({length: 5}, (_, index) => minimum + (maximum - minimum) * index / 4)
+    }
+    const logarithmBase = Math.log(axis.logBase)
+    const minimumExponent = Math.log(minimum) / logarithmBase
+    const maximumExponent = Math.log(maximum) / logarithmBase
+    const step = axis.majorUnit ?? 1
+    const firstExponent = Math.ceil((minimumExponent - 1e-9) / step) * step
+    const tickCount = Math.min(101, Math.floor((maximumExponent - firstExponent) / step + 1e-9) + 1)
+    const values = Array.from({length: Math.max(0, tickCount)}, (_, index) => axis.logBase! ** (firstExponent + index * step))
+      .filter(value => Number.isFinite(value) && value >= minimum * (1 - 1e-9) && value <= maximum * (1 + 1e-9))
+    return values.length ? values : [minimum, maximum]
+  }
   const axisBoundsForSeries = (series: PptxChart['series'][number]) => {
     const axis = axisEntryForSeries(series)?.axis || chart.valueAxis
     if (!combo && stacking) {
@@ -130,14 +181,15 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       return {axis, minimum, upper}
     }
     const values = axisValuesForId(series.valueAxisId || primaryAxisId)
-    const dataMin = values.length ? Math.min(0, ...values) : 0
-    const dataMax = values.length ? Math.max(0, ...values) : 1
+    const dataMin = values.length ? axis?.logBase ? Math.min(...values) : Math.min(0, ...values) : axis?.logBase ? 1 : 0
+    const dataMax = values.length ? Math.max(...values, dataMin) : axis?.logBase ? axis.logBase : 1
     const minimum = axis?.min ?? dataMin
-    return {axis, minimum, upper: axis?.max ?? (dataMax === minimum ? minimum + 1 : dataMax)}
+    const fallbackUpper = axis?.logBase ? minimum * axis.logBase : minimum + 1
+    return {axis, minimum, upper: axis?.max ?? (dataMax === minimum ? fallbackUpper : dataMax)}
   }
   const seriesValuePosition = (series: PptxChart['series'][number], value: number) => {
     const {axis, minimum: axisMinimum, upper: axisUpper} = axisBoundsForSeries(series)
-    const fraction = (value - axisMinimum) / (axisUpper - axisMinimum)
+    const fraction = axisScaleFraction(value, axisMinimum, axisUpper, axis)
     const axisFraction = axis?.reverse ? 1 - fraction : fraction
     return chart.direction === 'horizontal'
       ? plot.left + plot.width * axisFraction
@@ -153,23 +205,100 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   const xMinimum = chart.xAxis?.min ?? (xDataMin === xDataMax ? xDataMin - (Math.abs(xDataMin) * 0.05 || 0.5) : xDataMin)
   const xUpper = chart.xAxis?.max ?? (xDataMin === xDataMax ? xDataMax + (Math.abs(xDataMax) * 0.05 || 0.5) : xDataMax)
   const categoryCount = Math.max(chart.categories.length, 1)
+  const formatCategoryAxisLabel = (text: string) => {
+    if (!chart.categoryAxisNumberFormat || !text.trim()) return text
+    const value = Number(text)
+    return Number.isFinite(value) ? formatChartNumber(value, chart.categoryAxisNumberFormat, chart.date1904) : text
+  }
   const horizontalValueAxis = chart.direction === 'horizontal'
   const valueAxisSide = chart.valueAxis?.position ?? (horizontalValueAxis ? 'b' : 'l')
   const xAxisSide = chart.xAxis?.position ?? 'b'
   const categoryAxisSide = chart.categoryAxisPosition ?? (horizontalValueAxis ? 'l' : 'b')
   const valueTickLabelPosition = chart.valueAxis?.tickLabelPosition ?? 'nextTo'
   const categoryTickLabelPosition = chart.categoryAxisTickLabelPosition ?? 'nextTo'
+  const categoryAxisLabelStep = chart.categoryAxisTickLabelSkip ?? 1
+  const categoryAxisTickStep = chart.categoryAxisTickMarkSkip ?? 1
+  const showCategoryAxisLabel = (index: number) => index % categoryAxisLabelStep === 0
+  const showCategoryAxisTick = (index: number) => index % categoryAxisTickStep === 0
   const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
+  const dateValues = chart.dateAxis?.values
+  const dateMinimum = chart.dateAxis?.min ?? (dateValues?.length ? Math.min(...dateValues) : 0)
+  const dateMaximum = chart.dateAxis?.max ?? (dateValues?.length ? Math.max(...dateValues) : 1)
+  const hasDateAxisScale = dateValues?.length === categoryCount && dateMaximum > dateMinimum
+  const dateAxisMajorTickValues = hasDateAxisScale && chart.dateAxis?.majorUnit !== undefined && chart.dateAxis.majorTimeUnit
+    ? getChartDateAxisMajorTicks(dateMinimum, dateMaximum, chart.dateAxis.majorUnit, chart.dateAxis.majorTimeUnit, chart.date1904)
+    : undefined
+  const dateAxisMinorTickValues = hasDateAxisScale && chart.dateAxis?.minorUnit !== undefined && chart.dateAxis.minorTimeUnit
+    ? getChartDateAxisMajorTicks(dateMinimum, dateMaximum, chart.dateAxis.minorUnit, chart.dateAxis.minorTimeUnit, chart.date1904)
+    : undefined
+  const dateAxisFraction = (value: number) => {
+    const fraction = clamp((value - dateMinimum) / (dateMaximum - dateMinimum), 0, 1)
+    return chart.dateAxis?.reverse ? 1 - fraction : fraction
+  }
+  const categoryFraction = (index: number) => {
+    if (!hasDateAxisScale || dateValues?.[index] === undefined) return (index + 0.5) / categoryCount
+    return dateAxisFraction(dateValues[index]!)
+  }
+  const categoryX = (index: number) => plot.left + plot.width * categoryFraction(index)
+  const categoryY = (index: number) => plot.top + plot.height * categoryFraction(index)
+  const categoryBandSize = (index: number) => {
+    const dimension = horizontalValueAxis ? plot.height : plot.width
+    if (!hasDateAxisScale) return dimension / categoryCount
+    const current = categoryFraction(index)
+    const gaps = [
+      index > 0 ? Math.abs(current - categoryFraction(index - 1)) : undefined,
+      index + 1 < categoryCount ? Math.abs(categoryFraction(index + 1) - current) : undefined,
+    ].filter((gap): gap is number => gap !== undefined && gap > 0)
+    return Math.max(1, dimension * (gaps.length ? Math.min(...gaps) : 1 / categoryCount))
+  }
   const axisFraction = (value: number) => {
-    const fraction = (value - minimum) / (upper - minimum)
+    const fraction = axisScaleFraction(value, minimum, upper, chart.valueAxis)
     return chart.valueAxis?.reverse ? 1 - fraction : fraction
   }
   const xAxisFraction = (value: number) => {
-    const fraction = (value - xMinimum) / (xUpper - xMinimum)
+    const fraction = axisScaleFraction(value, xMinimum, xUpper, chart.xAxis)
     return chart.xAxis?.reverse ? 1 - fraction : fraction
   }
   const xPosition = (value: number) => plot.left + plot.width * xAxisFraction(value)
   const valuePosition = (value: number) => plot.top + plot.height * (1 - axisFraction(value))
+  const withoutMajorTickValues = (values: number[], minimum: number, maximum: number, majorValues: number[]) => values.filter(value =>
+    value > minimum + Number.EPSILON * Math.abs(minimum) && value < maximum - Number.EPSILON * Math.abs(maximum)
+      && !majorValues.some(major => Math.abs(value - major) <= 1e-9 * Math.max(Math.abs(value), Math.abs(major), 1e-300)),
+  )
+  const minorAxisTickValues = (majorValues: number[], minimum: number, maximum: number, minorUnit?: number, logBase?: number) => {
+    const values: number[] = []
+    if (logBase) {
+      const logarithmBase = Math.log(logBase)
+      const minimumExponent = Math.log(minimum) / logarithmBase
+      const maximumExponent = Math.log(maximum) / logarithmBase
+      if (minorUnit && Number.isFinite(minorUnit) && minorUnit > 0) {
+        const firstExponent = (Math.floor(minimumExponent / minorUnit + 1e-9) + 1) * minorUnit
+        const count = Math.min(512, Math.floor((maximumExponent - firstExponent) / minorUnit + 1e-9) + 1)
+        for (let index = 0; index < count; index++) values.push(logBase ** (firstExponent + index * minorUnit))
+      } else if (Number.isInteger(logBase) && logBase <= 16) {
+        for (let exponent = Math.floor(minimumExponent); exponent < maximumExponent && values.length < 512; exponent++) {
+          const decade = logBase ** exponent
+          for (let multiplier = 2; multiplier < logBase && values.length < 512; multiplier++) values.push(multiplier * decade)
+        }
+      } else {
+        for (let index = 1; index < majorValues.length && values.length < 512; index++) {
+          const start = majorValues[index - 1]!
+          const end = majorValues[index]!
+          for (let part = 1; part < 5 && values.length < 512; part++) values.push(Math.exp(Math.log(start) + (Math.log(end) - Math.log(start)) * part / 5))
+        }
+      }
+    } else if (minorUnit && Number.isFinite(minorUnit) && minorUnit > 0) {
+      const count = Math.min(512, Math.floor((maximum - minimum) / minorUnit + 1e-9))
+      for (let index = 1; index <= count; index++) values.push(Number((minimum + index * minorUnit).toPrecision(12)))
+    } else {
+      for (let index = 1; index < majorValues.length; index++) {
+        const start = majorValues[index - 1]!
+        const end = majorValues[index]!
+        for (let part = 1; part < 5; part++) values.push(start + (end - start) * part / 5)
+      }
+    }
+    return withoutMajorTickValues(values, minimum, maximum, majorValues)
+  }
   const categoryCrossingFraction = chart.categoryAxisCrossesAt !== undefined
     ? (clamp(chart.categoryAxisCrossesAt, 1, categoryCount) - 0.5) / categoryCount
     : chart.valueAxis?.crosses === 'min' ? 0 : chart.valueAxis?.crosses === 'max' ? 1 : undefined
@@ -190,16 +319,13 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     : horizontalValueAxis
       ? { x1: plot.left, y1: valueAxisLineCoordinate, x2: plot.left + plot.width, y2: valueAxisLineCoordinate }
       : { x1: valueAxisLineCoordinate, y1: plot.top, x2: valueAxisLineCoordinate, y2: plot.top + plot.height }
-  const unit = chart.valueAxis?.majorUnit
-  const tickValues = unit
-    ? Array.from({ length: Math.min(101, Math.floor((upper - minimum) / unit + 1e-9) + 1) }, (_, index) => Number((minimum + index * unit).toPrecision(12)))
-    : Array.from({ length: 5 }, (_, index) => minimum + (upper - minimum) * index / 4)
+  const tickValues = axisMajorTickValues(chart.valueAxis, minimum, upper)
   const ticks = tickValues.map(value => {
     const x = radar ? radarCenterX : plot.left + plot.width * axisFraction(value)
     const y = radar ? radarCenterY - radarRadiusY * axisFraction(value) : valuePosition(value)
     return {
       value,
-      label: formatChartNumber(value, chart.valueAxis?.numberFormat ?? (chart.grouping === 'percentStacked' ? '0%' : undefined)),
+      label: formatChartNumber(value, chart.valueAxis?.numberFormat ?? (chart.grouping === 'percentStacked' ? '0%' : undefined), chart.date1904),
       showLabel: valueTickLabelPosition !== 'none' && !chart.valueAxis?.deleted,
       x,
       y,
@@ -220,12 +346,9 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     const axisLine = horizontal
       ? {x1: plot.left, y1: lineCoordinate, x2: plot.left + plot.width, y2: lineCoordinate}
       : {x1: lineCoordinate, y1: plot.top, x2: lineCoordinate, y2: plot.top + plot.height}
-    const unit = axis.majorUnit
-    const axisTickValues = unit
-      ? Array.from({length: Math.min(101, Math.floor((upper - minimum) / unit + 1e-9) + 1)}, (_, index) => Number((minimum + index * unit).toPrecision(12)))
-      : Array.from({length: 5}, (_, index) => minimum + (upper - minimum) * index / 4)
+    const axisTickValues = axisMajorTickValues(axis, minimum, upper)
     const tickPosition = (value: number) => {
-      const fraction = (value - minimum) / (upper - minimum)
+      const fraction = axisScaleFraction(value, minimum, upper, axis)
       const normalized = axis.reverse ? 1 - fraction : fraction
       return horizontal ? plot.left + plot.width * normalized : plot.top + plot.height * (1 - normalized)
     }
@@ -234,7 +357,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       const position = tickPosition(value)
       return {
         value,
-        label: formatChartNumber(value, axis.numberFormat),
+        label: formatChartNumber(value, axis.numberFormat, chart.date1904),
         showLabel: !axis.deleted && labelPosition !== 'none',
         x: horizontal ? position : lineCoordinate,
         y: horizontal ? lineCoordinate : position,
@@ -243,18 +366,21 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         labelAnchor: horizontal ? 'middle' : side === 'l' ? 'end' : 'start',
       }
     })
-    return {id, horizontal, line: axisLine, ticks: axisTicks, majorGridlines: !!axis.majorGridlines, ...(axis.majorTickMark ? {majorTickMark: axis.majorTickMark} : {}), ...(axis.deleted ? {deleted: true} : {})}
+    const minorTicks = axis.minorTickMark && axis.minorTickMark !== 'none'
+      ? minorAxisTickValues(axisTickValues, minimum, upper, axis.minorUnit, axis.logBase).map(value => {
+          const position = tickPosition(value)
+          return {x: horizontal ? position : lineCoordinate, y: horizontal ? lineCoordinate : position}
+        })
+      : []
+    return {id, horizontal, line: axisLine, ticks: axisTicks, minorTicks, majorGridlines: !!axis.majorGridlines, ...(axis.majorTickMark ? {majorTickMark: axis.majorTickMark} : {}), ...(axis.minorTickMark ? {minorTickMark: axis.minorTickMark} : {}), ...(axis.deleted ? {deleted: true} : {})}
   })
-  const xUnit = chart.xAxis?.majorUnit
-  const xTickValues = xUnit
-    ? Array.from({ length: Math.min(101, Math.floor((xUpper - xMinimum) / xUnit + 1e-9) + 1) }, (_, index) => Number((xMinimum + index * xUnit).toPrecision(12)))
-    : Array.from({ length: 5 }, (_, index) => xMinimum + (xUpper - xMinimum) * index / 4)
+  const xTickValues = axisMajorTickValues(chart.xAxis, xMinimum, xUpper)
   const xTickLabelPosition = chart.xAxis?.tickLabelPosition ?? 'nextTo'
   const xTicks = xyChart ? xTickValues.map(value => {
     const x = xPosition(value)
     return {
       value,
-      label: formatChartNumber(value, chart.xAxis?.numberFormat),
+      label: formatChartNumber(value, chart.xAxis?.numberFormat, chart.date1904),
       showLabel: xTickLabelPosition !== 'none' && !chart.xAxis?.deleted,
       x,
       y: xyXAxisCrossingY,
@@ -268,13 +394,16 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   const axisTicks: ChartVisual['axisTicks'] = []
   const radarGrid: ChartVisual['radarGrid'] = []
   const radarSpokes: ChartVisual['radarSpokes'] = []
-  const addAxisTick = (axis: 'category' | 'value' | 'valueSecondary' | 'xValue', mark: PptxChartTickMark | undefined, x: number, y: number, horizontal: boolean, inwardDirection: number, axisId?: string) => {
+  const categoryGridlines: ChartVisual['categoryGridlines'] = []
+  const addAxisTick = (axis: 'category' | 'value' | 'valueSecondary' | 'xValue', mark: PptxChartTickMark | undefined, x: number, y: number, horizontal: boolean, inwardDirection: number, axisId?: string, minor = false) => {
     if (!mark || mark === 'none') return
-    const start = mark === 'cross' ? -5 : 0
-    const end = mark === 'cross' ? 5 : mark === 'in' ? 5 : -5
+    const length = minor ? 3 : 5
+    const start = mark === 'cross' ? -length : 0
+    const end = mark === 'cross' ? length : mark === 'in' ? length : -length
     axisTicks.push({
       axis,
       ...(axisId ? {axisId} : {}),
+      ...(minor ? {minor: true} : {}),
       x1: horizontal ? x + start * inwardDirection : x,
       y1: horizontal ? y : y + start * inwardDirection,
       x2: horizontal ? x + end * inwardDirection : x,
@@ -285,10 +414,21 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   if (!chart.valueAxis?.deleted) {
     if (radar) for (const tick of ticks) addAxisTick('value', chart.valueAxis?.majorTickMark, radarCenterX, tick.y, true, 1)
     else for (const tick of ticks) addAxisTick('value', chart.valueAxis?.majorTickMark, horizontalValueAxis ? tick.x : valueAxisLineCoordinate, horizontalValueAxis ? valueAxisLineCoordinate : tick.y, !horizontalValueAxis, valueTickInwardDirection)
+    if (chart.valueAxis?.minorTickMark && chart.valueAxis.minorTickMark !== 'none') {
+      for (const value of minorAxisTickValues(tickValues, minimum, upper, chart.valueAxis.minorUnit, chart.valueAxis.logBase)) {
+        const x = radar ? radarCenterX : plot.left + plot.width * axisFraction(value)
+        const y = radar ? radarCenterY - radarRadiusY * axisFraction(value) : valuePosition(value)
+        if (radar) addAxisTick('value', chart.valueAxis.minorTickMark, radarCenterX, y, true, 1, undefined, true)
+        else addAxisTick('value', chart.valueAxis.minorTickMark, horizontalValueAxis ? x : valueAxisLineCoordinate, horizontalValueAxis ? valueAxisLineCoordinate : y, !horizontalValueAxis, valueTickInwardDirection, undefined, true)
+      }
+    }
   }
   if (xyChart && !chart.xAxis?.deleted) {
     const inwardDirection = xAxisSide === 't' ? 1 : -1
     for (const tick of xTicks) addAxisTick('xValue', chart.xAxis?.majorTickMark, tick.x, tick.y, true, inwardDirection)
+    if (chart.xAxis?.minorTickMark && chart.xAxis.minorTickMark !== 'none') {
+      for (const value of minorAxisTickValues(xTickValues, xMinimum, xUpper, chart.xAxis.minorUnit, chart.xAxis.logBase)) addAxisTick('xValue', chart.xAxis.minorTickMark, xPosition(value), xyXAxisCrossingY, true, inwardDirection, undefined, true)
+    }
   }
   for (const axis of secondaryValueAxes) {
     if (axis.deleted) continue
@@ -296,19 +436,63 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       ? axis.line.y1 === plot.top ? 1 : -1
       : axis.line.x1 === plot.left ? 1 : -1
     for (const tick of axis.ticks) addAxisTick('valueSecondary', axis.majorTickMark, tick.x, tick.y, !axis.horizontal, inwardDirection, axis.id)
+    for (const tick of axis.minorTicks) addAxisTick('valueSecondary', axis.minorTickMark, tick.x, tick.y, !axis.horizontal, inwardDirection, axis.id, true)
   }
   const categoryTickInwardDirection = horizontalValueAxis ? categoryAxisSide === 'l' ? 1 : -1 : categoryAxisSide === 't' ? 1 : -1
   if (!xyChart && !chart.categoryAxisDeleted && chart.categoryAxisMajorTickMark && chart.categoryAxisMajorTickMark !== 'none') {
     if (radar) chart.categories.forEach((_category, index) => {
+      if (!showCategoryAxisTick(index)) return
       const point = radarPoint(index)
       const start = chart.categoryAxisMajorTickMark === 'cross' ? -5 : chart.categoryAxisMajorTickMark === 'in' ? -5 : 0
       const end = chart.categoryAxisMajorTickMark === 'cross' ? 5 : chart.categoryAxisMajorTickMark === 'in' ? 0 : 5
       axisTicks.push({axis: 'category', x1: point.x + Math.cos(point.angle) * start, y1: point.y + Math.sin(point.angle) * start, x2: point.x + Math.cos(point.angle) * end, y2: point.y + Math.sin(point.angle) * end})
     })
-    else for (let index = 0; index < categoryCount; index++) {
-      const centerX = plot.left + plot.width * (index + 0.5) / categoryCount
-      const centerY = plot.top + plot.height * (index + 0.5) / categoryCount
+    else for (let index = 0; index < (dateAxisMajorTickValues?.length ?? categoryCount); index++) {
+      if (!showCategoryAxisTick(index)) continue
+      const fraction = dateAxisMajorTickValues ? dateAxisFraction(dateAxisMajorTickValues[index]!) : undefined
+      const centerX = fraction === undefined ? categoryX(index) : plot.left + plot.width * fraction
+      const centerY = fraction === undefined ? categoryY(index) : plot.top + plot.height * fraction
       addAxisTick('category', chart.categoryAxisMajorTickMark, horizontalValueAxis ? categoryAxisCrossingCoordinate : centerX, horizontalValueAxis ? centerY : categoryAxisCrossingCoordinate, horizontalValueAxis, categoryTickInwardDirection)
+    }
+  }
+  if (!xyChart && !chart.categoryAxisDeleted && chart.categoryAxisMinorTickMark && chart.categoryAxisMinorTickMark !== 'none') {
+    if (radar) chart.categories.forEach((_category, index) => {
+      const current = radarPoint(index)
+      const angle = current.angle + Math.PI / chart.categories.length
+      const x = radarCenterX + Math.cos(angle) * radarRadiusX
+      const y = radarCenterY + Math.sin(angle) * radarRadiusY
+      const start = chart.categoryAxisMinorTickMark === 'cross' ? -3 : chart.categoryAxisMinorTickMark === 'in' ? -3 : 0
+      const end = chart.categoryAxisMinorTickMark === 'cross' ? 3 : chart.categoryAxisMinorTickMark === 'in' ? 0 : 3
+      axisTicks.push({axis: 'category', minor: true, x1: x + Math.cos(angle) * start, y1: y + Math.sin(angle) * start, x2: x + Math.cos(angle) * end, y2: y + Math.sin(angle) * end})
+    })
+    else if (hasDateAxisScale) {
+      const values = dateAxisMinorTickValues
+        ? withoutMajorTickValues(dateAxisMinorTickValues, dateMinimum, dateMaximum, dateAxisMajorTickValues || [])
+        : minorAxisTickValues(dateAxisMajorTickValues || dateValues || [], dateMinimum, dateMaximum)
+      for (const value of values) {
+        const fraction = dateAxisFraction(value)
+        addAxisTick('category', chart.categoryAxisMinorTickMark, horizontalValueAxis ? categoryAxisCrossingCoordinate : plot.left + plot.width * fraction, horizontalValueAxis ? plot.top + plot.height * fraction : categoryAxisCrossingCoordinate, horizontalValueAxis, categoryTickInwardDirection, undefined, true)
+      }
+    } else {
+      for (let index = 0; index < categoryCount - 1; index++) {
+        const centerX = (categoryX(index) + categoryX(index + 1)) / 2
+        const centerY = (categoryY(index) + categoryY(index + 1)) / 2
+        addAxisTick('category', chart.categoryAxisMinorTickMark, horizontalValueAxis ? categoryAxisCrossingCoordinate : centerX, horizontalValueAxis ? centerY : categoryAxisCrossingCoordinate, horizontalValueAxis, categoryTickInwardDirection, undefined, true)
+      }
+    }
+  }
+  if (!xyChart && !radar && !chart.categoryAxisDeleted && chart.categoryAxisMajorGridlines) {
+    const positions = dateAxisMajorTickValues
+      ? dateAxisMajorTickValues.map(value => dateAxisFraction(value))
+      : Array.from({ length: categoryCount }, (_, index) => categoryFraction(index))
+    for (const fraction of positions) {
+      if (horizontalValueAxis) {
+        const y = plot.top + plot.height * fraction
+        categoryGridlines.push({ x1: plot.left, y1: y, x2: plot.left + plot.width, y2: y })
+      } else {
+        const x = plot.left + plot.width * fraction
+        categoryGridlines.push({ x1: x, y1: plot.top, x2: x, y2: plot.top + plot.height })
+      }
     }
   }
   const categories: ChartVisual['categories'] = []
@@ -341,8 +525,8 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         continue
       }
       const stackedSegment = stackedSegmentFor(seriesIndex)?.[index]
-      const centerX = plot.left + plot.width * (index + 0.5) / categoryCount
-      const centerY = plot.top + plot.height * (index + 0.5) / categoryCount
+      const centerX = categoryX(index)
+      const centerY = categoryY(index)
       upperPoints.push(horizontalValueAxis
         ? {x: seriesValuePosition(series, stackedSegment?.end ?? value), y: centerY}
         : {x: centerX, y: seriesValuePosition(series, stackedSegment?.end ?? value)})
@@ -352,11 +536,17 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     }
     flushArea()
   })
-  const formatValue = (value: number, series: PptxChart['series'][number], index: number) => formatChartNumber(value, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat)
+  const formatValue = (value: number, series: PptxChart['series'][number], index: number) => formatChartNumber(value, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat, chart.date1904)
   const labelPosition = (series: PptxChart['series'][number], index: number, fallback: PptxChartDataLabelPosition) => series.dataLabelPositionOverrides[index] ?? series.dataLabelPosition ?? chart.dataLabelPosition ?? fallback
-  const pushDataLabel = (text: string, x: number, y: number, anchor: string) => dataLabels.push({ text, lines: text.split(/\r?\n/), x, y, anchor })
+  const pushDataLabel = (text: string, x: number, y: number, anchor: string, series: PptxChart['series'][number], index: number) => {
+    const style = {...series.dataLabelStyle, ...series.dataLabelStyleOverrides[index]}
+    const lines = text.split(/\r?\n/)
+    const showLegendKey = series.legendKeyOverrides[index] ?? series.showLegendKey
+    dataLabels.push({ text, lines, x, y, anchor, ...(showLegendKey ? {legendKey: {color: series.pointColors[index] || series.color}} : {}), ...(Object.keys(style).length ? {style} : {}) })
+  }
   const formatDataLabel = (series: PptxChart['series'][number], index: number, value: number, category: string, total?: number, bubbleSize?: number) => {
     const showValue = series.valueLabelOverrides[index] ?? series.showValueLabels
+    const showLegendKey = series.legendKeyOverrides[index] ?? series.showLegendKey
     const showCategory = series.categoryNameLabelOverrides[index] ?? series.showCategoryNameLabels
     const showSeries = series.seriesNameLabelOverrides[index] ?? series.showSeriesNameLabels
     const isPieLike = chart.type === 'pie' || chart.type === 'doughnut'
@@ -366,10 +556,10 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       showValue ? formatValue(value, series, index) : undefined,
       showCategory ? category : undefined,
       showSeries ? series.name : undefined,
-      showPercent && total ? formatChartNumber(value / total, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat ?? '0.0%') : undefined,
+      showPercent && total ? formatChartNumber(value / total, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat ?? '0.0%', chart.date1904) : undefined,
       showBubbleSize ? formatValue(bubbleSize, series, index) : undefined,
     ].filter((part): part is string => part !== undefined)
-    if (!parts.length) return undefined
+    if (!parts.length) return showLegendKey ? '' : undefined
     const defaultSeparator = isPieLike && !showValue && showCategory && !showSeries && showPercent ? '\n' : ','
     return parts.join(series.labelSeparatorOverrides[index] ?? series.labelSeparator ?? chart.labelSeparator ?? defaultSeparator)
   }
@@ -381,16 +571,17 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     const highLowSegments: string[] = []
     const dropSegments: string[] = []
     const priceIndices = [stock.openIndex, stock.highIndex, stock.lowIndex, stock.closeIndex].filter((index): index is number => index !== undefined)
-    const bodyWidth = plot.width / categoryCount * 100 / (100 + stock.gapWidth)
+    const bodyWidthFactor = 100 / (100 + stock.gapWidth)
     const volumeSeries = stock.volumeGapWidth === undefined || stock.volumeIndex === undefined ? undefined : chart.series[stock.volumeIndex]
     if (volumeSeries) {
       const {minimum: volumeMinimum, upper: volumeUpper} = axisBoundsForSeries(volumeSeries)
       const zeroY = seriesValuePosition(volumeSeries, clamp(0, volumeMinimum, volumeUpper))
-      const volumeWidth = plot.width / categoryCount * 100 / (100 + (stock.volumeGapWidth ?? 150))
+      const volumeWidthFactor = 100 / (100 + (stock.volumeGapWidth ?? 150))
       for (let index = 0; index < chart.categories.length; index++) {
         const value = volumeSeries.values[index]
         if (value == null) continue
-        const x = plot.left + plot.width * (index + 0.5) / categoryCount
+        const x = categoryX(index)
+        const volumeWidth = categoryBandSize(index) * volumeWidthFactor
         const valueY = seriesValuePosition(volumeSeries, value)
         const top = Math.min(zeroY, valueY)
         const bottom = Math.max(zeroY, valueY)
@@ -407,7 +598,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           else if (position === 'b') labelY = bottom + 20
           else if (position === 'l') { labelX -= volumeWidth / 2 + 8; labelY = (zeroY + valueY) / 2 + 6; anchor = 'end' }
           else if (position === 'r') { labelX += volumeWidth / 2 + 8; labelY = (zeroY + valueY) / 2 + 6; anchor = 'start' }
-          pushDataLabel(label, labelX, labelY, anchor)
+          pushDataLabel(label, labelX, labelY, anchor, volumeSeries, index)
         }
       }
     }
@@ -417,7 +608,8 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       const closeValue = closeSeries?.values[index]
       const openValue = openSeries?.values[index]
       if (highValue == null || lowValue == null || closeValue == null || (openSeries && openValue == null)) continue
-      const x = plot.left + plot.width * (index + 0.5) / categoryCount
+      const x = categoryX(index)
+      const bodyWidth = categoryBandSize(index) * bodyWidthFactor
       const highY = valuePosition(Math.max(highValue, lowValue))
       const lowY = valuePosition(Math.min(highValue, lowValue))
       const closeY = valuePosition(closeValue)
@@ -438,7 +630,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         const position = labelPosition(closeSeries!, index, 'r')
         const labelX = position === 'l' ? x - 10 : position === 'r' ? x + 10 : x
         const labelY = position === 't' ? closeY - 12 : position === 'b' ? closeY + 20 : closeY + 5
-        pushDataLabel(label, labelX, labelY, position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle')
+        pushDataLabel(label, labelX, labelY, position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle', closeSeries!, index)
       }
     }
     if (highLowSegments.length) lines.push({d: highLowSegments.join(' '), color: stock.highLowColor, width: 2})
@@ -449,7 +641,9 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         : categoryTickLabelPosition === 'low'
           ? chart.valueAxis?.reverse ? plot.top - 10 : plot.top + plot.height + 25
           : categoryAxisSide === 't' ? categoryAxisCrossingCoordinate - 10 : categoryAxisCrossingCoordinate + 25
-      chart.categories.forEach((text, index) => categories.push({text, x: plot.left + plot.width * (index + 0.5) / categoryCount, y: categoryLabelY, anchor: 'middle'}))
+      chart.categories.forEach((text, index) => {
+        if (showCategoryAxisLabel(index)) categories.push({text: formatCategoryAxisLabel(text), x: categoryX(index), y: categoryLabelY, anchor: 'middle'})
+      })
     }
     for (const index of [...(volumeSeries && stock.volumeIndex !== undefined ? [stock.volumeIndex] : []), ...priceIndices]) {
       const series = chart.series[index]
@@ -473,7 +667,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           flushArea()
           continue
         }
-        const x = plot.left + plot.width * (index + 0.5) / categoryCount
+        const x = categoryX(index)
         const segment = stacking?.segments[seriesIndex]?.[index]
         const upperValue = stacking ? segment?.end ?? value : value
         const lowerValue = stacking ? segment?.start ?? 0 : categoryAxisCrossingValue
@@ -489,7 +683,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
               : position === 'inEnd' ? upperY + 18
                 : position === 'b' ? Math.max(upperY, lowerY) + 20
                   : Math.min(upperY, lowerY) - 8
-          pushDataLabel(label, x, labelY, 'middle')
+          pushDataLabel(label, x, labelY, 'middle', series, index)
         }
       }
       flushArea()
@@ -520,7 +714,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           const labelType = labelPosition(series, index, 'r')
           const labelX = labelType === 'l' ? x - radius - 4 : labelType === 'r' ? x + radius + 4 : x
           const labelY = labelType === 't' ? y - radius - 4 : labelType === 'b' ? y + radius + 18 : y + 5
-          pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle')
+          pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle', series, index)
         }
       }
       if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, color: series.color })
@@ -543,13 +737,21 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           path += `${segmentOpen ? ' L' : ' M'} ${x} ${y}`
           segmentOpen = true
         }
-        if (series.scatterShowMarker) markers.push({ x, y, color: series.color })
+        const pointMarkerSymbol = series.markerSymbolOverrides?.[index] ?? series.markerSymbol
+        const showMarker = pointMarkerSymbol === undefined ? series.scatterShowMarker : pointMarkerSymbol !== 'none'
+        if (showMarker) markers.push({
+          x,
+          y,
+          color: series.color,
+          symbol: pointMarkerSymbol ?? 'circle',
+          radius: series.markerSizeOverrides?.[index] ?? series.markerSize,
+        })
         const label = formatDataLabel(series, index, yValue, String(xValue))
         if (label !== undefined) {
           const labelType = labelPosition(series, index, 'r')
           const labelX = labelType === 'l' ? x - 10 : labelType === 'r' ? x + 10 : x
           const labelY = labelType === 't' ? y - 12 : labelType === 'b' ? y + 24 : y + 5
-          pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle')
+          pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle', series, index)
         }
       }
       if (path) lines.push({ d: path, color: series.color })
@@ -605,7 +807,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           const x = position === 'l' ? centerX - radius * 0.75 : position === 'r' ? centerX + radius * 0.75 : centerX + Math.cos(labelAngle) * labelRadius
           const y = position === 't' ? centerY - radius * 0.78 : position === 'b' ? centerY + radius * 0.78 : centerY + Math.sin(labelAngle) * labelRadius + 6
           const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
-          pushDataLabel(label, x, y, anchor)
+          pushDataLabel(label, x, y, anchor, series, point.index)
         }
         angle = endAngle
       }
@@ -624,16 +826,18 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     }
     if (!chart.categoryAxisDeleted && chart.categoryAxisMajorGridlines) {
       chart.categories.forEach((_category, index) => {
+        if (!showCategoryAxisTick(index)) return
         const point = radarPoint(index)
         radarSpokes.push({ x1: radarCenterX, y1: radarCenterY, x2: point.x, y2: point.y })
       })
     }
     if (!chart.categoryAxisDeleted && categoryTickLabelPosition !== 'none') {
       chart.categories.forEach((text, index) => {
+        if (!showCategoryAxisLabel(index)) return
         const point = radarPoint(index, 1, 22)
         const horizontal = Math.cos(point.angle)
         categories.push({
-          text,
+          text: formatCategoryAxisLabel(text),
           x: point.x,
           y: point.y + (Math.sin(point.angle) > 0.55 ? 16 : Math.sin(point.angle) < -0.55 ? -8 : 5),
           anchor: horizontal > 0.25 ? 'start' : horizontal < -0.25 ? 'end' : 'middle',
@@ -664,7 +868,15 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       }
       points.forEach((point, index) => {
         if (!point) return
-        if (series.radarShowMarker) markers.push({ x: point.x, y: point.y, color: series.color, radius: series.radarMarkerSize ?? 5 })
+        const pointMarkerSymbol = series.markerSymbolOverrides?.[index] ?? series.markerSymbol
+        const showMarker = pointMarkerSymbol === undefined ? series.radarShowMarker : pointMarkerSymbol !== 'none'
+        if (showMarker) markers.push({
+          x: point.x,
+          y: point.y,
+          color: series.color,
+          symbol: pointMarkerSymbol ?? 'circle',
+          radius: series.markerSizeOverrides?.[index] ?? series.markerSize ?? series.radarMarkerSize ?? 5,
+        })
         const value = series.values[index]
         if (value == null) return
         const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
@@ -674,7 +886,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         const x = position === 'l' ? point.x - 12 : position === 'r' ? point.x + 12 : point.x + Math.cos(point.angle) * offset
         const y = position === 't' ? point.y - 14 : position === 'b' ? point.y + 22 : point.y + Math.sin(point.angle) * offset + 6
         const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : Math.cos(point.angle) > 0.25 ? 'start' : Math.cos(point.angle) < -0.25 ? 'end' : 'middle'
-        pushDataLabel(label, x, y, anchor)
+        pushDataLabel(label, x, y, anchor, series, index)
       })
       if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + legend.length * 220, y: 530, color: series.color })
     })
@@ -686,8 +898,8 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       barSeriesByGroup.set(groupIndex, [...(barSeriesByGroup.get(groupIndex) || []), seriesIndex])
     })
     for (let index = 0; index < categoryCount; index++) {
-      const centerX = plot.left + plot.width * (index + 0.5) / categoryCount
-      const centerY = plot.top + plot.height * (index + 0.5) / categoryCount
+      const centerX = categoryX(index)
+      const centerY = categoryY(index)
       if (!chart.categoryAxisDeleted && categoryTickLabelPosition !== 'none') {
         const categoryLabel = categoryTickLabelPosition === 'high'
           ? horizontalValueAxis
@@ -704,7 +916,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
                 : categoryAxisSide === 't'
                   ? { x: centerX, y: categoryAxisCrossingCoordinate - 10, anchor: 'middle' }
                   : { x: centerX, y: categoryAxisCrossingCoordinate + 25, anchor: 'middle' }
-        categories.push({ text: chart.categories[index] || '', ...categoryLabel })
+        if (showCategoryAxisLabel(index)) categories.push({ text: formatCategoryAxisLabel(chart.categories[index] || ''), ...categoryLabel })
       }
       chart.series.forEach((series, seriesIndex) => {
         const value = series.values[index]
@@ -720,17 +932,25 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           const previousValue = index > 0 ? series.values[index - 1] : null
           const previousStackedSegment = stackedSegmentFor(seriesIndex)?.[index - 1]
           const previous = previousValue == null ? undefined : horizontalValueAxis
-            ? {x: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue), y: plot.top + plot.height * (index - 0.5) / categoryCount}
-            : {x: plot.left + plot.width * (index - 0.5) / categoryCount, y: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue)}
+            ? {x: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue), y: categoryY(index - 1)}
+            : {x: categoryX(index - 1), y: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue)}
           if (series.lineShowLine !== false) lines.push({ d: previous ? `M ${previous.x} ${previous.y} L ${x} ${y}` : `M ${x} ${y}`, color })
-          if (series.lineShowMarker !== false) markers.push({ x, y, color })
+          const pointMarkerSymbol = series.markerSymbolOverrides?.[index] ?? series.markerSymbol
+          const showMarker = pointMarkerSymbol === undefined ? series.lineShowMarker !== false : pointMarkerSymbol !== 'none'
+          if (showMarker) markers.push({
+            x,
+            y,
+            color,
+            symbol: pointMarkerSymbol ?? 'circle',
+            radius: series.markerSizeOverrides?.[index] ?? series.markerSize,
+          })
           const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
           if (label !== undefined) {
             const position = labelPosition(series, index, 't')
             const labelX = position === 'l' ? x - 10 : position === 'r' ? x + 10 : x
             const labelY = position === 'b' ? y + 24 : position === 'ctr' || position === 'inBase' || position === 'inEnd' ? y + 7 : y - 12
             const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
-            pushDataLabel(label, labelX, labelY, anchor)
+            pushDataLabel(label, labelX, labelY, anchor, series, index)
           }
         } else if (kind === 'area') {
           const x = horizontalValueAxis ? seriesValuePosition(series, stackedSegment?.end ?? value) : centerX
@@ -741,14 +961,14 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
             const labelX = position === 'l' ? x - 10 : position === 'r' ? x + 10 : x
             const labelY = position === 'b' ? y + 24 : position === 'ctr' || position === 'inBase' || position === 'inEnd' ? y + 7 : y - 12
             const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
-            pushDataLabel(label, labelX, labelY, anchor)
+            pushDataLabel(label, labelX, labelY, anchor, series, index)
           }
         } else if (chart.direction === 'horizontal') {
           const groupIndexes = barSeriesByGroup.get(series.chartGroupIndex ?? 0) || [seriesIndex]
           const barOrdinal = groupIndexes.indexOf(seriesIndex)
           const seriesCount = Math.max(groupIndexes.length, 1)
           const {minimum: axisMinimum, upper: axisUpper} = axisBoundsForSeries(series)
-          const groupHeight = plot.height / categoryCount * 0.72
+          const groupHeight = categoryBandSize(index) * 0.72
           const barHeight = groupHeight / (isStacked ? 1 : seriesCount)
           const barY = centerY - groupHeight / 2 + (isStacked ? 0 : barOrdinal * barHeight)
           const zeroX = seriesValuePosition(series, Math.max(axisMinimum, Math.min(axisUpper, 0)))
@@ -771,14 +991,14 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
             else if (position === 'r') { labelX = right + 8; anchor = 'start' }
             else if (position === 't') { labelX = (zeroX + valueX) / 2; labelY = barY - 8; anchor = 'middle' }
             else if (position === 'b') { labelX = (zeroX + valueX) / 2; labelY = barY + barHeight + 15; anchor = 'middle' }
-            pushDataLabel(label, labelX, labelY, anchor)
+            pushDataLabel(label, labelX, labelY, anchor, series, index)
           }
         } else {
           const groupIndexes = barSeriesByGroup.get(series.chartGroupIndex ?? 0) || [seriesIndex]
           const barOrdinal = groupIndexes.indexOf(seriesIndex)
           const seriesCount = Math.max(groupIndexes.length, 1)
           const {minimum: axisMinimum, upper: axisUpper} = axisBoundsForSeries(series)
-          const groupWidth = plot.width / categoryCount * 0.72
+          const groupWidth = categoryBandSize(index) * 0.72
           const barWidth = groupWidth / (isStacked ? 1 : seriesCount)
           const zeroY = seriesValuePosition(series, Math.max(axisMinimum, Math.min(axisUpper, 0)))
           const baseY = isStacked ? seriesValuePosition(series, stackedSegment?.start ?? 0) : zeroY
@@ -799,7 +1019,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
             else if (position === 'b') labelY = bottom + 20
             else if (position === 'l') { labelX = barX - 8; labelY = (baseY + valueY) / 2 + 6; anchor = 'end' }
             else if (position === 'r') { labelX = barX + barWidth * 0.86 + 8; labelY = (baseY + valueY) / 2 + 6; anchor = 'start' }
-            pushDataLabel(label, labelX, labelY, anchor)
+            pushDataLabel(label, labelX, labelY, anchor, series, index)
           }
         }
       })
@@ -849,7 +1069,18 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     : horizontalValueAxis
       ? { x1: categoryAxisCrossingCoordinate, y1: plot.top, x2: categoryAxisCrossingCoordinate, y2: plot.top + plot.height }
       : { x1: plot.left, y1: categoryAxisCrossingCoordinate, x2: plot.left + plot.width, y2: categoryAxisCrossingCoordinate }
-  return { plot, ticks, xTicks, axisTicks, secondaryValueAxes, radarGrid, radarSpokes, categories, bars, areas, lines, markers, slices, legend, ...(legendClip ? { legendClip } : {}), dataLabels, baseline, valueAxisLine: radar ? undefined : valueAxisLine }
+  if (dateAxisMajorTickValues?.length && categories.length && hasDateAxisScale) {
+    const firstLabel = categories[0]!
+    categories.splice(0, categories.length, ...dateAxisMajorTickValues.map(value => {
+      const fraction = dateAxisFraction(value)
+      return {
+        ...firstLabel,
+        text: formatCategoryAxisLabel(String(value)),
+        ...(horizontalValueAxis ? { y: plot.top + plot.height * fraction } : { x: plot.left + plot.width * fraction }),
+      }
+    }))
+  }
+  return { plot, ticks, xTicks, axisTicks, secondaryValueAxes, radarGrid, radarSpokes, categoryGridlines, categories, bars, areas, lines, markers, slices, legend, ...(legendClip ? { legendClip } : {}), dataLabels, baseline, valueAxisLine: radar ? undefined : valueAxisLine }
 }
 
 const props = withDefaults(defineProps<{
@@ -865,14 +1096,16 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'trigger-playback': [playback: PptxTriggerPlayback[]]
   'activate-hyperlink': [hyperlink: PptxHyperlink]
+  'stop-all-audio': []
 }>()
 
 const backgroundImageSize = ref<{ sourceUrl: string; url: string; width: number; height: number; repeatX: number; repeatY: number }>()
 const backgroundTileWarning = ref('')
-watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundImage?.tile), props.slide.backgroundImage?.tile?.flip || 'none'] as const, ([url, tiled, flip], _oldValue, onCleanup) => {
+watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundImage?.tile), props.slide.backgroundImage?.tile?.flip || 'none', props.slide.backgroundImage?.crop.left, props.slide.backgroundImage?.crop.top, props.slide.backgroundImage?.crop.right, props.slide.backgroundImage?.crop.bottom] as const, ([url, tiled, flip], _oldValue, onCleanup) => {
   backgroundImageSize.value = undefined
   backgroundTileWarning.value = ''
   if (!import.meta.client || !url || !tiled) return
+  const crop = props.slide.backgroundImage?.crop ?? {left: 0, top: 0, right: 0, bottom: 0}
   const probe = new Image()
   let current = true
   let generatedUrl: string | undefined
@@ -891,42 +1124,58 @@ watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundIma
     const height = probe.naturalHeight
     const flipX = flip === 'x' || flip === 'xy'
     const flipY = flip === 'y' || flip === 'xy'
-    const imageSize = { sourceUrl: url, url, width, height, repeatX: flipX ? 2 : 1, repeatY: flipY ? 2 : 1 }
-    if (!flipX && !flipY) {
+    const hasCrop = Object.values(crop).some(value => value !== 0)
+    const sourceLeft = width * crop.left / 100_000
+    const sourceTop = height * crop.top / 100_000
+    const sourceWidth = width - sourceLeft - width * crop.right / 100_000
+    const sourceHeight = height - sourceTop - height * crop.bottom / 100_000
+    const tileWidth = Math.max(1, Math.round(sourceWidth))
+    const tileHeight = Math.max(1, Math.round(sourceHeight))
+    const imageSize = { sourceUrl: url, url, width: tileWidth, height: tileHeight, repeatX: flipX ? 2 : 1, repeatY: flipY ? 2 : 1 }
+    const originalImageSize = { sourceUrl: url, url, width, height, repeatX: 1, repeatY: 1 }
+    if (!hasCrop && !flipX && !flipY) {
       backgroundImageSize.value = imageSize
       return
     }
     // ponytail: cap synthesized flip patterns at 16 MP; downsample if real decks hit this ceiling.
-    if (width * imageSize.repeatX > 32_767 || height * imageSize.repeatY > 32_767 || width * height * imageSize.repeatX * imageSize.repeatY > 16_777_216) {
-      backgroundTileWarning.value = 'The tiled background flip exceeds the local canvas limit; the unflipped image is used.'
-      backgroundImageSize.value = { ...imageSize, repeatX: 1, repeatY: 1 }
+    const patternWidth = tileWidth * imageSize.repeatX
+    const patternHeight = tileHeight * imageSize.repeatY
+    if (patternWidth > 32_767 || patternHeight > 32_767 || patternWidth * patternHeight > 16_777_216) {
+      backgroundTileWarning.value = hasCrop
+        ? 'The tiled background crop exceeds the local canvas limit; the original image is used.'
+        : 'The tiled background flip exceeds the local canvas limit; the unflipped image is used.'
+      backgroundImageSize.value = originalImageSize
       return
     }
     const canvas = document.createElement('canvas')
-    canvas.width = width * imageSize.repeatX
-    canvas.height = height * imageSize.repeatY
+    canvas.width = patternWidth
+    canvas.height = patternHeight
     const context = canvas.getContext('2d')
     if (!context) {
-      backgroundTileWarning.value = 'The browser could not render the tiled background flip; the unflipped image is used.'
-      backgroundImageSize.value = { ...imageSize, repeatX: 1, repeatY: 1 }
+      backgroundTileWarning.value = hasCrop
+        ? 'The browser could not render the tiled background crop; the original image is used.'
+        : 'The browser could not render the tiled background flip; the unflipped image is used.'
+      backgroundImageSize.value = originalImageSize
       return
     }
     const drawTile = (x: number, y: number, mirrorX: boolean, mirrorY: boolean) => {
       context.save()
-      context.translate(x + (mirrorX ? width : 0), y + (mirrorY ? height : 0))
+      context.translate(x + (mirrorX ? tileWidth : 0), y + (mirrorY ? tileHeight : 0))
       context.scale(mirrorX ? -1 : 1, mirrorY ? -1 : 1)
-      context.drawImage(probe, 0, 0, width, height)
+      context.drawImage(probe, sourceLeft, sourceTop, sourceWidth, sourceHeight, 0, 0, tileWidth, tileHeight)
       context.restore()
     }
     drawTile(0, 0, false, false)
-    if (flipX) drawTile(width, 0, true, false)
-    if (flipY) drawTile(0, height, false, true)
-    if (flipX && flipY) drawTile(width, height, true, true)
+    if (flipX) drawTile(tileWidth, 0, true, false)
+    if (flipY) drawTile(0, tileHeight, false, true)
+    if (flipX && flipY) drawTile(tileWidth, tileHeight, true, true)
     canvas.toBlob(blob => {
       if (!current) return
       if (!blob) {
-        backgroundTileWarning.value = 'The browser could not encode the tiled background flip; the unflipped image is used.'
-        backgroundImageSize.value = { ...imageSize, repeatX: 1, repeatY: 1 }
+        backgroundTileWarning.value = hasCrop
+          ? 'The browser could not encode the tiled background crop; the original image is used.'
+          : 'The browser could not encode the tiled background flip; the unflipped image is used.'
+        backgroundImageSize.value = originalImageSize
         return
       }
       generatedUrl = URL.createObjectURL(blob)
@@ -968,34 +1217,147 @@ const stage = ref<HTMLElement | null>(null)
 const stageWidth = ref(0)
 const autoFitDimensions = reactive(new Map<string, { width: number; height: number }>())
 const normalAutoFitScales = reactive(new Map<string, number>())
+const textEllipsisLineCounts = reactive(new Map<string, number>())
+const elementLayoutVersion = ref(0)
+const textOverflowWarning = ref('')
 const animationClock = ref(0)
 const reduceMotion = ref(false)
 const invalidMediaTrimIds = ref<string[]>([])
 const invalidMediaFadeIds = ref<string[]>([])
 const blockedMediaPlaybackIds = ref<string[]>([])
-const mediaFadeFrames = new Map<HTMLMediaElement, number>()
+const mediaPlaybackFrames = new Map<HTMLMediaElement, number>()
 const mediaFadeStates = new WeakMap<HTMLMediaElement, { baseVolume: number; appliedVolume: number; appliedFactor: number; baseMuted: boolean; appliedMuted: boolean }>()
+const lastMediaBookmarkTimes = new WeakMap<HTMLMediaElement, number>()
+const mediaBookmarkPlaybackStarted = new WeakSet<HTMLMediaElement>()
+const mediaBookmarkTriggersByMedia = computed(() => {
+  const triggersByMedia = new Map<string, Array<{ sequenceIndex: number; timeMs: number }>>()
+  props.slide.triggeredAnimations?.forEach((sequence, sequenceIndex) => {
+    const trigger = sequence.trigger
+    if (trigger.type !== 'mediaBookmark') return
+    const triggers = triggersByMedia.get(trigger.id) || []
+    triggers.push({ sequenceIndex, timeMs: trigger.timeMs })
+    triggersByMedia.set(trigger.id, triggers)
+  })
+  return triggersByMedia
+})
 const executedMediaActions = new Set<number>()
 const completedMediaActions = reactive(new Map<string, number>())
 const mediaActionEndTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let automaticStartedAt: number | undefined
 let stepStartedAt = new Map<number, number>()
+let mainStepEndedAt = new Map<number, number>()
 let triggerSteps = new Map<number, number>()
 let triggerStartedAt = new Map<string, number>()
+let triggerStepEndedAt = new Map<string, number>()
 let triggerPlaybackByKey = new Map<string, PptxTriggerPlayback>()
+const firedTimingNodeTriggers = new Set<number>()
 let observer: ResizeObserver | undefined
 let autoFitFrame = 0
 let animationFrame = 0
 let animationTimer: ReturnType<typeof setTimeout> | undefined
 let motionPreference: MediaQueryList | undefined
+let pixelRatioQuery: MediaQueryList | undefined
+const pixelRatio = ref(1)
 const scale = computed(() => stageWidth.value / Math.max(props.width, 1))
 const chartVisuals = computed(() => new Map(props.slide.elements.flatMap(element => element.chart ? [[element.id, makeChartVisual(element.chart, element.id)] as const] : [])))
+const chartDataLabelKeyPositions = ref(new Map<string, number>())
+let chartDataLabelResizeObserver: ResizeObserver | undefined
+const observedChartSvgs = new WeakSet<SVGSVGElement>()
+const chartDataLabelKeyId = (elementId: string, index: number) => `${customGradientScope}:${elementId}:${index}`
+
+const refreshChartDataLabelKeyPositions = async () => {
+  await nextTick()
+  if (typeof document === 'undefined') return
+  const positions = new Map<string, number>()
+  for (const key of document.querySelectorAll<SVGRectElement>('.chart-data-label-key')) {
+    const id = key.dataset.keyId
+    if (!id?.startsWith(`${customGradientScope}:`)) continue
+    const text = key.parentElement?.querySelector<SVGTextElement>('.chart-data-label')
+    if (!text) continue
+    const svg = key.closest('svg')
+    if (svg && chartDataLabelResizeObserver && !observedChartSvgs.has(svg)) {
+      chartDataLabelResizeObserver.observe(svg)
+      observedChartSvgs.add(svg)
+    }
+    try {
+      positions.set(id, text.textContent?.trim() ? text.getBBox().x - 18 : Number(text.getAttribute('x')) - 6)
+    } catch {}
+  }
+  chartDataLabelKeyPositions.value = positions
+}
+
+watch(chartVisuals, () => { void refreshChartDataLabelKeyPositions() }, {flush: 'post'})
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined') chartDataLabelResizeObserver = new ResizeObserver(() => { void refreshChartDataLabelKeyPositions() })
+  void refreshChartDataLabelKeyPositions()
+})
+onBeforeUnmount(() => chartDataLabelResizeObserver?.disconnect())
+
+function supportsTextVerticalEllipsis(element: PptxElement): boolean {
+  return element.textVerticalOverflow === 'ellipsis'
+    && (element.textColumnCount ?? 1) === 1
+    && (!element.textOrientation || element.textOrientation === 'horz')
+}
+
+function measureTextEllipsisLineCount(frame: HTMLElement): number {
+  const frameRect = frame.getBoundingClientRect()
+  const paddingBottom = Number.parseFloat(getComputedStyle(frame).paddingBottom) || 0
+  const contentBottom = frameRect.bottom - paddingBottom
+  const bands: Array<{ top: number; bottom: number }> = []
+  for (const run of frame.querySelectorAll<HTMLElement>('.text-run')) {
+    const range = document.createRange()
+    range.selectNodeContents(run)
+    for (const rect of range.getClientRects()) {
+      if (rect.width <= 0 || rect.height <= 0) continue
+      const band = bands.find(line => rect.top < line.bottom - 1 && rect.bottom > line.top + 1)
+      if (band) {
+        band.top = Math.min(band.top, rect.top)
+        band.bottom = Math.max(band.bottom, rect.bottom)
+      } else {
+        bands.push({ top: rect.top, bottom: rect.bottom })
+      }
+    }
+  }
+  bands.sort((left, right) => left.top - right.top)
+  const visibleLines = bands.filter(line => line.bottom <= contentBottom + 0.5).length
+  return bands.some(line => line.bottom > contentBottom + 0.5) ? Math.max(1, visibleLines) : 0
+}
 
 function scheduleShapeAutoFit() {
   if (!stage.value || autoFitFrame || scale.value <= 0) return
   autoFitFrame = requestAnimationFrame(() => {
     autoFitFrame = 0
     if (!stage.value) return
+    const ellipsisFrames = [...stage.value.querySelectorAll<HTMLElement>('.text-frame[data-text-overflow="ellipsis"]')]
+    let resetTextEllipsis = false
+    let layoutChanged = false
+    for (const frame of ellipsisFrames) {
+      const id = frame.dataset.elementId
+      if (!id) continue
+      const deleted = textEllipsisLineCounts.delete(`${props.slide.id}:${id}`)
+      layoutChanged ||= deleted
+      resetTextEllipsis = deleted || resetTextEllipsis
+    }
+    if (resetTextEllipsis) {
+      elementLayoutVersion.value++
+      void nextTick(scheduleShapeAutoFit)
+      return
+    }
+    const canClampText = typeof CSS !== 'undefined' && CSS.supports('display', '-webkit-box') && CSS.supports('-webkit-line-clamp', '1')
+    textOverflowWarning.value = ellipsisFrames.length && !canClampText
+      ? 'Vertical text ellipsis is clipped because this browser does not support CSS line clamping.'
+      : ''
+    if (canClampText) {
+      for (const frame of ellipsisFrames) {
+        const id = frame.dataset.elementId
+        if (!id) continue
+        const lineCount = measureTextEllipsisLineCount(frame)
+        if (lineCount > 0 && textEllipsisLineCounts.get(`${props.slide.id}:${id}`) !== lineCount) {
+          textEllipsisLineCounts.set(`${props.slide.id}:${id}`, lineCount)
+          layoutChanged = true
+        }
+      }
+    }
     const elements = new Map(props.slide.elements.map(element => [element.id, element]))
     let changed = false
     for (const frame of stage.value.querySelectorAll<HTMLElement>('.text-frame[data-autofit="shape"]')) {
@@ -1012,6 +1374,7 @@ function scheduleShapeAutoFit() {
         height: current.height + overflowHeight / scale.value,
       })
       changed = true
+      layoutChanged = true
     }
     for (const frame of stage.value.querySelectorAll<HTMLElement>('.text-frame[data-autofit="normal"]')) {
       const id = frame.dataset.elementId
@@ -1019,12 +1382,14 @@ function scheduleShapeAutoFit() {
       if (!id || !element || !frame.clientWidth || !frame.clientHeight) continue
       const overflowWidth = frame.scrollWidth > frame.clientWidth + 1 ? frame.clientWidth / frame.scrollWidth : 1
       const overflowHeight = frame.scrollHeight > frame.clientHeight + 1 ? frame.clientHeight / frame.scrollHeight : 1
+      if (overflowWidth === 1 && overflowHeight === 1) continue
       const key = `${props.slide.id}:${id}`
       const current = normalAutoFitScales.get(key) ?? element.textFontScale ?? 1
       const fitted = Math.max(0.05, current * Math.min(overflowWidth, overflowHeight) * 0.98)
       if (fitted < current - 0.001) {
         normalAutoFitScales.set(key, fitted)
         changed = true
+        layoutChanged = true
       }
     }
     for (const cell of stage.value.querySelectorAll<HTMLTableCellElement>('.slide-table td[data-autofit="normal"]')) {
@@ -1034,17 +1399,21 @@ function scheduleShapeAutoFit() {
       const cellIndex = Number(cell.dataset.cellIndex)
       const element = id ? elements.get(id) : undefined
       const model = element?.table?.rows[rowIndex]?.cells[cellIndex]
-      if (!id || !model || !cell.clientWidth || !cell.clientHeight) continue
-      const overflowWidth = cell.scrollWidth > cell.clientWidth + 1 ? cell.clientWidth / cell.scrollWidth : 1
-      const overflowHeight = cell.scrollHeight > cell.clientHeight + 1 ? cell.clientHeight / cell.scrollHeight : 1
+      const text = cell.querySelector<HTMLElement>('.table-cell-text')
+      if (!id || !model || !text?.clientWidth || !text.clientHeight) continue
+      const overflowWidth = text.scrollWidth > text.clientWidth + 1 ? text.clientWidth / text.scrollWidth : 1
+      const overflowHeight = text.scrollHeight > text.clientHeight + 1 ? text.clientHeight / text.scrollHeight : 1
+      if (overflowWidth === 1 && overflowHeight === 1) continue
       const key = tableCellAutoFitKey(id, rowIndex, cellIndex)
       const current = normalAutoFitScales.get(key) ?? model.textFontScale ?? 1
       const fitted = Math.max(0.05, current * Math.min(overflowWidth, overflowHeight) * 0.98)
       if (fitted < current - 0.001) {
         normalAutoFitScales.set(key, fitted)
         changed = true
+        layoutChanged = true
       }
     }
+    if (layoutChanged) elementLayoutVersion.value++
     if (changed) void nextTick(scheduleShapeAutoFit)
   })
 }
@@ -1052,11 +1421,17 @@ function scheduleShapeAutoFit() {
 function onFontsLoaded() {
   autoFitDimensions.clear()
   normalAutoFitScales.clear()
+  textEllipsisLineCounts.clear()
+  elementLayoutVersion.value++
   scheduleShapeAutoFit()
 }
 const chartPlot = (id: string) => chartVisuals.value.get(id)?.plot ?? { left: 88, top: 75, width: 850, height: 390 }
 type RenderAnimation = PptxAnimation & { step: number; automatic: boolean; triggerSequence?: number; triggerStep?: number }
 const triggerKey = (sequence: number, step: number) => `${sequence}:${step}`
+const timelineEnd = (action: RenderAnimation) => action.triggerSequence !== undefined && action.triggerStep !== undefined
+  ? triggerStepEndedAt.get(triggerKey(action.triggerSequence, action.triggerStep))
+  : action.automatic ? undefined : mainStepEndedAt.get(action.step)
+const timelineNow = (action: RenderAnimation) => Math.min(animationClock.value, timelineEnd(action) ?? Infinity)
 const timelineStart = (action: RenderAnimation) => {
   const startedAt = action.triggerSequence === undefined || action.triggerStep === undefined
   ? action.automatic ? automaticStartedAt : stepStartedAt.get(action.step)
@@ -1126,6 +1501,30 @@ const timelineActions = computed<RenderAnimation[]>(() => [
   ...(props.slide.animationSteps || []).flatMap((step, index) => step.map(animation => ({ ...animation, step: index, automatic: false }))),
   ...(props.slide.triggeredAnimations || []).flatMap((sequence, sequenceIndex) => sequence.steps.flatMap((step, stepIndex) => step.map(animation => ({ ...animation, step: -1, automatic: false, triggerSequence: sequenceIndex, triggerStep: stepIndex })))),
 ])
+function endTimelineStep(triggerSequence: number | undefined, step: number, endedAt: number) {
+  if (triggerSequence === undefined) mainStepEndedAt.set(step, endedAt)
+  else triggerStepEndedAt.set(triggerKey(triggerSequence, step), endedAt)
+  timelineActions.value.forEach((action, index) => {
+    const belongsToStep = triggerSequence === undefined
+      ? action.triggerSequence === undefined && !action.automatic && action.step === step
+      : action.triggerSequence === triggerSequence && action.triggerStep === step
+    if (!belongsToStep || action.effect !== 'media' || !executedMediaActions.has(index)) return
+    const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || [])
+      .find(item => item.dataset.mediaId === action.targetId)
+    if (media) {
+      media.pause()
+      delete media.dataset.mediaActionEndAt
+      mediaBookmarkPlaybackStarted.delete(media)
+      lastMediaBookmarkTimes.delete(media)
+    }
+    if (action.mediaActionKey) {
+      completedMediaActions.set(action.mediaActionKey, endedAt)
+      const timer = mediaActionEndTimers.get(action.mediaActionKey)
+      if (timer) clearTimeout(timer)
+      mediaActionEndTimers.delete(action.mediaActionKey)
+    }
+  })
+}
 const mediaSlideCounts = computed(() => {
   const counts = new Map<string, number>()
   for (const action of timelineActions.value) {
@@ -1133,6 +1532,44 @@ const mediaSlideCounts = computed(() => {
   }
   return counts
 })
+
+function elementMemoDependencies(element: PptxElement) {
+  const animations = animationsByTarget.value.get(element.id)
+  const hasStepAnimations = animations?.some(action => !action.automatic && action.triggerSequence === undefined)
+  const layoutKey = `${props.slide.id}:${element.id}`
+  const step = hasStepAnimations ? props.animationStep : null
+  const animationTime = animations?.length ? animationClock.value : null
+  const fitted = autoFitDimensions.get(layoutKey)
+  const fontScale = normalAutoFitScales.get(layoutKey)
+  const ellipsisLines = textEllipsisLineCounts.get(layoutKey)
+  const mediaSlideCount = mediaSlideCounts.value.get(element.id)
+  const invalidTrim = invalidMediaTrimIds.value.includes(element.id)
+  const invalidFade = invalidMediaFadeIds.value.includes(element.id)
+  const blockedPlayback = blockedMediaPlaybackIds.value.includes(element.id)
+  return [
+    props.slide,
+    props.slide.id,
+    element,
+    props.width,
+    props.height,
+    step,
+    props.thumbnail,
+    props.playbackPreview,
+    props.triggerPlayback,
+    scale.value,
+    pixelRatio.value,
+    elementLayoutVersion.value,
+    fitted,
+    fontScale,
+    ellipsisLines,
+    mediaSlideCount,
+    invalidTrim,
+    invalidFade,
+    blockedPlayback,
+    animations,
+    animationTime,
+  ]
+}
 
 function cancelTimelineUpdates() {
   cancelAnimationFrame(animationFrame)
@@ -1144,30 +1581,33 @@ function cancelTimelineUpdates() {
 function scheduleTimelineUpdate() {
   cancelTimelineUpdates()
   if (props.thumbnail && !props.playbackPreview) return
+  const nextTimingNodeTriggerAt = runTimingNodeTriggeredAnimations(animationClock.value)
   runTimedMediaActions()
   const now = animationClock.value
   if (reduceMotion.value) {
-    const nextMediaStart = timelineActions.value.reduce((next, action) => {
+    const nextScheduledAt = timelineActions.value.reduce((next, action) => {
       if (action.effect !== 'media') return next
       const startedAt = timelineStart(action)
       return startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY ? next : Math.min(next, startedAt + action.delayMs)
-    }, Infinity)
-    if (Number.isFinite(nextMediaStart) && nextMediaStart > now) {
+    }, nextTimingNodeTriggerAt)
+    if (Number.isFinite(nextScheduledAt) && nextScheduledAt > now) {
       animationTimer = setTimeout(() => {
         animationTimer = undefined
         animationClock.value = performance.now()
         scheduleTimelineUpdate()
-      }, Math.max(0, nextMediaStart - now))
+      }, Math.max(0, nextScheduledAt - now))
     }
     return
   }
-  let nextStart = Infinity
+  let nextStart = nextTimingNodeTriggerAt
   let hasActiveAnimation = false
   for (const action of timelineActions.value) {
     const startedAt = timelineStart(action)
     if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY) continue
+    const stoppedAt = timelineEnd(action)
+    if (stoppedAt !== undefined && stoppedAt <= now) continue
     const start = startedAt + action.delayMs
-    const end = start + animationScheduleDuration(action)
+    const end = Math.min(start + animationScheduleDuration(action), stoppedAt ?? Infinity)
     if (start > now) nextStart = Math.min(nextStart, start)
     else if (end > now) hasActiveAnimation = true
   }
@@ -1198,9 +1638,12 @@ function beginSlideTimeline(step: number) {
   mediaActionEndTimers.clear()
   automaticStartedAt = now
   stepStartedAt = new Map(Array.from({ length: step }, (_, index) => [index, Number.NEGATIVE_INFINITY]))
+  mainStepEndedAt.clear()
   triggerSteps.clear()
   triggerStartedAt.clear()
+  triggerStepEndedAt.clear()
   triggerPlaybackByKey.clear()
+  firedTimingNodeTriggers.clear()
   animationClock.value = now
   scheduleTimelineUpdate()
 }
@@ -1209,20 +1652,35 @@ function syncTriggerPlayback() {
   if (props.triggerPlayback === undefined) return
   triggerSteps.clear()
   triggerStartedAt.clear()
+  triggerStepEndedAt.clear()
   triggerPlaybackByKey.clear()
-  for (const playback of props.triggerPlayback) {
+  for (const playback of [...props.triggerPlayback].sort((a, b) => a.startedAt - b.startedAt)) {
     const sequence = props.slide.triggeredAnimations?.[playback.sequence]
     if (!sequence || !Number.isInteger(playback.step) || playback.step < 0 || playback.step >= sequence.steps.length || !Number.isFinite(playback.startedAt)) continue
     const key = triggerKey(playback.sequence, playback.step)
-    triggerStartedAt.set(key, playback.startedAt - performance.timeOrigin)
+    const startedAt = playback.startedAt - performance.timeOrigin
+    if (!sequence.concurrent && playback.step > 0) {
+      const previousKey = triggerKey(playback.sequence, playback.step - 1)
+      if (triggerStartedAt.has(previousKey)) endTimelineStep(playback.sequence, playback.step - 1, startedAt)
+    }
+    triggerStartedAt.set(key, startedAt)
     triggerPlaybackByKey.set(key, playback)
     triggerSteps.set(playback.sequence, Math.max(triggerSteps.get(playback.sequence) || 0, playback.step + 1))
   }
   refreshTimeline()
 }
 
+function updatePixelRatio() {
+  pixelRatioQuery?.removeEventListener('change', updatePixelRatio)
+  pixelRatio.value = window.devicePixelRatio || 1
+  pixelRatioQuery = window.matchMedia(`(resolution: ${pixelRatio.value}dppx)`)
+  pixelRatioQuery.addEventListener('change', updatePixelRatio)
+}
+
 onMounted(() => {
   if (!stage.value) return
+  updatePixelRatio()
+  window.addEventListener('resize', updatePixelRatio)
   motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
   reduceMotion.value = motionPreference.matches
   motionPreference.addEventListener('change', onMotionPreferenceChange)
@@ -1244,25 +1702,35 @@ watch([() => props.slide.id, () => props.animationStep], ([slideId, step], [oldS
   if (slideId !== oldSlideId) {
     autoFitDimensions.clear()
     normalAutoFitScales.clear()
+    textEllipsisLineCounts.clear()
     beginSlideTimeline(step)
     void nextTick(scheduleShapeAutoFit)
     return
   }
   if (step > oldStep) {
     for (let previous = oldStep + 1; previous < step; previous++) stepStartedAt.set(previous, Number.NEGATIVE_INFINITY)
-    if (step === oldStep + 1) runNavigationTriggeredAnimations('onNext')
+    if (step === oldStep + 1) runSlideTriggeredAnimations('onNext')
     const now = performance.now()
+    const previousStep = oldStep - 1
+    if (previousStep >= 0 && !props.slide.animationSequence?.concurrent && props.slide.animationSequence?.nextAction !== 'seek') {
+      endTimelineStep(undefined, previousStep, now)
+    }
     if (props.slide.animationSequence?.nextAction === 'seek' && oldStep > 0) {
-      const previousStep = oldStep - 1
       const startedAt = stepStartedAt.get(previousStep)
       const naturalEnd = Math.max(0, ...(props.slide.animationSteps?.[previousStep] || []).map(action => action.delayMs + naturalAnimationDuration(action)))
       if (startedAt !== undefined && startedAt !== Number.NEGATIVE_INFINITY) stepStartedAt.set(previousStep, Math.min(startedAt, now - naturalEnd))
     }
     stepStartedAt.set(oldStep, now)
   } else if (step < oldStep) {
-    if (step === oldStep - 1) runNavigationTriggeredAnimations('onPrev')
+    if (step === oldStep - 1) runSlideTriggeredAnimations('onPrev')
+    props.slide.triggeredAnimations?.forEach((sequence, index) => {
+      if (sequence.trigger.type === 'timeNode' && sequence.trigger.sourceStep !== undefined && sequence.trigger.sourceStep >= step) firedTimingNodeTriggers.delete(index)
+    })
     for (const startedStep of stepStartedAt.keys()) {
-      if (startedStep >= step) stepStartedAt.delete(startedStep)
+      if (startedStep >= step) {
+        stepStartedAt.delete(startedStep)
+        mainStepEndedAt.delete(startedStep)
+      }
     }
     timelineActions.value.forEach((action, index) => {
       if (action.triggerSequence === undefined && !action.automatic && action.step >= step) executedMediaActions.delete(index)
@@ -1273,12 +1741,15 @@ watch([() => props.slide.id, () => props.animationStep], ([slideId, step], [oldS
 watch([() => props.slide.id, () => props.triggerPlayback], syncTriggerPlayback, { flush: 'post' })
 onUnmounted(() => {
   observer?.disconnect()
+  pixelRatioQuery?.removeEventListener('change', updatePixelRatio)
+  window.removeEventListener('resize', updatePixelRatio)
   document.fonts.removeEventListener('loadingdone', onFontsLoaded)
   cancelAnimationFrame(autoFitFrame)
+  textEllipsisLineCounts.clear()
   motionPreference?.removeEventListener('change', onMotionPreferenceChange)
   cancelTimelineUpdates()
-  for (const frame of mediaFadeFrames.values()) cancelAnimationFrame(frame)
-  mediaFadeFrames.clear()
+  for (const frame of mediaPlaybackFrames.values()) cancelAnimationFrame(frame)
+  mediaPlaybackFrames.clear()
   for (const timer of mediaActionEndTimers.values()) clearTimeout(timer)
   mediaActionEndTimers.clear()
 })
@@ -1288,8 +1759,14 @@ function onMotionPreferenceChange(event: MediaQueryListEvent) {
   refreshTimeline()
 }
 
+// Microsoft lists fill.opacity as an animatable property; multiplying each gradient stop alpha is this renderer's mapping and still needs Office/WPS screenshot calibration.
+// https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.attributename?view=openxml-3.0.1
+// https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/981b17ff-5594-42cf-ad8d-7cb39e653afa
 function applyColorOpacity(color: string, opacity: number): string {
   if (opacity >= 1 || color === 'transparent') return color
+  if (/(?:repeating-)?(?:linear|radial|conic)-gradient\(/i.test(color)) {
+    return color.replace(/#[\da-f]{6}\b|rgba?\([^)]*\)|\btransparent\b/gi, stopColor => applyColorOpacity(stopColor, opacity))
+  }
   const hex = /^#([\da-f]{6})$/i.exec(color)
   const rgb = /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*([\d.]+)\s*)?\)$/i.exec(color)
   const channels = hex
@@ -1324,17 +1801,21 @@ function elementStyle(element: PptxElement): CSSProperties {
   const motion = motionX || motionY ? `translate(${motionX * scale.value}px,${motionY * scale.value}px)` : ''
   const slideMotion = slideX || slideY ? `translate(${slideX * scale.value}px,${slideY * scale.value}px)` : ''
   const translations = [motion, slideMotion].filter(Boolean).join(' ')
-  const shadow = element.shadow
-  const angle = (shadow?.angle || 0) * Math.PI / 180
-  const shadowColor = animationColor(element, 'shadow.color') || shadow?.color
+  const shadows = element.shadows?.length ? element.shadows : element.shadow ? [element.shadow] : []
+  const fillOn = animationOnOff(element, 'fill.on')
+  const strokeOn = animationOnOff(element, 'stroke.on')
+  const shadowOn = animationOnOff(element, 'shadow.on')
+  const shadowColors = shadows.map(shadow => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity'))))
   const animatedFill = animationColor(element, 'fillcolor')
   const fill = animatedFill || element.fill
   const fillOpacity = animationOpacity(element, 'fill.opacity')
   const animatedStroke = animationColor(element, 'stroke.color')
   const stroke = applyColorOpacity(animatedStroke || element.stroke, animationOpacity(element, 'stroke.opacity'))
   const strokeWidth = animationStrokeWidth(element)
-  const customGeometry = element.geometry === 'custom' && Boolean(element.customPaths?.length)
-  const showStroke = element.kind === 'shape' && !customGeometry && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient')
+  const strokeDash = animationStrokeDash(element)
+  const glows = element.glows?.length ? element.glows : element.glow ? [element.glow] : []
+  const customGeometry = Boolean(element.customPaths?.length)
+  const showStroke = strokeOn && element.kind === 'shape' && !customGeometry && !usesSvgOutline(element) && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient')
   const transform = matrix
     ? [translations, `matrix(${matrix.slice(0, 4).join(',')},${matrix[4] * scale.value},${matrix[5] * scale.value})${hasScaleAnimation || hasRotationAnimation ? ` translate(${element.width * scale.value / 2}px,${element.height * scale.value / 2}px)${hasRotationAnimation ? ` rotate(${rotationDelta}deg)` : ''}${hasScaleAnimation ? ` scale(${scaleX},${scaleY})` : ''} translate(${-element.width * scale.value / 2}px,${-element.height * scale.value / 2}px)` : ''}`].filter(Boolean).join(' ')
     : [translations, rotation ? `rotate(${rotation}deg)` : '', flips, hasScaleAnimation ? `scale(${scaleX},${scaleY})` : ''].filter(Boolean).join(' ')
@@ -1343,25 +1824,850 @@ function elementStyle(element: PptxElement): CSSProperties {
     top: `${(element.y / props.height) * 100}%`,
     width: `${(width / props.width) * 100}%`,
     height: `${(height / props.height) * 100}%`,
-    overflow: customGeometry ? 'visible' : undefined,
+    overflow: customGeometry || usesSvgOutline(element) ? 'visible' : undefined,
     transform: transform || undefined,
     transformOrigin: matrix ? '0 0' : undefined,
-    background: element.kind === 'shape' && !customGeometry ? applyColorOpacity(fill, fillOpacity) : undefined,
+    background: element.kind === 'shape' && !customGeometry && !usesSvgPolygon(element) ? fillOn ? applyColorOpacity(fill, fillOpacity) : 'none' : undefined,
     borderColor: showStroke ? stroke : undefined,
     borderWidth: showStroke ? `${strokeWidth * scale.value}px` : undefined,
-    borderStyle: showStroke ? cssLineStyle(element.strokeDash) : undefined,
-    boxShadow: shadow && !customGeometry ? `${Math.cos(angle) * shadow.distance * scale.value}px ${Math.sin(angle) * shadow.distance * scale.value}px ${shadow.blur * scale.value}px ${applyColorOpacity(shadowColor || shadow.color, animationOpacity(element, 'shadow.opacity'))}` : undefined,
+    borderStyle: showStroke ? cssLineStyle(strokeDash) : undefined,
+    boxShadow: shadows.length && shadowOn && !customGeometry && !usesSvgPolygon(element) ? shadowColors.join(', ') : undefined,
+    filter: glows.length ? glows.map(glow => `drop-shadow(0 0 ${glow.radius * scale.value}px ${glow.color})`).join(' ') : undefined,
   }
 }
 
+function usesSvgOutline(element: PptxElement): boolean {
+  return element.kind === 'shape' && (['rect', 'ellipse', 'roundRect', 'flowChartConnector', 'flowChartSummingJunction', 'flowChartOr', 'flowChartProcess', 'flowChartAlternateProcess', 'flowChartDelay', 'flowChartDisplay', 'flowChartInternalStorage'].includes(element.geometry) || usesSvgPolygon(element))
+}
+
+function usesSvgPolygon(element: PptxElement): boolean {
+  if (element.kind === 'shape' && ['leftBracket', 'rightBracket', 'bracketPair', 'leftBrace', 'rightBrace', 'bracePair'].includes(element.geometry)) return true
+  if (element.kind === 'shape' && ['cube', 'plaque', 'frame', 'halfFrame', 'cornerTabs', 'plaqueTabs', 'squareTabs', 'donut', 'pie', 'chord', 'arc', 'blockArc', 'pieWedge'].includes(element.geometry)) return true
+  return element.kind === 'shape' && ['plus', 'mathMinus', 'mathEqual', 'mathPlus', 'mathDivide', 'mathMultiply', 'mathNotEqual', 'round1Rect', 'round2DiagRect', 'round2SameRect', 'snipRoundRect', 'snip1Rect', 'snip2DiagRect', 'snip2SameRect', 'homePlate', 'nonIsoscelesTrapezoid', 'heptagon', 'decagon', 'leftRightArrow', 'upDownArrow', 'upArrow', 'downArrow', 'bentUpArrow', 'quadArrow', 'leftRightUpArrow', 'rightArrow', 'leftArrow', 'notchedRightArrow', 'heart', 'lightningBolt', 'triangle', 'rtTriangle', 'diamond', 'flowChartDecision', 'flowChartSort', 'flowChartCollate', 'flowChartPunchedCard', 'flowChartOfflineStorage', 'flowChartOnlineStorage', 'flowChartPunchedTape', 'flowChartMagneticDisk', 'flowChartMagneticDrum', 'flowChartMagneticTape', 'flowChartMultidocument', 'flowChartOffpageConnector', 'flowChartDocument', 'flowChartManualInput', 'flowChartManualOperation', 'flowChartInputOutput', 'flowChartPreparation', 'flowChartTerminator', 'flowChartPredefinedProcess', 'flowChartExtract', 'flowChartMerge', 'parallelogram', 'trapezoid', 'hexagon', 'octagon', 'pentagon', 'star4', 'star5', 'star6', 'star7', 'star8', 'star10', 'star12', 'star16', 'star24', 'star32', 'dodecagon', 'chevron'].includes(element.geometry)
+}
+
+function presetBracketBracePaths(element: PptxElement): [string, string] {
+  const rectangle = 'M0 0 H1000 V1000 H0 Z'
+  if (!(element.width > 0) || !(element.height > 0)) return [rectangle, rectangle]
+  const shortSide = Math.min(element.width, element.height)
+  if (element.geometry === 'leftBrace' || element.geometry === 'rightBrace') {
+    const adjustment2 = Math.max(0, Math.min(100_000, element.presetAdjustments?.adj2 ?? 50_000))
+    const maximumAdjustment1 = Math.min(adjustment2, 100_000 - adjustment2) / 2 * element.height / shortSide
+    const adjustment1 = Math.max(0, Math.min(maximumAdjustment1, element.presetAdjustments?.adj1 ?? 8_333))
+    const radiusY = shortSide * adjustment1 / 100_000
+    const middleX = element.width / 2
+    const y3 = element.height * adjustment2 / 100_000
+    const y2 = y3 - radiusY, y4 = element.height - radiusY
+    const buildPath = (closed: boolean) => {
+      let current: [number, number] = [0, 0]
+      const point = ([x, y]: [number, number]) => `${Number((x / element.width * 1000).toFixed(6))} ${Number((y / element.height * 1000).toFixed(6))}`
+      const move = (x: number, y: number) => { current = [x, y]; return `M${point(current)}` }
+      const line = (x: number, y: number) => { current = [x, y]; return `L${point(current)}` }
+      // ECMA-376 brace guides use DrawingML arcs locked to the current point; positive sweeps are clockwise.
+      const arc = (radiusX: number, startAngle: number, sweepAngle: number) => {
+        if (!(radiusX > 0) || !(radiusY > 0)) return ''
+        const start = startAngle * Math.PI / 180, end = (startAngle + sweepAngle) * Math.PI / 180
+        const centerX = current[0] - radiusX * Math.cos(start), centerY = current[1] - radiusY * Math.sin(start)
+        current = [centerX + radiusX * Math.cos(end), centerY + radiusY * Math.sin(end)]
+        return `A${Number((radiusX / element.width * 1000).toFixed(6))} ${Number((radiusY / element.height * 1000).toFixed(6))} 0 ${Math.abs(sweepAngle) > 180 ? 1 : 0} ${sweepAngle >= 0 ? 1 : 0} ${point(current)}`
+      }
+      const commands = element.geometry === 'leftBrace'
+        ? [move(element.width, element.height), arc(middleX, 90, 90), line(middleX, y3 - radiusY), arc(middleX, 0, -90), arc(middleX, 90, -90), line(middleX, radiusY), arc(middleX, 180, 90)]
+        : [move(0, 0), arc(middleX, 270, 90), line(middleX, y2), arc(middleX, 180, -90), arc(middleX, 270, -90), line(middleX, y4), arc(middleX, 0, 90)]
+      if (closed) commands.push('Z')
+      return commands.filter(Boolean).join(' ')
+    }
+    return [buildPath(true), buildPath(false)]
+  }
+  const isPair = element.geometry === 'bracketPair'
+  if (element.geometry === 'bracePair') {
+    const adjustment = Math.max(0, Math.min(25_000, element.presetAdjustments?.adj ?? 8_333))
+    const radius = shortSide * adjustment / 100_000
+    const x2 = shortSide * adjustment / 50_000
+    const x3 = element.width - x2, x4 = element.width - radius
+    const y2 = element.height / 2 - radius, y3 = element.height / 2 + radius, y4 = element.height - radius
+    const point = ([x, y]: [number, number]) => `${Number((x / element.width * 1000).toFixed(6))} ${Number((y / element.height * 1000).toFixed(6))}`
+    const buildPath = (outline: boolean) => {
+      let current: [number, number] = [0, 0]
+      const move = (x: number, y: number) => { current = [x, y]; return `M${point(current)}` }
+      const line = (x: number, y: number) => { current = [x, y]; return `L${point(current)}` }
+      // ECMA-376 bracePair uses DrawingML arcs locked to the current point; positive sweeps are clockwise.
+      const arc = (startAngle: number, sweepAngle: number) => {
+        if (!(radius > 0)) return ''
+        const start = startAngle * Math.PI / 180, end = (startAngle + sweepAngle) * Math.PI / 180
+        const centerX = current[0] - radius * Math.cos(start), centerY = current[1] - radius * Math.sin(start)
+        current = [centerX + radius * Math.cos(end), centerY + radius * Math.sin(end)]
+        return `A${Number((radius / element.width * 1000).toFixed(6))} ${Number((radius / element.height * 1000).toFixed(6))} 0 ${Math.abs(sweepAngle) > 180 ? 1 : 0} ${sweepAngle >= 0 ? 1 : 0} ${point(current)}`
+      }
+      const leftBrace = [move(x2, element.height), arc(90, 90), line(radius, y3), arc(0, -90), arc(90, -90), line(radius, radius), arc(180, 90)]
+      const rightBrace = [move(x3, 0), arc(270, 90), line(x4, y2), arc(180, -90), arc(270, -90), line(x4, y4), arc(0, 90)]
+      const joinAtTop = `L${point([x3, 0])}`
+      return (outline ? [...leftBrace, ...rightBrace] : [...leftBrace, joinAtTop, ...rightBrace.slice(1), 'Z']).filter(Boolean).join(' ')
+    }
+    return [buildPath(false), buildPath(true)]
+  }
+  const maximumAdjustment = isPair ? 50_000 : 50_000 * element.height / shortSide
+  const adjustment = Math.max(0, Math.min(maximumAdjustment, element.presetAdjustments?.adj ?? (isPair ? 16_667 : 8_333)))
+  if (isPair) {
+    const inset = shortSide * adjustment / 100_000 * 29_289 / 100_000
+    const x = inset / element.width * 1000, y = inset / element.height * 1000
+    const oppositeX = 1000 - x, oppositeY = 1000 - y
+    const fill = `M0 ${y} A${x} ${y} 0 0 1 ${x} 0 L${oppositeX} 0 A${x} ${y} 0 0 1 1000 ${y} L1000 ${oppositeY} A${x} ${y} 0 0 1 ${oppositeX} 1000 L${x} 1000 A${x} ${y} 0 0 1 0 ${oppositeY} Z`
+    const outline = `M${x} 1000 A${x} ${y} 0 0 1 0 ${oppositeY} L0 ${y} A${x} ${y} 0 0 1 ${x} 0 M${oppositeX} 0 A${x} ${y} 0 0 1 1000 ${y} L1000 ${oppositeY} A${x} ${y} 0 0 1 ${oppositeX} 1000`
+    return [fill, outline]
+  }
+  const curveHeight = shortSide * adjustment / 100_000 / element.height * 1000
+  const lowerCurveStart = 1000 - curveHeight
+  const outline = element.geometry === 'rightBracket'
+    ? `M0 0 A1000 ${curveHeight} 0 0 1 1000 ${curveHeight} L1000 ${lowerCurveStart} A1000 ${curveHeight} 0 0 1 0 1000`
+    : `M1000 1000 A1000 ${curveHeight} 0 0 1 0 ${lowerCurveStart} L0 ${curveHeight} A1000 ${curveHeight} 0 0 1 1000 0`
+  return [`${outline} Z`, outline]
+}
+
+function presetOutlineDetailPaths(element: PptxElement): string[] {
+  if (element.geometry === 'leftBracket' || element.geometry === 'rightBracket' || element.geometry === 'bracketPair' || element.geometry === 'leftBrace' || element.geometry === 'rightBrace' || element.geometry === 'bracePair') return [presetBracketBracePaths(element)[1]]
+  if (element.geometry === 'arc') {
+    const arc = presetAngleArcPaths(element)[1]
+    return arc ? [arc] : []
+  }
+  if (element.geometry === 'frame') return [presetOutlinePath(element)]
+  if (element.geometry === 'cube') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return [presetOutlinePath(element)]
+    const inset = Math.min(width, height) * (element.presetAdjustment ?? 0.25)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return [presetOutlinePath(element), `M0 ${y(inset)} L${x(width - inset)} ${y(inset)} L1000 0`, `M${x(width - inset)} ${y(inset)} L${x(width - inset)} 1000`]
+  }
+  if (element.geometry === 'flowChartMagneticDisk') return [presetOutlinePath(element), 'M1000 166.6667 A500 166.6667 0 0 1 0 166.6667']
+  if (element.geometry === 'flowChartMagneticDrum') {
+    const inset = 1000 / 6
+    return [presetOutlinePath(element), `M${1000 - inset} 1000 A${inset} 500 0 0 1 ${1000 - inset} 0`]
+  }
+  if (element.geometry === 'flowChartMultidocument') {
+    const scale = 1000 / 21600
+    const point = (x: number, y: number) => `${x * scale} ${y * scale}`
+    return [
+      `M${point(0, 3675)} L${point(18595, 3675)} L${point(18595, 18022)} C${point(9298, 18022)} ${point(9298, 23542)} ${point(0, 20782)} Z`,
+      `M${point(1532, 3675)} L${point(1532, 1815)} L${point(20000, 1815)} L${point(20000, 16252)} C${point(19298, 16252)} ${point(18595, 16352)} ${point(18595, 16352)}`,
+      `M${point(2972, 1815)} L${point(2972, 0)} L${point(21600, 0)} L${point(21600, 14392)} C${point(20800, 14392)} ${point(20000, 14467)} ${point(20000, 14467)}`,
+    ]
+  }
+  return []
+}
+
+function roundRectRadii(element: PptxElement): [number, number] {
+  const fitted = autoFitDimensions.get(`${props.slide.id}:${element.id}`)
+  const width = fitted?.width || element.width, height = fitted?.height || element.height
+  const radius = Math.min(width, height) * (element.presetAdjustment ?? 0.16667)
+  return [width > 0 ? radius / width * 1000 : 0, height > 0 ? radius / height * 1000 : 0]
+}
+
+function presetAngleArcPaths(element: PptxElement): [string, string] {
+  const width = element.width, height = element.height
+  if (width <= 0 || height <= 0) return ['M0 0 H1000 V1000 H0 Z', '']
+  const fullTurn = 21_600_000
+  const startAngle = element.presetAdjustments?.adj1 ?? (element.geometry === 'pie' ? 0 : element.geometry === 'chord' ? 2_700_000 : 16_200_000)
+  const endAngle = element.presetAdjustments?.adj2 ?? (element.geometry === 'arc' ? 0 : 16_200_000)
+  let sweepAngle = endAngle - startAngle
+  if (sweepAngle <= 0) sweepAngle += fullTurn
+  const [startX, startY] = presetEllipsePoint(width, height, startAngle)
+  const arc = sweepAngle === fullTurn
+    ? (() => {
+        const [middleX, middleY] = presetEllipsePoint(width, height, startAngle + fullTurn / 2)
+        return `M${startX} ${startY} A500 500 0 0 1 ${middleX} ${middleY} A500 500 0 0 1 ${startX} ${startY}`
+      })()
+    : (() => {
+        const [endX, endY] = presetEllipsePoint(width, height, endAngle)
+        return `M${startX} ${startY} A500 500 0 ${sweepAngle > fullTurn / 2 ? 1 : 0} 1 ${endX} ${endY}`
+      })()
+  return [element.geometry === 'chord' ? `${arc} Z` : `${arc} L500 500 Z`, arc]
+}
+
+function presetBlockArcPath(element: PptxElement): string {
+  const width = element.width, height = element.height
+  if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+  const fullTurn = 21_600_000
+  const startAngle = element.presetAdjustments?.adj1 ?? 10_800_000
+  const endAngle = element.presetAdjustments?.adj2 ?? 0
+  let sweepAngle = endAngle - startAngle
+  if (sweepAngle <= 0) sweepAngle += fullTurn
+  const inset = Math.min(width, height) * (element.presetAdjustments?.adj3 ?? 25_000) / 100_000
+  const innerWidth = Math.max(0, width - 2 * inset)
+  const innerHeight = Math.max(0, height - 2 * inset)
+  const innerPoint = (angle: number): [number, number] => {
+    const [x, y] = presetEllipsePoint(innerWidth, innerHeight, angle)
+    return [500 + (x - 500) * innerWidth / width, 500 + (y - 500) * innerHeight / height]
+  }
+  const arcCommands = (fromAngle: number, sweep: number, rx: number, ry: number, pointAt: (angle: number) => [number, number], direction: 0 | 1): string => {
+    const [startX, startY] = pointAt(fromAngle)
+    if (Math.abs(sweep) === fullTurn) {
+      const [middleX, middleY] = pointAt(fromAngle + sweep / 2)
+      return `A${rx} ${ry} 0 0 ${direction} ${middleX} ${middleY} A${rx} ${ry} 0 0 ${direction} ${startX} ${startY}`
+    }
+    const [endX, endY] = pointAt(fromAngle + sweep)
+    return `A${rx} ${ry} 0 ${Math.abs(sweep) > fullTurn / 2 ? 1 : 0} ${direction} ${endX} ${endY}`
+  }
+  const [outerStartX, outerStartY] = presetEllipsePoint(width, height, startAngle)
+  const [innerEndX, innerEndY] = innerPoint(endAngle)
+  const outerArc = arcCommands(startAngle, sweepAngle, 500, 500, angle => presetEllipsePoint(width, height, angle), 1)
+  const innerArc = arcCommands(endAngle, -sweepAngle, 500 * innerWidth / width, 500 * innerHeight / height, innerPoint, 0)
+  return `M${outerStartX} ${outerStartY} ${outerArc} L${innerEndX} ${innerEndY} ${innerArc} Z`
+}
+
+function presetOutlinePath(element: PptxElement): string {
+  if (element.geometry === 'leftBracket' || element.geometry === 'rightBracket' || element.geometry === 'bracketPair' || element.geometry === 'leftBrace' || element.geometry === 'rightBrace' || element.geometry === 'bracePair') return presetBracketBracePaths(element)[0]
+  if (element.geometry === 'quadArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj2 = Math.max(0, Math.min(50000, element.presetAdjustments?.adj2 ?? 22500))
+    const adj1 = Math.max(0, Math.min(2 * adj2, element.presetAdjustments?.adj1 ?? 22500))
+    const adj3 = Math.max(0, Math.min((100000 - 2 * adj2) / 2, element.presetAdjustments?.adj3 ?? 22500))
+    const x1 = shortSide * adj3 / 100000
+    const dx2 = shortSide * adj2 / 100000
+    const dx3 = shortSide * adj1 / 200000
+    const x2 = width / 2 - dx2, x3 = width / 2 - dx3, x4 = width / 2 + dx3, x5 = width / 2 + dx2, x6 = width - x1
+    const y2 = height / 2 - dx2, y3 = height / 2 - dx3, y4 = height / 2 + dx3, y5 = height / 2 + dx2, y6 = height - x1
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 500 L${x(x1)} ${y(y2)} L${x(x1)} ${y(y3)} L${x(x3)} ${y(y3)} L${x(x3)} ${y(x1)} L${x(x2)} ${y(x1)} L500 0 L${x(x5)} ${y(x1)} L${x(x4)} ${y(x1)} L${x(x4)} ${y(y3)} L${x(x6)} ${y(y3)} L${x(x6)} ${y(y2)} L1000 500 L${x(x6)} ${y(y5)} L${x(x6)} ${y(y4)} L${x(x4)} ${y(y4)} L${x(x4)} ${y(y6)} L${x(x5)} ${y(y6)} L500 1000 L${x(x2)} ${y(y6)} L${x(x3)} ${y(y6)} L${x(x3)} ${y(y4)} L${x(x1)} ${y(y4)} L${x(x1)} ${y(y5)} Z`
+  }
+  if (element.geometry === 'leftRightUpArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj2 = Math.max(0, Math.min(50000, element.presetAdjustments?.adj2 ?? 25000))
+    const adj1 = Math.max(0, Math.min(2 * adj2, element.presetAdjustments?.adj1 ?? 25000))
+    const adj3 = Math.max(0, Math.min((100000 - 2 * adj2) / 2, element.presetAdjustments?.adj3 ?? 25000))
+    const x1 = shortSide * adj3 / 100000
+    const dx2 = shortSide * adj2 / 100000
+    const dx3 = shortSide * adj1 / 200000
+    const x2 = width / 2 - dx2, x3 = width / 2 - dx3, x4 = width / 2 + dx3, x5 = width / 2 + dx2, x6 = width - x1
+    const y2 = height - shortSide * adj2 / 50000, y4 = height - dx2, y3 = y4 - dx3, y5 = y4 + dx3
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 ${y(y4)} L${x(x1)} ${y(y2)} L${x(x1)} ${y(y3)} L${x(x3)} ${y(y3)} L${x(x3)} ${y(x1)} L${x(x2)} ${y(x1)} L500 0 L${x(x5)} ${y(x1)} L${x(x4)} ${y(x1)} L${x(x4)} ${y(y3)} L${x(x6)} ${y(y3)} L${x(x6)} ${y(y2)} L1000 ${y(y4)} L${x(x6)} 1000 L${x(x6)} ${y(y5)} L${x(x1)} ${y(y5)} L${x(x1)} 1000 Z`
+  }
+  if (element.geometry === 'bentUpArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj1 = Math.max(0, Math.min(50000, element.presetAdjustments?.adj1 ?? 25000))
+    const adj2 = Math.max(0, Math.min(50000, element.presetAdjustments?.adj2 ?? 25000))
+    const adj3 = Math.max(0, Math.min(50000, element.presetAdjustments?.adj3 ?? 25000))
+    const dx2 = shortSide * adj1 / 200000
+    const x3 = width - shortSide * adj1 / 100000
+    const x2 = x3 - dx2, x4 = x3 + dx2
+    const y1 = shortSide * adj3 / 100000
+    const y2 = height - shortSide * adj1 / 100000
+    const x1 = width - shortSide * adj2 / 50000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 ${y(y2)} L${x(x2)} ${y(y2)} L${x(x2)} ${y(y1)} L${x(x1)} ${y(y1)} L${x(x3)} 0 L1000 ${y(y1)} L${x(x4)} ${y(y1)} V1000 H0 Z`
+  }
+  if (element.geometry === 'upArrow' || element.geometry === 'downArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj1 = Math.max(0, Math.min(100000, element.presetAdjustments?.adj1 ?? 50000))
+    const adj2 = Math.max(0, Math.min(100000 * height / shortSide, element.presetAdjustments?.adj2 ?? 50000))
+    const halfHeadWidth = width * adj1 / 200000
+    const x1 = width / 2 - halfHeadWidth, x2 = width / 2 + halfHeadWidth
+    const arrowDepth = shortSide * adj2 / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    if (element.geometry === 'upArrow') {
+      const y2 = arrowDepth
+      return `M0 ${y(y2)} L500 0 L1000 ${y(y2)} L${x(x2)} ${y(y2)} V1000 H${x(x1)} V${y(y2)} Z`
+    }
+    const y1 = height - arrowDepth
+    return `M0 ${y(y1)} L${x(x1)} ${y(y1)} V0 H${x(x2)} V${y(y1)} H1000 L500 1000 Z`
+  }
+  if (element.geometry === 'leftArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj1 = Math.max(0, Math.min(100000, element.presetAdjustments?.adj1 ?? 50000))
+    const adj2 = Math.max(0, Math.min(100000 * width / shortSide, element.presetAdjustments?.adj2 ?? 50000))
+    const arrowLength = shortSide * adj2 / 100000
+    const x2 = arrowLength
+    const arrowHalfHeight = height * adj1 / 200000
+    const y1 = height / 2 - arrowHalfHeight, y2 = height / 2 + arrowHalfHeight
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 500 L${x(x2)} 0 L${x(x2)} ${y(y1)} H1000 V${y(y2)} H${x(x2)} L${x(x2)} 1000 Z`
+  }
+  if (element.geometry === 'notchedRightArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj1 = Math.max(0, Math.min(100000, element.presetAdjustments?.adj1 ?? 50000))
+    const adj2 = Math.max(0, Math.min(100000 * width / shortSide, element.presetAdjustments?.adj2 ?? 50000))
+    const arrowLength = shortSide * adj2 / 100000
+    const x2 = width - arrowLength
+    const arrowHalfHeight = height * adj1 / 200000
+    const y1 = height / 2 - arrowHalfHeight, y2 = height / 2 + arrowHalfHeight
+    const x1 = arrowHalfHeight * arrowLength / (height / 2)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 ${y(y1)} L${x(x2)} ${y(y1)} L${x(x2)} 0 L1000 500 L${x(x2)} 1000 L${x(x2)} ${y(y2)} H0 L${x(x1)} 500 Z`
+  }
+  if (element.geometry === 'rightArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj1 = Math.max(0, Math.min(100000, element.presetAdjustments?.adj1 ?? 50000))
+    const adj2 = Math.max(0, Math.min(100000 * width / shortSide, element.presetAdjustments?.adj2 ?? 50000))
+    const arrowLength = shortSide * adj2 / 100000
+    const x1 = width - arrowLength
+    const arrowHalfHeight = height * adj1 / 200000
+    const y1 = height / 2 - arrowHalfHeight, y2 = height / 2 + arrowHalfHeight
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 ${y(y1)} L${x(x1)} ${y(y1)} L${x(x1)} 0 L1000 500 L${x(x1)} 1000 L${x(x1)} ${y(y2)} H0 Z`
+  }
+  if (element.geometry === 'upDownArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj1 = Math.max(0, Math.min(100000, element.presetAdjustments?.adj1 ?? 50000))
+    const adj2 = Math.max(0, Math.min(50000 * height / shortSide, element.presetAdjustments?.adj2 ?? 50000))
+    const arrowHalfWidth = width * adj1 / 200000
+    const x1 = width / 2 - arrowHalfWidth, x2 = width / 2 + arrowHalfWidth
+    const arrowHeight = shortSide * adj2 / 100000
+    const y2 = arrowHeight, y3 = height - arrowHeight
+    const dy1 = x1 * y2 / (width / 2), y1 = y2 - dy1, y4 = y3 + dy1
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M500 0 L1000 ${y(y2)} L${x(x2)} ${y(y2)} L${x(x2)} ${y(y3)} L1000 ${y(y3)} L500 1000 L0 ${y(y3)} L${x(x1)} ${y(y3)} L${x(x1)} ${y(y2)} L0 ${y(y2)} Z`
+  }
+  if (element.geometry === 'leftRightArrow') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const adj1 = Math.max(0, Math.min(100000, element.presetAdjustments?.adj1 ?? 50000))
+    const adj2 = Math.max(0, Math.min(50000 * width / shortSide, element.presetAdjustments?.adj2 ?? 50000))
+    const arrowWidth = shortSide * adj2 / 100000
+    const x2 = arrowWidth, x3 = width - arrowWidth
+    const arrowHalfHeight = height * adj1 / 200000
+    const y1 = height / 2 - arrowHalfHeight, y2 = height / 2 + arrowHalfHeight
+    const dx1 = y1 * x2 / (height / 2), x1 = x2 - dx1, x4 = x3 + dx1
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 500 L${x(x2)} 0 L${x(x2)} ${y(y1)} L${x(x3)} ${y(y1)} L${x(x3)} 0 L1000 500 L${x(x3)} 1000 L${x(x3)} ${y(y2)} L${x(x2)} ${y(y2)} L${x(x2)} 1000 Z`
+  }
+  if (element.geometry === 'plus') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const inset = Math.min(width, height) * Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.25))
+    const x1 = inset / width * 1000, x2 = 1000 - x1
+    const y1 = inset / height * 1000, y2 = 1000 - y1
+    return `M0 ${y1} L${x1} ${y1} L${x1} 0 L${x2} 0 L${x2} ${y1} H1000 V${y2} H${x2} V1000 H${x1} V${y2} H0 Z`
+  }
+  if (element.geometry === 'mathMinus') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const adj1 = Math.max(0, Math.min(100000, element.presetAdjustments?.adj1 ?? 23520))
+    const halfBarWidth = width * 73490 / 200000
+    const halfBarHeight = height * adj1 / 200000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(width / 2 - halfBarWidth)} ${y(height / 2 - halfBarHeight)} H${x(width / 2 + halfBarWidth)} V${y(height / 2 + halfBarHeight)} H${x(width / 2 - halfBarWidth)} Z`
+  }
+  if (element.geometry === 'mathEqual') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const adj1 = Math.max(0, Math.min(36745, element.presetAdjustments?.adj1 ?? 23520))
+    const adj2 = Math.max(0, Math.min(100000 - 2 * adj1, element.presetAdjustments?.adj2 ?? 11760))
+    const halfBarWidth = width * 73490 / 200000
+    const halfGap = height * adj2 / 200000
+    const barHeight = height * adj1 / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const left = x(width / 2 - halfBarWidth), right = x(width / 2 + halfBarWidth)
+    const upperInner = y(height / 2 - halfGap), upperOuter = y(height / 2 - halfGap - barHeight)
+    const lowerInner = y(height / 2 + halfGap), lowerOuter = y(height / 2 + halfGap + barHeight)
+    return `M${left} ${upperOuter} H${right} V${upperInner} H${left} Z M${left} ${lowerInner} H${right} V${lowerOuter} H${left} Z`
+  }
+  if (element.geometry === 'mathPlus') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const adj1 = Math.max(0, Math.min(73490, element.presetAdjustments?.adj1 ?? 23520))
+    const longHalfArm = width * 73490 / 200000
+    const crossHalfArm = Math.min(width, height) * adj1 / 200000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const x1 = x(width / 2 - longHalfArm), x2 = x(width / 2 - crossHalfArm), x3 = x(width / 2 + crossHalfArm), x4 = x(width / 2 + longHalfArm)
+    const y1 = y(height / 2 - height * 73490 / 200000), y2 = y(height / 2 - crossHalfArm), y3 = y(height / 2 + crossHalfArm), y4 = y(height / 2 + height * 73490 / 200000)
+    return `M${x1} ${y2} L${x2} ${y2} L${x2} ${y1} L${x3} ${y1} L${x3} ${y2} L${x4} ${y2} L${x4} ${y3} L${x3} ${y3} L${x3} ${y4} L${x2} ${y4} L${x2} ${y3} L${x1} ${y3} Z`
+  }
+  if (element.geometry === 'mathDivide') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const adj1 = Math.max(1000, Math.min(36745, element.presetAdjustments?.adj1 ?? 23520))
+    const maximumAdj3 = Math.min((73490 + adj1) / 4, 36745 * width / height)
+    const adj3 = Math.max(1000, Math.min(maximumAdj3, element.presetAdjustments?.adj3 ?? 11760))
+    const maximumAdj2 = 73490 - 4 * adj3 - adj1
+    const adj2 = Math.max(0, Math.min(maximumAdj2, element.presetAdjustments?.adj2 ?? 5880))
+    const dy1 = height * adj1 / 200000, gap = height * adj2 / 100000, radius = height * adj3 / 100000
+    const y3 = height / 2 - dy1, y4 = height / 2 + dy1
+    const y1 = y3 - gap, y2 = y1 + radius, y5 = height - y1
+    const halfBarWidth = width * 73490 / 200000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const circle = (centerY: number) => `M${x(width / 2)} ${y(centerY - radius)} A${x(radius)} ${y(radius)} 0 1 1 ${x(width / 2)} ${y(centerY + radius)} A${x(radius)} ${y(radius)} 0 1 1 ${x(width / 2)} ${y(centerY - radius)} Z`
+    return `${circle(y2)} ${circle(y5 - radius)} M${x(width / 2 - halfBarWidth)} ${y(y3)} H${x(width / 2 + halfBarWidth)} V${y(y4)} H${x(width / 2 - halfBarWidth)} Z`
+  }
+  if (element.geometry === 'mathMultiply') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const adj1 = Math.max(0, Math.min(51965, element.presetAdjustments?.adj1 ?? 23520))
+    const angle = Math.atan2(height, width), tangent = Math.tan(angle)
+    const widthAlongDiagonal = Math.hypot(width, height) * (1 - 0.51965)
+    const thickness = Math.min(width, height) * adj1 / 100000
+    const xM = Math.cos(angle) * widthAlongDiagonal / 2, yM = Math.sin(angle) * widthAlongDiagonal / 2
+    const dx = Math.sin(angle) * thickness / 2, dy = Math.cos(angle) * thickness / 2
+    const xA = xM - dx, yA = yM + dy, xB = xM + dx, yB = yM - dy
+    const yC = (width / 2 - xB) * tangent + yB
+    const xD = width - xB, xE = width - xA
+    const xFE = tangent ? (height / 2 - yA) / tangent : 0
+    const xF = xE - xFE, xL = xA + xFE
+    const yG = height - yA, yH = height - yB, yI = height - yC
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(xA)} ${y(yA)} L${x(xB)} ${y(yB)} L500 ${y(yC)} L${x(xD)} ${y(yB)} L${x(xE)} ${y(yA)} L${x(xF)} 500 L${x(xE)} ${y(yG)} L${x(xD)} ${y(yH)} L500 ${y(yI)} L${x(xB)} ${y(yH)} L${x(xA)} ${y(yG)} L${x(xL)} 500 Z`
+  }
+  if (element.geometry === 'mathNotEqual') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const adj1 = Math.max(0, Math.min(50000, element.presetAdjustments?.adj1 ?? 23520))
+    const angle = Math.max(4200000, Math.min(6600000, element.presetAdjustments?.adj2 ?? 6600000)) - 5400000
+    const adj3 = Math.max(0, Math.min(100000 - 2 * adj1, element.presetAdjustments?.adj3 ?? 11760))
+    const halfHeight = height / 2
+    const dy1 = height * adj1 / 100000, dy2 = height * adj3 / 200000
+    const x1 = width / 2 - width * 73490 / 200000, x8 = width / 2 + width * 73490 / 200000
+    const y2 = halfHeight - dy2, y3 = halfHeight + dy2, y1 = y2 - dy1, y4 = y3 + dy1
+    const xAdj = halfHeight * Math.tan(angle / 60000 * Math.PI / 180)
+    const length = Math.hypot(xAdj, halfHeight)
+    const barHalfWidth = length * dy1 / halfHeight / 2
+    const x7 = width / 2 + xAdj - barHalfWidth
+    const x6 = x7 - xAdj * y1 / halfHeight, x5 = x7 - xAdj * y2 / halfHeight
+    const x4 = x7 - xAdj * y3 / halfHeight, x3 = x7 - xAdj * y4 / halfHeight
+    const rx7 = x7 - barHalfWidth, rx6 = x6 - barHalfWidth
+    const rx5 = x5 - barHalfWidth, rx4 = x4 - barHalfWidth, rx3 = x3 - barHalfWidth
+    const dx7 = dy1 * halfHeight / length
+    const dy3 = dy1 * xAdj / length
+    const rx = angle > 0 ? x7 + dx7 : rx7
+    const lx = angle > 0 ? x7 : rx7 - dx7
+    const ry = angle > 0 ? dy3 : 0
+    const ly = angle > 0 ? 0 : -dy3
+    const dlx = width - rx, drx = width - lx, dly = height - ry, dry = height - ly
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(x1)} ${y(y1)} L${x(x6)} ${y(y1)} L${x(lx)} ${y(ly)} L${x(rx)} ${y(ry)} L${x(rx6)} ${y(y1)} L${x(x8)} ${y(y1)} L${x(x8)} ${y(y2)} L${x(rx5)} ${y(y2)} L${x(rx4)} ${y(y3)} L${x(x8)} ${y(y3)} L${x(x8)} ${y(y4)} L${x(rx3)} ${y(y4)} L${x(drx)} ${y(dry)} L${x(dlx)} ${y(dly)} L${x(x3)} ${y(y4)} L${x(x1)} ${y(y4)} L${x(x1)} ${y(y3)} L${x(x4)} ${y(y3)} L${x(x5)} ${y(y2)} L${x(x1)} ${y(y2)} Z`
+  }
+  if (element.geometry === 'snip1Rect') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const inset = Math.min(width, height) * (element.presetAdjustment ?? 0.16667)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 0 H${x(width - inset)} L1000 ${y(inset)} V1000 H0 Z`
+  }
+  if (element.geometry === 'snip2DiagRect') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const leftCut = shortSide * Math.max(0, Math.min(50000, element.presetAdjustments?.adj1 ?? 0)) / 100000
+    const rightCut = shortSide * Math.max(0, Math.min(50000, element.presetAdjustments?.adj2 ?? 16667)) / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(leftCut)} 0 L${x(width - rightCut)} 0 L1000 ${y(rightCut)} L1000 ${y(height - leftCut)} L${x(width - leftCut)} 1000 L${x(rightCut)} 1000 L0 ${y(height - rightCut)} L0 ${y(leftCut)} Z`
+  }
+  if (element.geometry === 'snip2SameRect') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const topCut = shortSide * Math.max(0, Math.min(50000, element.presetAdjustments?.adj1 ?? 16667)) / 100000
+    const bottomCut = shortSide * Math.max(0, Math.min(50000, element.presetAdjustments?.adj2 ?? 0)) / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(topCut)} 0 L${x(width - topCut)} 0 L1000 ${y(topCut)} L1000 ${y(height - bottomCut)} L${x(width - bottomCut)} 1000 L${x(bottomCut)} 1000 L0 ${y(height - bottomCut)} L0 ${y(topCut)} Z`
+  }
+  if (element.geometry === 'round1Rect') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const radius = Math.min(width, height) * (element.presetAdjustment ?? 0.16667)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 0 L${x(width - radius)} 0 A${x(radius)} ${y(radius)} 0 0 1 1000 ${y(radius)} L1000 1000 H0 Z`
+  }
+  if (element.geometry === 'round2DiagRect') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const radius1 = shortSide * (element.presetAdjustments?.adj1 ?? 16667) / 100000
+    const radius2 = shortSide * (element.presetAdjustments?.adj2 ?? 0) / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(radius1)} 0 L${x(width - radius2)} 0 A${x(radius2)} ${y(radius2)} 0 0 1 1000 ${y(radius2)} L1000 ${y(height - radius1)} A${x(radius1)} ${y(radius1)} 0 0 1 ${x(width - radius1)} 1000 L${x(radius2)} 1000 A${x(radius2)} ${y(radius2)} 0 0 1 0 ${y(height - radius2)} L0 ${y(radius1)} A${x(radius1)} ${y(radius1)} 0 0 1 ${x(radius1)} 0 Z`
+  }
+  if (element.geometry === 'round2SameRect') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const topRadius = shortSide * (element.presetAdjustments?.adj1 ?? 16667) / 100000
+    const bottomRadius = shortSide * (element.presetAdjustments?.adj2 ?? 0) / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(topRadius)} 0 L${x(width - topRadius)} 0 A${x(topRadius)} ${y(topRadius)} 0 0 1 1000 ${y(topRadius)} L1000 ${y(height - bottomRadius)} A${x(bottomRadius)} ${y(bottomRadius)} 0 0 1 ${x(width - bottomRadius)} 1000 L${x(bottomRadius)} 1000 A${x(bottomRadius)} ${y(bottomRadius)} 0 0 1 0 ${y(height - bottomRadius)} L0 ${y(topRadius)} A${x(topRadius)} ${y(topRadius)} 0 0 1 ${x(topRadius)} 0 Z`
+  }
+  if (element.geometry === 'snipRoundRect') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const radius = shortSide * (element.presetAdjustments?.adj1 ?? 16667) / 100000
+    const cut = shortSide * (element.presetAdjustments?.adj2 ?? 16667) / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(radius)} 0 L${x(width - cut)} 0 L1000 ${y(cut)} L1000 1000 H0 L0 ${y(radius)} A${x(radius)} ${y(radius)} 0 0 1 ${x(radius)} 0 Z`
+  }
+  if (element.geometry === 'cube') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const inset = Math.min(width, height) * (element.presetAdjustment ?? 0.25)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 ${y(inset)} L${x(inset)} 0 H1000 V${y(height - inset)} L${x(width - inset)} 1000 H0 Z`
+  }
+  if (element.geometry === 'frame') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const inset = shortSide * Math.max(0, Math.min(50000, element.presetAdjustments?.adj1 ?? 12500)) / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 0 H1000 V1000 H0 Z M${x(inset)} ${y(inset)} V${y(height - inset)} H${x(width - inset)} V${y(inset)} Z`
+  }
+  if (element.geometry === 'halfFrame') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const maximumAdj2 = 100000 * width / shortSide
+    const adj2 = Math.max(0, Math.min(maximumAdj2, element.presetAdjustments?.adj2 ?? 33333))
+    const x1 = shortSide * adj2 / 100000
+    const maximumAdj1 = 100000 * (height - height * x1 / width) / shortSide
+    const adj1 = Math.max(0, Math.min(maximumAdj1, element.presetAdjustments?.adj1 ?? 33333))
+    const y1 = shortSide * adj1 / 100000
+    const dx2 = y1 * width / height
+    const x2 = width - dx2
+    const y2 = height - x1 * height / width
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 0 H1000 L${x(x2)} ${y(y1)} L${x(x1)} ${y(y1)} L${x(x1)} ${y(y2)} Z`
+  }
+  if (element.geometry === 'cornerTabs' || element.geometry === 'plaqueTabs' || element.geometry === 'squareTabs') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return ''
+    const inset = Math.hypot(width, height) / 20
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const rightInset = x(width - inset), bottomInset = y(height - inset), topRight = y(inset), leftRight = x(inset)
+    if (element.geometry === 'cornerTabs') {
+      return `M0 0 L${leftRight} 0 L0 ${topRight} Z M0 ${bottomInset} L${leftRight} 1000 L0 1000 Z M${rightInset} 0 L1000 0 L1000 ${topRight} Z M1000 ${bottomInset} L1000 1000 L${rightInset} 1000 Z`
+    }
+    if (element.geometry === 'squareTabs') return `M0 0 L${leftRight} 0 L${leftRight} ${topRight} L0 ${topRight} Z M0 ${bottomInset} L${leftRight} ${bottomInset} L${leftRight} 1000 L0 1000 Z M${rightInset} 0 L1000 0 L1000 ${topRight} L${rightInset} ${topRight} Z M${rightInset} ${bottomInset} L1000 ${bottomInset} L1000 1000 L${rightInset} 1000 Z`
+    return `M0 0 L${leftRight} 0 A${leftRight} ${topRight} 0 0 1 0 ${topRight} Z M0 ${bottomInset} A${leftRight} ${topRight} 0 0 1 ${leftRight} 1000 L0 1000 Z M1000 0 L1000 ${topRight} A${leftRight} ${topRight} 0 0 1 ${rightInset} 0 Z M${rightInset} 1000 A${leftRight} ${topRight} 0 0 1 1000 ${bottomInset} L1000 1000 Z`
+  }
+  if (element.geometry === 'plaque') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const radius = Math.min(width, height) * (element.presetAdjustment ?? 0.16667)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 ${y(radius)} A${x(radius)} ${y(radius)} 0 0 1 ${x(radius)} 0 L${x(width - radius)} 0 A${x(radius)} ${y(radius)} 0 0 1 1000 ${y(radius)} L1000 ${y(height - radius)} A${x(radius)} ${y(radius)} 0 0 1 ${x(width - radius)} 1000 L${x(radius)} 1000 A${x(radius)} ${y(radius)} 0 0 1 0 ${y(height - radius)} Z`
+  }
+  if (element.geometry === 'donut') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const inset = Math.min(width, height) * (element.presetAdjustment ?? 0.25)
+    const innerRx = (width / 2 - inset) / width * 1000, innerRy = (height / 2 - inset) / height * 1000
+    const innerPath = innerRx > 0 && innerRy > 0
+      ? `M${inset / width * 1000} 500 A${innerRx} ${innerRy} 0 0 0 500 ${500 + innerRy} A${innerRx} ${innerRy} 0 0 0 ${1000 - inset / width * 1000} 500 A${innerRx} ${innerRy} 0 0 0 500 ${500 - innerRy} A${innerRx} ${innerRy} 0 0 0 ${inset / width * 1000} 500 Z`
+      : ''
+    return `M0 500 A500 500 0 0 1 500 0 A500 500 0 0 1 1000 500 A500 500 0 0 1 500 1000 A500 500 0 0 1 0 500 Z ${innerPath}`
+  }
+  if (['pie', 'chord', 'arc'].includes(element.geometry)) return presetAngleArcPaths(element)[0]
+  if (element.geometry === 'blockArc') return presetBlockArcPath(element)
+  if (element.geometry === 'pieWedge') return 'M0 1000 A1000 1000 0 0 1 1000 0 L1000 1000 Z'
+  if (element.geometry === 'homePlate') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const cut = Math.min(width, height) * (element.presetAdjustment ?? 0.5)
+    const x = (width - cut) / width * 1000
+    return `M0 0 L${x} 0 L1000 500 L${x} 1000 L0 1000 Z`
+  }
+  if (element.geometry === 'nonIsoscelesTrapezoid') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const shortSide = Math.min(width, height)
+    const leftTop = shortSide * (element.presetAdjustments?.adj1 ?? 25000) / 100000
+    const rightTop = width - shortSide * (element.presetAdjustments?.adj2 ?? 25000) / 100000
+    const x = (value: number) => value / width * 1000
+    return `M0 1000 L${x(leftTop)} 0 L${x(rightTop)} 0 L1000 1000 Z`
+  }
+  if (element.geometry === 'heart') {
+    // ECMA-376 Part 1 defines the heart with two symmetric cubic Bézier segments.
+    const innerControlX = 500 + 1000 * 10 / 48, outerControlX = 500 + 1000 * 49 / 48
+    const upperControlY = -1000 / 3
+    return `M500 250 C${innerControlX} ${upperControlY} ${outerControlX} 250 500 1000 C${1000 - outerControlX} 250 ${1000 - innerControlX} ${upperControlY} 500 250 Z`
+  }
+  if (element.geometry === 'lightningBolt') {
+    // ECMA-376 Part 1 defines the lightning bolt's eleven preset path points in a 21600-unit square.
+    const scale = 1000 / 21600
+    const points: [number, number][] = [[8472, 0], [12860, 6080], [11050, 6797], [16577, 12007], [14767, 12877], [21600, 21600], [10012, 14915], [12222, 13987], [5022, 9705], [7602, 8382], [0, 3890]]
+    return points.map(([pointX, pointY], index) => (index ? 'L' : 'M') + pointX * scale + ' ' + pointY * scale).join(' ') + ' Z'
+  }
+  if (element.geometry === 'triangle') return `M0 1000 L${(element.presetAdjustment ?? 0.5) * 1000} 0 L1000 1000 Z`
+  if (element.geometry === 'rtTriangle') return 'M0 1000 L0 0 L1000 1000 Z'
+  if (element.geometry === 'diamond' || element.geometry === 'flowChartDecision') return 'M0 500 L500 0 L1000 500 L500 1000 Z'
+  if (element.geometry === 'flowChartOffpageConnector') return 'M0 0 H1000 V800 L500 1000 L0 800 Z'
+  if (element.geometry === 'flowChartDocument') {
+    const scale = 1000 / 21600
+    return `M0 0 H1000 V${17322 * scale} C${10800 * scale} ${17322 * scale} ${10800 * scale} ${23922 * scale} 0 ${20172 * scale} Z`
+  }
+  if (element.geometry === 'flowChartManualInput') return 'M0 200 L1000 0 V1000 H0 Z'
+  if (element.geometry === 'flowChartPunchedCard') return 'M0 200 L200 0 H1000 V1000 H0 Z'
+  if (element.geometry === 'flowChartOfflineStorage') return 'M0 0 H1000 L500 1000 Z M400 800 H600'
+  if (element.geometry === 'flowChartMagneticDisk') return 'M0 166.6667 A500 166.6667 0 0 1 1000 166.6667 L1000 833.3333 A500 166.6667 0 0 1 0 833.3333 Z'
+  if (element.geometry === 'flowChartMagneticDrum') {
+    const inset = 1000 / 6
+    return `M${inset} 0 H${1000 - inset} A${inset} 500 0 0 1 ${1000 - inset} 1000 L${inset} 1000 A${inset} 500 0 0 1 ${inset} 0 Z`
+  }
+  if (element.geometry === 'flowChartMagneticTape') {
+    const angle = Math.atan2(element.height, element.width)
+    const x = 500 + 500 * Math.cos(angle), y = 500 + 500 * Math.sin(angle)
+    return `M500 1000 A500 500 0 0 1 0 500 A500 500 0 0 1 500 0 A500 500 0 0 1 1000 500 A500 500 0 0 1 ${x} ${y} L1000 ${y} L1000 1000 Z`
+  }
+  if (element.geometry === 'flowChartMultidocument') {
+    const scale = 1000 / 21600
+    const unit = (value: number) => value * scale
+    return `M0 ${unit(20782)} C${unit(9298)} ${unit(23542)} ${unit(9298)} ${unit(18022)} ${unit(18595)} ${unit(18022)} L${unit(18595)} ${unit(3675)} H0 Z M${unit(1532)} ${unit(3675)} L${unit(1532)} ${unit(1815)} L${unit(20000)} ${unit(1815)} L${unit(20000)} ${unit(16252)} C${unit(19298)} ${unit(16252)} ${unit(18595)} ${unit(16352)} ${unit(18595)} ${unit(16352)} L${unit(18595)} ${unit(3675)} Z M${unit(2972)} ${unit(1815)} L${unit(2972)} 0 H1000 L1000 ${unit(14392)} C${unit(20800)} ${unit(14392)} ${unit(20000)} ${unit(14467)} ${unit(20000)} ${unit(14467)} L${unit(20000)} ${unit(1815)} Z`
+  }
+  if (element.geometry === 'flowChartOnlineStorage') {
+    const inset = 1000 / 6
+    return `M${inset} 0 H1000 A${inset} 500 0 0 0 1000 1000 L${inset} 1000 A${inset} 500 0 0 1 ${inset} 0 Z`
+  }
+  if (element.geometry === 'flowChartPunchedTape') return 'M0 100 A250 100 0 0 0 500 100 A250 100 0 0 1 1000 100 L1000 900 A250 100 0 0 0 500 900 A250 100 0 0 1 0 900 Z'
+  if (element.geometry === 'flowChartManualOperation') return 'M0 0 H1000 L800 1000 L200 1000 Z'
+  if (element.geometry === 'flowChartInputOutput') return 'M0 1000 L200 0 H1000 L800 1000 Z'
+  if (element.geometry === 'flowChartPreparation') return 'M0 500 L200 0 H800 L1000 500 L800 1000 H200 Z'
+  if (element.geometry === 'flowChartTerminator') {
+    const radiusX = 3475 / 21600 * 1000
+    return `M${radiusX} 0 H${1000 - radiusX} A${radiusX} 500 0 0 1 1000 500 L${radiusX} 1000 A${radiusX} 500 0 0 1 0 500 Z`
+  }
+  if (element.geometry === 'flowChartPredefinedProcess') return 'M0 0 H1000 V1000 H0 Z M125 0 V1000 M875 0 V1000'
+  if (element.geometry === 'flowChartInternalStorage') return 'M0 0 H1000 V1000 H0 Z M125 0 V1000 M0 125 H1000'
+  if (element.geometry === 'flowChartSort') return 'M0 500 L500 0 L1000 500 L500 1000 Z M0 500 H1000'
+  if (element.geometry === 'flowChartCollate') return 'M0 0 H1000 L500 500 L1000 1000 H0 L500 500 Z'
+  if (element.geometry === 'flowChartExtract') return 'M0 1000 L500 0 L1000 1000 Z'
+  if (element.geometry === 'flowChartMerge') return 'M0 0 L1000 0 L500 1000 Z'
+  if (element.geometry === 'trapezoid') {
+    const cut = element.width > 0 ? Math.min(element.width, element.height) * (element.presetAdjustment ?? 0.25) / element.width * 1000 : 0
+    return `M0 1000 L${cut} 0 L${1000 - cut} 0 L1000 1000 Z`
+  }
+  if (element.geometry === 'octagon') {
+    const shortSide = Math.min(element.width, element.height)
+    const adjustment = element.presetAdjustment ?? 0.29289
+    const cutX = element.width > 0 ? shortSide * adjustment / element.width * 1000 : 0
+    const cutY = element.height > 0 ? shortSide * adjustment / element.height * 1000 : 0
+    return `M0 ${cutY} L${cutX} 0 H${1000 - cutX} L1000 ${cutY} V${1000 - cutY} L${1000 - cutX} 1000 H${cutX} L0 ${1000 - cutY} Z`
+  }
+  if (element.geometry === 'pentagon') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const halfWidth = width * (element.presetAdjustments?.hf ?? 105146) / 200000
+    const halfHeight = height * (element.presetAdjustments?.vf ?? 110557) / 200000
+    const dx1 = halfWidth * Math.cos(Math.PI / 10), dx2 = halfWidth * Math.cos(17 * Math.PI / 10)
+    const dy1 = halfHeight * Math.sin(Math.PI / 10), dy2 = halfHeight * Math.sin(17 * Math.PI / 10)
+    const centerY = height * (element.presetAdjustments?.vf ?? 110557) / 200000
+    const pointX = (value: number) => value / width * 1000, pointY = (value: number) => value / height * 1000
+    return `M${pointX(width / 2 - dx1)} ${pointY(centerY - dy1)} L500 0 L${pointX(width / 2 + dx1)} ${pointY(centerY - dy1)} L${pointX(width / 2 + dx2)} ${pointY(centerY - dy2)} L${pointX(width / 2 - dx2)} ${pointY(centerY - dy2)} Z`
+  }
+  if (element.geometry === 'heptagon') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const halfWidth = width / 2 * (element.presetAdjustments?.hf ?? 102572) / 100000
+    const halfHeight = height / 2 * (element.presetAdjustments?.vf ?? 105210) / 100000
+    const dx1 = halfWidth * 97493 / 100000, dx2 = halfWidth * 78183 / 100000, dx3 = halfWidth * 43388 / 100000
+    const y1 = halfHeight - halfHeight * 62349 / 100000
+    const y2 = halfHeight + halfHeight * 22252 / 100000
+    const y3 = halfHeight + halfHeight * 90097 / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(width / 2 - dx1)} ${y(y2)} L${x(width / 2 - dx2)} ${y(y1)} L500 0 L${x(width / 2 + dx2)} ${y(y1)} L${x(width / 2 + dx1)} ${y(y2)} L${x(width / 2 + dx3)} ${y(y3)} L${x(width / 2 - dx3)} ${y(y3)} Z`
+  }
+  if (element.geometry === 'decagon') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const halfHeight = height / 2 * (element.presetAdjustments?.vf ?? 105146) / 100000
+    const dx1 = width / 2 * Math.cos(Math.PI / 5), dx2 = width / 2 * Math.cos(2 * Math.PI / 5)
+    const dy1 = halfHeight * Math.sin(2 * Math.PI / 5), dy2 = halfHeight * Math.sin(Math.PI / 5)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 500 L${x(width / 2 - dx1)} ${y(height / 2 - dy2)} L${x(width / 2 - dx2)} ${y(height / 2 - dy1)} L${x(width / 2 + dx2)} ${y(height / 2 - dy1)} L${x(width / 2 + dx1)} ${y(height / 2 - dy2)} L1000 500 L${x(width / 2 + dx1)} ${y(height / 2 + dy2)} L${x(width / 2 + dx2)} ${y(height / 2 + dy1)} L${x(width / 2 - dx2)} ${y(height / 2 + dy1)} L${x(width / 2 - dx1)} ${y(height / 2 + dy2)} Z`
+  }
+  if (element.geometry === 'star5') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const horizontalFactor = element.presetAdjustments?.hf ?? 105146, verticalFactor = element.presetAdjustments?.vf ?? 110557
+    const halfWidth = width / 2 * horizontalFactor / 100000, halfHeight = height / 2 * verticalFactor / 100000
+    const centerY = height / 2 * verticalFactor / 100000
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.19098)) * 2
+    const innerHalfWidth = halfWidth * innerScale, innerHalfHeight = halfHeight * innerScale
+    const dx1 = halfWidth * Math.cos(Math.PI / 10), dx2 = halfWidth * Math.cos(17 * Math.PI / 10)
+    const dy1 = halfHeight * Math.sin(Math.PI / 10), dy2 = halfHeight * Math.sin(17 * Math.PI / 10)
+    const sdx1 = innerHalfWidth * Math.cos(19 * Math.PI / 10), sdx2 = innerHalfWidth * Math.cos(3 * Math.PI / 10)
+    const sdy1 = innerHalfHeight * Math.sin(3 * Math.PI / 10), sdy2 = innerHalfHeight * Math.sin(19 * Math.PI / 10)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(width / 2 - dx1)} ${y(centerY - dy1)} L${x(width / 2 - sdx2)} ${y(centerY - sdy1)} L500 0 L${x(width / 2 + sdx2)} ${y(centerY - sdy1)} L${x(width / 2 + dx1)} ${y(centerY - dy1)} L${x(width / 2 + sdx1)} ${y(centerY - sdy2)} L${x(width / 2 + dx2)} ${y(centerY - dy2)} L500 ${y(centerY + innerHalfHeight)} L${x(width / 2 - dx2)} ${y(centerY - dy2)} L${x(width / 2 - sdx1)} ${y(centerY - sdy2)} Z`
+  }
+  if (element.geometry === 'star4') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.125)) * 2
+    const innerHalfWidth = width / 2 * innerScale, innerHalfHeight = height / 2 * innerScale
+    const insetX = innerHalfWidth * Math.cos(Math.PI / 4), insetY = innerHalfHeight * Math.sin(Math.PI / 4)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 500 L${x(width / 2 - insetX)} ${y(height / 2 - insetY)} L500 0 L${x(width / 2 + insetX)} ${y(height / 2 - insetY)} L1000 500 L${x(width / 2 + insetX)} ${y(height / 2 + insetY)} L500 1000 L${x(width / 2 - insetX)} ${y(height / 2 + insetY)} Z`
+  }
+  if (element.geometry === 'star6') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const halfWidth = width / 2 * (element.presetAdjustments?.hf ?? 115470) / 100000
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.28868)) * 2
+    const innerHalfWidth = halfWidth * innerScale, innerHalfHeight = height / 2 * innerScale
+    const dx = halfWidth * Math.cos(Math.PI / 6), dy = innerHalfHeight * Math.sin(Math.PI / 3)
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M${x(width / 2 - dx)} ${y(height / 4)} L${x(width / 2 - innerHalfWidth / 2)} ${y(height / 2 - dy)} L500 0 L${x(width / 2 + innerHalfWidth / 2)} ${y(height / 2 - dy)} L${x(width / 2 + dx)} ${y(height / 4)} L${x(width / 2 + innerHalfWidth)} 500 L${x(width / 2 + dx)} ${y(height * 3 / 4)} L${x(width / 2 + innerHalfWidth / 2)} ${y(height / 2 + dy)} L500 1000 L${x(width / 2 - innerHalfWidth / 2)} ${y(height / 2 + dy)} L${x(width / 2 - dx)} ${y(height * 3 / 4)} L${x(width / 2 - innerHalfWidth)} 500 Z`
+  }
+  if (element.geometry === 'star7') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const horizontalFactor = element.presetAdjustments?.hf ?? 102572, verticalFactor = element.presetAdjustments?.vf ?? 105210
+    const outerHalfWidth = width / 2 * horizontalFactor / 100000, outerHalfHeight = height / 2 * verticalFactor / 100000
+    const centerX = width / 2, centerY = height / 2 * verticalFactor / 100000
+    const outerDx1 = outerHalfWidth * 0.97493, outerDx2 = outerHalfWidth * 0.78183, outerDx3 = outerHalfWidth * 0.43388
+    const outerDy1 = outerHalfHeight * 0.62349, outerDy2 = outerHalfHeight * 0.22252, outerDy3 = outerHalfHeight * 0.90097
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.34601)) * 2
+    const innerHalfWidth = outerHalfWidth * innerScale, innerHalfHeight = outerHalfHeight * innerScale
+    const innerDx1 = innerHalfWidth * 0.97493, innerDx2 = innerHalfWidth * 0.78183, innerDx3 = innerHalfWidth * 0.43388
+    const innerDy1 = innerHalfHeight * 0.90097, innerDy2 = innerHalfHeight * 0.22252, innerDy3 = innerHalfHeight * 0.62349
+    const x1 = centerX - outerDx1, x2 = centerX - outerDx2, x3 = centerX - outerDx3
+    const x4 = centerX + outerDx3, x5 = centerX + outerDx2, x6 = centerX + outerDx1
+    const y1 = centerY - outerDy1, y2 = centerY + outerDy2, y3 = centerY + outerDy3
+    const sx1 = centerX - innerDx1, sx2 = centerX - innerDx2, sx3 = centerX - innerDx3
+    const sx4 = centerX + innerDx3, sx5 = centerX + innerDx2, sx6 = centerX + innerDx1
+    const sy1 = centerY - innerDy1, sy2 = centerY - innerDy2, sy3 = centerY + innerDy3, sy4 = centerY + innerHalfHeight
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const points: [number, number][] = [[x1, y2], [sx1, sy2], [x2, y1], [sx3, sy1], [centerX, 0], [sx4, sy1], [x5, y1], [sx6, sy2], [x6, y2], [sx5, sy3], [x4, y3], [centerX, sy4], [x3, y3], [sx2, sy3]]
+    return points.map(([pointX, pointY], index) => (index ? 'L' : 'M') + x(pointX) + ' ' + y(pointY)).join(' ') + ' Z'
+  }
+  if (element.geometry === 'star8') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.375)) * 2
+    const innerHalfWidth = width / 2 * innerScale, innerHalfHeight = height / 2 * innerScale
+    const outerDx = width / 2 * Math.cos(Math.PI / 4), outerDy = height / 2 * Math.sin(Math.PI / 4)
+    const innerDx1 = innerHalfWidth * 0.92388, innerDx2 = innerHalfWidth * 0.38268
+    const innerDy1 = innerHalfHeight * 0.92388, innerDy2 = innerHalfHeight * 0.38268
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    return `M0 500 L${x(width / 2 - innerDx1)} ${y(height / 2 - innerDy2)} L${x(width / 2 - outerDx)} ${y(height / 2 - outerDy)} L${x(width / 2 - innerDx2)} ${y(height / 2 - innerDy1)} L500 0 L${x(width / 2 + innerDx2)} ${y(height / 2 - innerDy1)} L${x(width / 2 + outerDx)} ${y(height / 2 - outerDy)} L${x(width / 2 + innerDx1)} ${y(height / 2 - innerDy2)} L1000 500 L${x(width / 2 + innerDx1)} ${y(height / 2 + innerDy2)} L${x(width / 2 + outerDx)} ${y(height / 2 + outerDy)} L${x(width / 2 + innerDx2)} ${y(height / 2 + innerDy1)} L500 1000 L${x(width / 2 - innerDx2)} ${y(height / 2 + innerDy1)} L${x(width / 2 - outerDx)} ${y(height / 2 + outerDy)} L${x(width / 2 - innerDx1)} ${y(height / 2 + innerDy2)} Z`
+  }
+  if (element.geometry === 'star10') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const outerHalfWidth = width / 2 * (element.presetAdjustments?.hf ?? 105146) / 100000
+    const outerDx1 = outerHalfWidth * 0.95106, outerDx2 = outerHalfWidth * 0.58779
+    const outerDy1 = height / 2 * 0.80902, outerDy2 = height / 2 * 0.30902
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.42533)) * 2
+    const innerHalfWidth = outerHalfWidth * innerScale, innerHalfHeight = height / 2 * innerScale
+    const innerDx1 = innerHalfWidth * 0.80902, innerDx2 = innerHalfWidth * 0.30902
+    const innerDy1 = innerHalfHeight * 0.95106, innerDy2 = innerHalfHeight * 0.58779
+    const centerX = width / 2, centerY = height / 2
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const points: [number, number][] = [
+      [centerX - outerDx1, centerY - outerDy2], [centerX - innerDx1, centerY - innerDy2],
+      [centerX - outerDx2, centerY - outerDy1], [centerX - innerDx2, centerY - innerDy1], [centerX, 0],
+      [centerX + innerDx2, centerY - innerDy1], [centerX + outerDx2, centerY - outerDy1], [centerX + innerDx1, centerY - innerDy2],
+      [centerX + outerDx1, centerY - outerDy2], [centerX + innerHalfWidth, centerY], [centerX + outerDx1, centerY + outerDy2],
+      [centerX + innerDx1, centerY + innerDy2], [centerX + outerDx2, centerY + outerDy1], [centerX + innerDx2, centerY + innerDy1],
+      [centerX, height], [centerX - innerDx2, centerY + innerDy1], [centerX - outerDx2, centerY + outerDy1],
+      [centerX - innerDx1, centerY + innerDy2], [centerX - outerDx1, centerY + outerDy2], [centerX - innerHalfWidth, centerY],
+    ]
+    return points.map(([pointX, pointY], index) => (index ? 'L' : 'M') + x(pointX) + ' ' + y(pointY)).join(' ') + ' Z'
+  }
+  if (element.geometry === 'star12') {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const centerX = width / 2, centerY = height / 2
+    const outerDx = centerX * Math.cos(Math.PI / 6), outerDy = centerY * Math.sin(Math.PI / 3)
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.375)) * 2
+    const innerHalfWidth = centerX * innerScale, innerHalfHeight = centerY * innerScale
+    const innerDx1 = innerHalfWidth * Math.cos(Math.PI / 12), innerDx2 = innerHalfWidth * Math.cos(Math.PI / 4), innerDx3 = innerHalfWidth * Math.cos(5 * Math.PI / 12)
+    const innerDy1 = innerHalfHeight * Math.sin(5 * Math.PI / 12), innerDy2 = innerHalfHeight * Math.sin(Math.PI / 4), innerDy3 = innerHalfHeight * Math.sin(Math.PI / 12)
+    const x1 = centerX - outerDx, x3 = width * 3 / 4, x4 = centerX + outerDx
+    const y1 = centerY - outerDy, y3 = height * 3 / 4, y4 = centerY + outerDy
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const points: [number, number][] = [
+      [0, centerY], [centerX - innerDx1, centerY - innerDy3], [x1, height / 4], [centerX - innerDx2, centerY - innerDy2],
+      [width / 4, y1], [centerX - innerDx3, centerY - innerDy1], [centerX, 0], [centerX + innerDx3, centerY - innerDy1],
+      [x3, y1], [centerX + innerDx2, centerY - innerDy2], [x4, height / 4], [centerX + innerDx1, centerY - innerDy3],
+      [width, centerY], [centerX + innerDx1, centerY + innerDy3], [x4, y3], [centerX + innerDx2, centerY + innerDy2],
+      [x3, y4], [centerX + innerDx3, centerY + innerDy1], [centerX, height], [centerX - innerDx3, centerY + innerDy1],
+      [width / 4, y4], [centerX - innerDx2, centerY + innerDy2], [x1, y3], [centerX - innerDx1, centerY + innerDy3],
+    ]
+    return points.map(([pointX, pointY], index) => (index ? 'L' : 'M') + x(pointX) + ' ' + y(pointY)).join(' ') + ' Z'
+  }
+  if (['star16', 'star24', 'star32'].includes(element.geometry)) {
+    const width = element.width, height = element.height
+    if (width <= 0 || height <= 0) return 'M0 0 H1000 V1000 H0 Z'
+    const pointCount = Number(element.geometry.slice(4))
+    const innerScale = Math.max(0, Math.min(0.5, element.presetAdjustment ?? 0.375)) * 2
+    const centerX = width / 2, centerY = height / 2
+    const guideFactor = (value: number) => Math.round(value * 100000) / 100000
+    const x = (value: number) => value / width * 1000, y = (value: number) => value / height * 1000
+    const points: [number, number][] = []
+    for (let index = 0; index < pointCount * 2; index++) {
+      const angle = Math.PI + index * Math.PI / pointCount
+      const radius = index % 2 === 0 ? 1 : innerScale
+      const usesExactTrig = element.geometry === 'star24' && index % 2 === 0 || element.geometry === 'star32' && index % 8 === 0
+      const factor = (value: number) => usesExactTrig ? value : guideFactor(value)
+      points.push([centerX + centerX * radius * factor(Math.cos(angle)), centerY + centerY * radius * factor(Math.sin(angle))])
+    }
+    return points.map(([pointX, pointY], index) => (index ? 'L' : 'M') + x(pointX) + ' ' + y(pointY)).join(' ') + ' Z'
+  }
+  if (element.geometry === 'dodecagon') {
+    const scale = 1000 / 21600
+    const x1 = 2894 * scale, x2 = 7906 * scale, x3 = 13694 * scale, x4 = 18706 * scale
+    return `M0 ${x2} L${x1} ${x1} L${x2} 0 H${x3} L${x4} ${x1} L1000 ${x2} V${x3} L${x4} ${x4} L${x3} 1000 H${x2} L${x1} ${x4} L0 ${x3} Z`
+  }
+  if (element.geometry === 'parallelogram' || element.geometry === 'chevron' || element.geometry === 'hexagon') {
+    const adjustment = element.presetAdjustment ?? (element.geometry === 'parallelogram' ? 0.25 : element.geometry === 'hexagon' ? 0.25 : 0.5)
+    const shortSide = Math.min(element.width, element.height)
+    const cut = shortSide > 0 && element.width > 0 ? shortSide * adjustment / element.width * 1000 : 0
+    if (element.geometry === 'parallelogram') return `M0 1000 L${cut} 0 H1000 L${1000 - cut} 1000 Z`
+    if (element.geometry === 'chevron') return `M0 0 H${1000 - cut} L1000 500 L${1000 - cut} 1000 H0 L${cut} 500 Z`
+    const dy = 0.211325 * 1000
+    return `M0 500 L${cut} ${dy} H${1000 - cut} L1000 500 L${1000 - cut} ${1000 - dy} H${cut} Z`
+  }
+  if (['ellipse', 'flowChartConnector', 'flowChartSummingJunction', 'flowChartOr'].includes(element.geometry)) {
+    const ellipse = 'M0 500 A500 500 0 1 0 1000 500 A500 500 0 1 0 0 500 Z'
+    if (element.geometry === 'flowChartSummingJunction') {
+      const inset = (1 - Math.SQRT1_2) * 500
+      return `${ellipse} M${inset} ${inset} L${1000 - inset} ${1000 - inset} M${1000 - inset} ${inset} L${inset} ${1000 - inset}`
+    }
+    if (element.geometry === 'flowChartOr') return `${ellipse} M500 0 V1000 M0 500 H1000`
+    return ellipse
+  }
+  if (element.geometry === 'flowChartDelay') return 'M0 0 H500 A500 500 0 0 1 500 1000 H0 Z'
+  if (element.geometry === 'flowChartDisplay') {
+    const inset = 1000 / 6
+    return `M0 500 L${inset} 0 H${1000 - inset} A${inset} 500 0 0 1 ${1000 - inset} 1000 L${inset} 1000 Z`
+  }
+  if (element.geometry !== 'roundRect' && element.geometry !== 'flowChartAlternateProcess') return 'M0 0 H1000 V1000 H0 Z'
+  const [x, y] = roundRectRadii(element)
+  if (!x || !y) return 'M0 0 H1000 V1000 H0 Z'
+  return `M0 ${y} A${x} ${y} 0 0 1 ${x} 0 H${1000 - x} A${x} ${y} 0 0 1 1000 ${y} V${1000 - y} A${x} ${y} 0 0 1 ${1000 - x} 1000 H${x} A${x} ${y} 0 0 1 0 ${1000 - y} Z`
+}
+
 function customGeometryFill(element: PptxElement, path: NonNullable<PptxElement['customPaths']>[number]): string {
-  if (!path.fill) return 'none'
+  if (!path.fill || !animationOnOff(element, 'fill.on')) return 'none'
   const animatedFill = animationColor(element, 'fillcolor')
+  const patternColors = isPatternFillCss(element.fill) ? [...element.fill.matchAll(/#[\da-f]{6}\b|rgba?\([^)]*\)/gi)].map(match => match[0]) : []
+  const patternFallback = patternColors.filter(color => !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/i.test(color)).at(-1)
+  if (!animatedFill && patternFallback) return applyColorOpacity(patternFallback, animationOpacity(element, 'fill.opacity'))
   if (!animatedFill && /^(?:linear|radial)-gradient\(/i.test(element.fill)) return `url(#${customGradientId(element, 'fill')})`
   return applyColorOpacity(animatedFill || element.fill, animationOpacity(element, 'fill.opacity'))
 }
 
+function isPatternFillCss(value: string): boolean {
+  return /repeating-linear-gradient\(/i.test(value) || /\) 0 0 \/ \d+(?:\.\d+)?px \d+(?:\.\d+)?px,/i.test(value)
+}
+
 function customGeometryStroke(element: PptxElement, path: NonNullable<PptxElement['customPaths']>[number]): string {
+  if (!path.stroke || !animationOnOff(element, 'stroke.on')) return 'none'
   const animatedStroke = animationColor(element, 'stroke.color')
   const strokeWidth = animationStrokeWidth(element)
   if (path.stroke && strokeWidth > 0 && !animatedStroke && /^(?:linear|radial)-gradient\(/i.test(element.stroke)) return `url(#${customGradientId(element, 'stroke')})`
@@ -1387,6 +2693,7 @@ function splitGradientStops(value: string): string[] {
 
 function customSvgGradient(element: PptxElement, kind: 'fill' | 'stroke'): CustomSvgGradient | undefined {
   const css = kind === 'fill' ? element.fill : element.stroke
+  const opacity = kind === 'fill' ? animationOpacity(element, 'fill.opacity') : 1
   const linear = /^linear-gradient\(\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+))deg\s*,([\s\S]*)\)$/i.exec(css)
   const radial = /^radial-gradient\(\s*(?:circle|ellipse)\s*,([\s\S]*)\)$/i.exec(css)
   if (!linear && !radial) return undefined
@@ -1401,7 +2708,7 @@ function customSvgGradient(element: PptxElement, kind: 'fill' | 'stroke'): Custo
     return {
       offset: `${Math.max(0, Math.min(Number(match[2]), 100))}%`,
       color: rgba ? `rgb(${rgba[1]}, ${rgba[2]}, ${rgba[3]})` : color,
-      opacity: rgba && rgba[4] !== undefined ? Math.max(0, Math.min(Number(rgba[4]), 1)) : 1,
+      opacity: (rgba && rgba[4] !== undefined ? Math.max(0, Math.min(Number(rgba[4]), 1)) : 1) * opacity,
     }
   })
   if (stops.length < 2 || stops.some(stop => !stop)) return undefined
@@ -1433,16 +2740,26 @@ function customGeometryStrokeStyle(element: PptxElement): CSSProperties {
   // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.presetlinedashvalues?view=openxml-3.0.1
   // https://www.w3.org/TR/svg-strokes/
   const patterns: Record<string, number[]> = {
-    dot: [0, 2], sysDot: [1, 2], dash: [3, 2], sysDash: [3, 3], lgDash: [6, 2],
-    dashDot: [3, 2, 1, 2], sysDashDot: [3, 2, 1, 2], lgDashDot: [6, 2, 1, 2],
-    lgDashDotDot: [6, 2, 1, 2, 1, 2], sysDashDotDot: [3, 2, 1, 2, 1, 2],
+    dot: [1, 3], sysDot: [1, 1], dash: [4, 3], sysDash: [3, 1], lgDash: [8, 3],
+    dashDot: [4, 3, 1, 3], sysDashDot: [3, 1, 1, 1], lgDashDot: [8, 3, 1, 3],
+    lgDashDotDot: [8, 3, 1, 3, 1, 3], sysDashDotDot: [3, 1, 1, 1, 1, 1],
   }
-  const pattern = Array.isArray(element.strokeDash) ? element.strokeDash : patterns[element.strokeDash || '']
+  const strokeDash = animationStrokeDash(element)
+  const pattern = Array.isArray(strokeDash) ? strokeDash : patterns[strokeDash || '']
   const strokeWidth = animationStrokeWidth(element) * scale.value
-  const width = Array.isArray(element.strokeDash) ? strokeWidth : Math.max(strokeWidth, 1)
+  const cap = element.strokeCap || 'butt'
+  // Office presets include round/square caps; custom dashes include round caps only.
+  // SVG adds caps; sub-width custom round dashes retain the warned pen-width dot limit.
+  // https://github.com/LibreOffice/core/blob/master/oox/source/drawingml/lineproperties.cxx
+  const custom = Array.isArray(strokeDash)
+  const capLength = cap === 'round' || (!custom && cap === 'square') ? 1 : 0
   return {
-    ...(pattern ? { strokeDasharray: pattern.map(length => `${length * width}px`).join(' ') } : {}),
-    strokeLinecap: element.strokeDash === 'dot' || element.strokeDash === 'sysDot' ? 'round' : element.strokeCap || 'butt',
+    ...(pattern ? { strokeDasharray: pattern.map((length, index) => {
+      const extension = Math.min(capLength, pattern[index % 2 ? index - 1 : index]!)
+      return `${(length + (index % 2 ? extension : -extension)) * strokeWidth}px`
+    }).join(' ') } : {}),
+    strokeOpacity: !animationColor(element, 'stroke.color') && /gradient\(/i.test(element.stroke) ? animationOpacity(element, 'stroke.opacity') : undefined,
+    strokeLinecap: cap,
   }
 }
 
@@ -1453,6 +2770,7 @@ function cssLineStyle(pattern?: PptxElement['strokeDash']): 'solid' | 'dashed' |
 }
 
 function lineStrokeColor(element: PptxElement): string {
+  if (!animationOnOff(element, 'stroke.on')) return 'transparent'
   return applyColorOpacity(animationColor(element, 'stroke.color') || (element.stroke === 'transparent' ? '#222' : element.stroke), animationOpacity(element, 'stroke.opacity'))
 }
 
@@ -1465,31 +2783,127 @@ function lineEndId(element: PptxElement, side: 'head' | 'tail'): string {
 }
 
 function lineEndUrl(element: PptxElement, side: 'head' | 'tail'): string | undefined {
-  const ending = side === 'head' ? element.lineHeadEnd : element.lineTailEnd
+  const ending = animationLineEnd(element, side)
   return ending && ending.type !== 'none' ? `url(#${lineEndId(element, side)})` : undefined
 }
 
 function lineEndMarkerSize(element: PptxElement, side: 'head' | 'tail'): { width: number; height: number } {
-  const ending = side === 'head' ? element.lineHeadEnd : element.lineTailEnd
+  const ending = animationLineEnd(element, side)
   const size: Record<NonNullable<typeof ending>['width'], number> = { sm: 0.7, med: 1, lg: 1.4 }
-  return { width: 6 * size[ending?.length || 'med'], height: 6 * size[ending?.width || 'med'] }
+  return { width: 6 * size[ending.length], height: 6 * size[ending.width] }
 }
 
 function lineEndPath(type: NonNullable<PptxElement['lineHeadEnd']>['type']): string {
   if (type === 'stealth') return 'M0 0L10 5L0 10L3.5 5Z'
   if (type === 'diamond') return 'M0 5L5 0L10 5L5 10Z'
   if (type === 'oval') return 'M5 0A5 5 0 1 1 5 10A5 5 0 1 1 5 0Z'
-  if (type === 'arrow') return 'M0 0L10 5L0 10'
+  if (type === 'arrow' || type === 'chevron') return 'M0 0L10 5L0 10'
+  if (type === 'doubleChevron') return 'M0 0L6 5L0 10M4 0L10 5L4 10'
   return 'M0 0L10 5L0 10Z'
 }
 
+function lineEndUsesStroke(type: NonNullable<PptxElement['lineHeadEnd']>['type']): boolean {
+  return type === 'arrow' || type === 'chevron' || type === 'doubleChevron'
+}
+
+function lineArrowType(value: NonNullable<PptxAnimation['lineArrowFrom']>): NonNullable<PptxElement['lineHeadEnd']>['type'] {
+  if (value === 'block') return 'triangle'
+  if (value === 'classic') return 'stealth'
+  if (value === 'open') return 'arrow'
+  if (value === 'doublechevron') return 'doubleChevron'
+  return value
+}
+
+function lineArrowSize(value: NonNullable<PptxAnimation['lineArrowSizeFrom']>): NonNullable<PptxElement['lineHeadEnd']>['width'] {
+  if (value === 'narrow' || value === 'short') return 'sm'
+  if (value === 'wide' || value === 'long') return 'lg'
+  return 'med'
+}
+
+function animationLineEnd(element: PptxElement, side: 'head' | 'tail'): NonNullable<PptxElement['lineHeadEnd']> {
+  const property = side === 'head' ? 'stroke.startArrow' : 'stroke.endArrow'
+  const baseline = side === 'head' ? element.lineHeadEnd : element.lineTailEnd
+  let type = baseline?.type || 'none'
+  for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'lineArrow' && item.lineArrowProperty === property) || []) {
+    const progress = animationProgress(action)
+    if (progress === -2) {
+      type = baseline?.type || 'none'
+      continue
+    }
+    if (progress === null || progress < 0) continue
+    if (action.lineArrowKeyframes?.length) {
+      for (const frame of action.lineArrowKeyframes) {
+        if (frame.offset > progress) break
+        type = lineArrowType(frame.value)
+      }
+    } else if (action.lineArrowFrom !== undefined && progress < 1) {
+      type = lineArrowType(action.lineArrowFrom)
+    } else if (progress >= 1) {
+      const value = action.lineArrowTo ?? action.lineArrowFrom
+      if (value !== undefined) type = lineArrowType(value)
+    }
+  }
+  const baselineWidth = baseline?.width || 'med'
+  const baselineLength = baseline?.length || 'med'
+  const animatedSize = (property: NonNullable<PptxAnimation['lineArrowSizeProperty']>, initial: typeof baselineWidth): typeof baselineWidth => {
+    let value = initial
+    for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'lineArrowSize' && item.lineArrowSizeProperty === property) || []) {
+      const progress = animationProgress(action)
+      if (progress === -2) {
+        value = initial
+        continue
+      }
+      if (progress === null || progress < 0) continue
+      if (action.lineArrowSizeKeyframes?.length) {
+        for (const frame of action.lineArrowSizeKeyframes) {
+          if (frame.offset > progress) break
+          value = lineArrowSize(frame.value)
+        }
+      } else if (action.lineArrowSizeFrom !== undefined && progress < 1) {
+        value = lineArrowSize(action.lineArrowSizeFrom)
+      } else if (progress >= 1) {
+        const finalValue = action.lineArrowSizeTo ?? action.lineArrowSizeFrom
+        if (finalValue !== undefined) value = lineArrowSize(finalValue)
+      }
+    }
+    return value
+  }
+  const widthProperty = side === 'head' ? 'stroke.startArrowWidth' : 'stroke.endArrowWidth'
+  const lengthProperty = side === 'head' ? 'stroke.startArrowLength' : 'stroke.endArrowLength'
+  return {
+    type,
+    width: animatedSize(widthProperty, baselineWidth),
+    length: animatedSize(lengthProperty, baselineLength)
+  }
+}
+
 function customGeometryStyle(element: PptxElement): CSSProperties {
-  const shadow = element.shadow
-  const angle = (shadow?.angle || 0) * Math.PI / 180
-  const shadowColor = animationColor(element, 'shadow.color') || shadow?.color
-  return shadow ? {
-    filter: `drop-shadow(${Math.cos(angle) * shadow.distance * scale.value}px ${Math.sin(angle) * shadow.distance * scale.value}px ${shadow.blur * scale.value}px ${applyColorOpacity(shadowColor || shadow.color, animationOpacity(element, 'shadow.opacity'))})`,
-  } : {}
+  const shadows = element.shadows?.length ? element.shadows : element.shadow ? [element.shadow] : []
+  const outerShadows = shadows.filter(shadow => !shadow.inset)
+  if (!outerShadows.length || !animationOnOff(element, 'shadow.on')) return {}
+  return {
+    filter: outerShadows.map(shadow => `drop-shadow(${shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')))})`).join(' '),
+  }
+}
+
+function shadowCss(shadow: PptxShadow, color: string): string {
+  const angle = (shadow.angle || 0) * Math.PI / 180
+  return [
+    ...(shadow.inset ? ['inset'] : []),
+    Math.cos(angle) * shadow.distance * scale.value + 'px',
+    Math.sin(angle) * shadow.distance * scale.value + 'px',
+    shadow.blur * scale.value + 'px',
+    color
+  ].join(' ')
+}
+
+function pictureInnerShadowStyle(element: PptxElement): CSSProperties | undefined {
+  const shadows = element.shadows?.length ? element.shadows : element.shadow ? [element.shadow] : []
+  const innerShadows = shadows.filter(shadow => shadow.inset)
+  if (!innerShadows.length || !animationOnOff(element, 'shadow.on')) return undefined
+  return {
+    boxShadow: innerShadows.map(shadow => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')))).join(', ')
+  }
 }
 
 function imageStyle(element: PptxElement): CSSProperties {
@@ -1636,21 +3050,29 @@ function updateMediaFade(media: HTMLMediaElement, element: PptxElement) {
     if (Math.abs(media.volume - appliedVolume) > 0.001) media.volume = appliedVolume
     if (media.muted !== appliedMuted) media.muted = appliedMuted
   }
-  const currentFrame = mediaFadeFrames.get(media)
-  if (media.paused || media.ended || !element.mediaFade) {
-    if (currentFrame) cancelAnimationFrame(currentFrame)
-    mediaFadeFrames.delete(media)
-  } else if (!currentFrame) {
-    mediaFadeFrames.set(media, requestAnimationFrame(() => {
-      mediaFadeFrames.delete(media)
+  const currentFrame = mediaPlaybackFrames.get(media)
+  const hasBookmarkTriggers = mediaBookmarkTriggersByMedia.value.has(element.id)
+  if (media.paused || media.ended || !media.isConnected || (!element.mediaFade && !hasBookmarkTriggers)) {
+    if (currentFrame !== undefined) cancelAnimationFrame(currentFrame)
+    mediaPlaybackFrames.delete(media)
+  } else if (currentFrame === undefined) {
+    mediaPlaybackFrames.set(media, requestAnimationFrame(() => {
+      mediaPlaybackFrames.delete(media)
+      if (!media.paused && !media.ended && media.isConnected && mediaBookmarkTriggersByMedia.value.has(element.id)) {
+        runMediaBookmarkAnimations(media, element, !media.seeking)
+      }
       updateMediaFade(media, element)
     }))
   }
 }
 
 function updateMediaPlayback(event: Event, element: PptxElement) {
+  const media = event.currentTarget as HTMLMediaElement
+  const previousTime = lastMediaBookmarkTimes.get(media)
+  if (event.type === 'seeking' && previousTime !== undefined && media.currentTime < previousTime) mediaBookmarkPlaybackStarted.delete(media)
   applyMediaTrim(event, element)
-  updateMediaFade(event.currentTarget as HTMLMediaElement, element)
+  updateMediaFade(media, element)
+  runMediaBookmarkAnimations(media, element, (event.type === 'timeupdate' || event.type === 'play') && !media.seeking)
 }
 
 function updateMediaFadeForEvent(event: Event, element: PptxElement) {
@@ -1666,7 +3088,11 @@ function finishTimedMedia(element: PptxElement, refresh = true) {
   const endedAt = performance.now()
   let changed = false
   const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === element.id)
-  if (media) delete media.dataset.mediaActionEndAt
+  if (media) {
+    delete media.dataset.mediaActionEndAt
+    mediaBookmarkPlaybackStarted.delete(media)
+    lastMediaBookmarkTimes.delete(media)
+  }
   timelineActions.value.forEach((action, index) => {
     if (action.effect !== 'media' || action.targetId !== element.id || !action.mediaActionKey || !executedMediaActions.has(index)) return
     completedMediaActions.set(action.mediaActionKey, endedAt)
@@ -1682,8 +3108,23 @@ function runTimedMediaActions() {
   timelineActions.value.forEach((action, index) => {
     if (action.effect !== 'media' || !action.mediaCommand || executedMediaActions.has(index)) return
     const startedAt = timelineStart(action)
+    const stoppedAt = timelineEnd(action)
+    if (stoppedAt !== undefined && startedAt !== undefined && startedAt + action.delayMs >= stoppedAt) return
     if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY || animationClock.value < startedAt + action.delayMs) return
     executedMediaActions.add(index)
+    if (action.mediaCommand === 'stopAudio') {
+      emit('stop-all-audio')
+      for (const element of props.slide.elements) {
+        if (element.kind !== 'audio') continue
+        const audio = Array.from(stage.value?.querySelectorAll<HTMLAudioElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === element.id)
+        if (!audio) continue
+        if (audio.readyState > 0) audio.currentTime = (element.mediaTrim?.startMs || 0) / 1000
+        finishTimedMedia(element, false)
+      }
+      runSlideTriggeredAnimations('onStopAudio')
+      refreshTimeline()
+      return
+    }
     const element = props.slide.elements.find(item => item.id === action.targetId)
     const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === action.targetId)
     if (!element || !media) return
@@ -1735,6 +3176,7 @@ function easedProgress(action: PptxAnimation, progress: number): number {
 }
 
 function finalAnimationProgress(action: PptxAnimation): number {
+  if (action.effectProgress !== undefined) return action.effectProgress
   if (action.durationMs === 0) return action.reversePlayback ? 0 : 1
   const cycleDuration = action.durationMs * (action.autoReverse ? 2 : 1)
   const totalDuration = animationDuration(action)
@@ -1753,10 +3195,12 @@ function animationFillExpired(action: RenderAnimation, startedAt: number | undef
   if (action.fillMode === 'remove') {
     if (startedAt === undefined) return action.triggerSequence === undefined && !action.automatic && action.step < props.animationStep
     if (startedAt === Number.NEGATIVE_INFINITY || reduceMotion.value) return true
+    const stoppedAt = timelineEnd(action)
+    if (stoppedAt !== undefined && animationClock.value >= stoppedAt) return true
     const stagger = action.iteration ? action.iteration.intervalMs * iterationIndex : 0
     return action.timingWarp
       ? timingWarpChildElapsed(action, startedAt, stagger) >= animationDuration(action)
-      : animationClock.value >= startedAt + action.delayMs + stagger + animationDuration(action)
+      : timelineNow(action) >= startedAt + action.delayMs + stagger + animationDuration(action)
   }
   if (action.fillMode !== 'freeze' || startedAt === undefined) return false
   const actionStart = startedAt + action.delayMs
@@ -1765,13 +3209,13 @@ function animationFillExpired(action: RenderAnimation, startedAt: number | undef
     const siblingStart = timelineStart(sibling)
     if (siblingStart === undefined) return false
     const start = siblingStart + sibling.delayMs
-    return start >= actionStart && start <= animationClock.value
+    return start >= actionStart && start <= timelineNow(action)
   })
 }
 
 function timingWarpChildElapsed(action: RenderAnimation, startedAt: number, stagger = 0): number {
   const warp = action.timingWarp!
-  const elapsedWallMs = animationClock.value - startedAt - warp.groupOffsetMs
+  const elapsedWallMs = timelineNow(action) - startedAt - warp.groupOffsetMs
   if (elapsedWallMs < 0) return -1
   const elapsedPlaybackMs = Math.min(elapsedWallMs, warp.groupPlaybackDurationMs) * warp.groupSpeed
   const cycleDurationMs = warp.groupDurationMs * (warp.groupAutoReverse ? 2 : 1)
@@ -1790,7 +3234,7 @@ function timingWarpChildElapsed(action: RenderAnimation, startedAt: number, stag
 
 function animationProgress(action: RenderAnimation, iterationIndex?: number): number | null {
   if (props.thumbnail && !props.playbackPreview) return null
-  const now = animationClock.value
+  const now = timelineNow(action)
   if (action.iteration && (iterationIndex === undefined || iterationIndex < 0)) return null
   const startedAt = timelineStart(action)
   const stagger = action.iteration ? action.iteration.intervalMs * (iterationIndex || 0) : 0
@@ -1802,6 +3246,7 @@ function animationProgress(action: RenderAnimation, iterationIndex?: number): nu
     ? timingWarpChildElapsed(action, startedAt, stagger)
     : now - startedAt - action.delayMs - stagger
   if (elapsed < 0) return -1
+  if (action.effectProgress !== undefined) return action.effectProgress
   if (action.durationMs === 0) return action.reversePlayback ? 0 : 1
   const cycleDuration = action.durationMs * (action.autoReverse ? 2 : 1)
   const totalDuration = animationDuration(action)
@@ -1814,8 +3259,24 @@ function animationProgress(action: RenderAnimation, iterationIndex?: number): nu
   return action.reversePlayback ? 1 - progress : progress
 }
 
+function completedAnimationRepeats(action: RenderAnimation, iterationIndex?: number): number {
+  const cycleDuration = action.durationMs * (action.autoReverse ? 2 : 1)
+  if (!action.rotationAccumulate || action.autoReverse || cycleDuration <= 0) return 0
+  const totalDuration = animationDuration(action)
+  const lastRepeat = Number.isFinite(totalDuration) ? Math.max(0, Math.ceil(totalDuration / cycleDuration) - 1) : Infinity
+  const startedAt = timelineStart(action)
+  if (startedAt === undefined) return action.triggerSequence === undefined && !action.automatic && action.step < props.animationStep ? lastRepeat : 0
+  if (startedAt === Infinity) return 0
+  if (startedAt === Number.NEGATIVE_INFINITY || reduceMotion.value) return Number.isFinite(lastRepeat) ? lastRepeat : 0
+  const stagger = action.iteration ? action.iteration.intervalMs * (iterationIndex || 0) : 0
+  const elapsed = action.timingWarp
+    ? timingWarpChildElapsed(action, startedAt, stagger)
+    : timelineNow(action) - startedAt - action.delayMs - stagger
+  return Math.min(lastRepeat, Math.max(0, Math.floor(elapsed / cycleDuration)))
+}
+
 function animationScale(element: PptxElement): [number, number] {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'scale' && !action.paragraphRange && !action.characterRange) || []
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'scale' && !action.paragraphRange && !action.characterRange && !action.iteration) || []
   let value: [number, number] = [1, 1]
   for (const action of actions) {
     const progress = animationProgress(action)
@@ -1833,7 +3294,7 @@ function animationScale(element: PptxElement): [number, number] {
 }
 
 function animationRotation(element: PptxElement): number {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'rotation' && !action.paragraphRange && !action.characterRange) || []
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'rotation' && !action.paragraphRange && !action.characterRange && !action.iteration) || []
   let value = element.rotation
   for (const action of actions) {
     const progress = animationProgress(action)
@@ -1842,8 +3303,10 @@ function animationRotation(element: PptxElement): number {
       continue
     }
     if (progress === null || progress < 0 || action.rotationFrom === undefined || action.rotationTo === undefined) continue
-    const rotation = action.rotationFrom + (action.rotationTo - action.rotationFrom) * progress
-    value = action.rotationRelative ? value + rotation : rotation
+    const delta = action.rotationTo - action.rotationFrom
+    const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action)
+    const rotation = action.rotationFrom + delta * progress + repeatOffset
+    value = action.rotationRelative || action.rotationAdditive ? value + rotation : rotation
   }
   return value
 }
@@ -1900,6 +3363,52 @@ function animationOpacity(
   return opacity
 }
 
+function animationOnOff(element: PptxElement, property: NonNullable<PptxAnimation['onOffProperty']>): boolean {
+  let enabled = true
+  for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'onOff' && item.onOffProperty === property) || []) {
+    const progress = animationProgress(action)
+    if (progress === -2) {
+      enabled = true
+      continue
+    }
+    if (progress === null || progress < 0) continue
+    if (action.onOffKeyframes?.length) {
+      for (const frame of action.onOffKeyframes) {
+        if (frame.offset > progress) break
+        enabled = frame.value
+      }
+    } else if (action.onOffFrom !== undefined && progress < 1) {
+      enabled = action.onOffFrom
+    } else if (progress >= 1) {
+      enabled = action.onOffTo ?? action.onOffFrom ?? enabled
+    }
+  }
+  return enabled
+}
+
+function animationStrokeDash(element: PptxElement): PptxElement['strokeDash'] {
+  let strokeDash = element.strokeDash
+  for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'strokeDash') || []) {
+    const progress = animationProgress(action)
+    if (progress === -2) {
+      strokeDash = element.strokeDash
+      continue
+    }
+    if (progress === null || progress < 0) continue
+    if (action.strokeDashKeyframes?.length) {
+      for (const frame of action.strokeDashKeyframes) {
+        if (frame.offset > progress) break
+        strokeDash = frame.value
+      }
+    } else if (action.strokeDashFrom !== undefined && progress < 1) {
+      strokeDash = action.strokeDashFrom
+    } else if (progress >= 1) {
+      strokeDash = action.strokeDashTo ?? action.strokeDashFrom ?? strokeDash
+    }
+  }
+  return strokeDash
+}
+
 function animationStrokeWidth(element: PptxElement): number {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'strokeWidth') || []
   let strokeWidth = element.strokeWidth
@@ -1915,6 +3424,11 @@ function animationStrokeWidth(element: PptxElement): number {
       : action.strokeWidthKeyframes?.length
         ? animationKeyframeValue(action.strokeWidthKeyframes, action.strokeWidthKeyframeMode, progress)
         : action.strokeWidthFrom + (action.strokeWidthTo - action.strokeWidthFrom) * progress
+  }
+  // Office zero-width filled outlines are one device pixel, independent of slide zoom.
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/5564035f-88ff-4ab8-bbfb-d2998a83324d
+  if (strokeWidth === 0 && (animationColor(element, 'stroke.color') || element.stroke) !== 'transparent' && scale.value > 0) {
+    return 1 / (scale.value * pixelRatio.value)
   }
   return strokeWidth
 }
@@ -1959,12 +3473,16 @@ function textColorAnimationStyle(element: PptxElement, paragraphIndex: number, c
   return { color: animatedRunColor(color, animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)) }
 }
 
+function runHasTextPattern(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): boolean {
+  return Boolean(run.fillPattern) && !animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd)
+}
+
 function textRangeOpacityAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
   const opacity = animationOpacity(element, 'style.opacity', paragraphIndex, characterStart, characterEnd)
   return opacity === 1 ? {} : { opacity }
 }
 
-function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, run: PptxElement['paragraphs'][number]['runs'][number], fontScale = element.textFontScale ?? 1, script: ScriptFont = 'latin'): CSSProperties {
+function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, run: PptxElement['paragraphs'][number]['runs'][number], fontScale = element.textFontScale ?? 1, script: ScriptFont = 'latin', separateDecorations = false): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'fontSize') return false
     const paragraphRange = action.paragraphRange
@@ -1988,6 +3506,7 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
       ? animationKeyframeValue(action.fontSizeKeyframes, action.fontSizeKeyframeMode, progress)
       : action.fontSizeFrom + (action.fontSizeTo - action.fontSizeFrom) * progress
   }
+  const baseFontWeight = run.bold ? 700 : 400
   let weight: number | undefined
   const weightActions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'fontWeight') return false
@@ -2001,12 +3520,12 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
   for (const action of weightActions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
     if (progress === -2) {
-      weight = run.bold ? 700 : 400
+      weight = baseFontWeight
       continue
     }
     if (progress === null || progress < 0) continue
     if (action.fontWeightReset) {
-      weight = run.bold ? 700 : 400
+      weight = baseFontWeight
       continue
     }
     if (action.fontWeightFrom === undefined || action.fontWeightTo === undefined) continue
@@ -2044,7 +3563,10 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
   for (const action of textStyleActions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
     let value: PptxAnimation['textStyleFrom']
-    if (progress === -2 && action.textStyleProperty === 'textTransform') {
+    if (progress === -2 && action.textStyleProperty === 'fontWeight') {
+      weight = baseFontWeight
+      continue
+    } else if (progress === -2 && action.textStyleProperty === 'textTransform') {
       verticalAlign = run.baselineOffsetEm === undefined ? 'baseline' : `${run.baselineOffsetEm}em`
       verticalAlignChanged = true
       continue
@@ -2076,7 +3598,8 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
     } else if (progress >= 1) value = action.textStyleTo
     else value = action.textStyleFrom
     if (value === undefined) continue
-    if (action.textStyleProperty === 'fontStyle') italic = value as boolean
+    if (action.textStyleProperty === 'fontWeight') weight = value === 'bold' ? 700 : value === 'normal' ? 400 : baseFontWeight
+    else if (action.textStyleProperty === 'fontStyle') italic = value as boolean
     else if (action.textStyleProperty === 'fontFamily') fontFamily = cssFontFamily(String(value))
     else if (action.textStyleProperty === 'underline') underline = value as boolean
     else if (action.textStyleProperty === 'lineThrough') lineThrough = value as boolean
@@ -2094,17 +3617,25 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
       textEmbossChanged = true
     }
   }
+  const embossOffset = Math.max(0.5, (run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value / 12)
   const textDecorationLine = [
     (underline ?? run.underline) ? 'underline' : undefined,
     (lineThrough ?? run.lineThrough) ? 'line-through' : undefined,
   ].filter(Boolean).join(' ')
-  const embossOffset = Math.max(0.5, (run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value / 12)
+  const textDecorationStyles: CSSProperties = separateDecorations
+    ? {
+        ...(underline === undefined ? {} : { '--pptx-underline-line': underline ? 'underline' : 'none' }),
+        ...(lineThrough === undefined ? {} : { textDecorationLine: lineThrough ? 'line-through' : 'none' }),
+      }
+    : underline === undefined && lineThrough === undefined
+      ? {}
+      : { textDecorationLine: textDecorationLine || 'none' }
   return {
     ...(factor === 1 ? {} : { fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value * factor}px` }),
     ...(weight === undefined ? {} : { fontWeight: weight }),
     ...(fontFamily === undefined ? {} : { fontFamily }),
     ...(italic === undefined ? {} : { fontStyle: italic ? 'italic' : 'normal' }),
-    ...(underline === undefined && lineThrough === undefined ? {} : { textDecorationLine: textDecorationLine || 'none' }),
+    ...textDecorationStyles,
     ...(verticalAlignChanged ? { verticalAlign } : {}),
     ...(textOutlineChanged ? { WebkitTextStroke: textOutline } : {}),
     ...(textShadowChanged ? { textShadow } : {}),
@@ -2114,9 +3645,11 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
 
 function textTransformAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => {
-    if (!['scale', 'rotation', 'motion', 'slide'].includes(action.effect) || !(action.paragraphRange || action.characterRange)) return false
+    const iterationIndex = iterationIndexFor(action, characterStart, characterEnd)
+    if (!['scale', 'rotation', 'motion', 'slide'].includes(action.effect) || !(action.paragraphRange || action.characterRange || action.iteration)) return false
     return (!action.paragraphRange || paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
       && (!action.characterRange || characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+      && (!action.iteration || iterationIndex !== undefined && iterationIndex >= 0)
   }) || []
   if (!actions.length) return {}
   let scaling: [number, number] = [1, 1]
@@ -2137,8 +3670,10 @@ function textTransformAnimationStyle(element: PptxElement, paragraphIndex: numbe
         action.scaleFrom[1] + (action.scaleTo[1] - action.scaleFrom[1]) * progress,
       ]
     } else if (action.effect === 'rotation' && action.rotationFrom !== undefined && action.rotationTo !== undefined) {
-      const angle = action.rotationFrom + (action.rotationTo - action.rotationFrom) * progress
-      rotation = action.rotationRelative ? rotation + angle : angle
+      const delta = action.rotationTo - action.rotationFrom
+      const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action, iterationIndexFor(action, characterStart, characterEnd))
+      const angle = action.rotationFrom + delta * progress + repeatOffset
+      rotation = action.rotationRelative || action.rotationAdditive ? rotation + angle : angle
     }
   }
   const transforms = [
@@ -2154,15 +3689,17 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
   const textRange = paragraphIndex !== undefined && characterStart !== undefined && characterEnd !== undefined
   const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'motion'
     && (textRange
-      ? Boolean(action.paragraphRange || action.characterRange)
+      ? Boolean(action.paragraphRange || action.characterRange || action.iteration)
         && (!action.paragraphRange || paragraphIndex! >= action.paragraphRange.start && paragraphIndex! <= action.paragraphRange.end)
         && (!action.characterRange || characterStart! < action.characterRange.end && characterEnd! > action.characterRange.start)
-      : !action.paragraphRange && !action.characterRange)) || []
+      : !action.paragraphRange && !action.characterRange && !action.iteration)) || []
   let value: [number, number] = [0, 0]
   for (const action of actions) {
     const progress = animationProgress(action, textRange ? iterationIndexFor(action, characterStart!, characterEnd!) : undefined)
     if (progress === -2) {
-      value = [0, 0]
+      if (action.motionCoordinateProperty === 'ppt_x') value = [0, value[1]]
+      else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], 0]
+      else value = [0, 0]
       continue
     }
     const samples = action.motionPathSamples
@@ -2171,7 +3708,10 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
       const from = samples[Math.floor(samplePosition)]!
       const to = samples[Math.ceil(samplePosition)]!
       const ratio = samplePosition - Math.floor(samplePosition)
-      value = [from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio]
+      const motion: [number, number] = [from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio]
+      if (action.motionCoordinateProperty === 'ppt_x') value = [motion[0], value[1]]
+      else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], motion[1]]
+      else value = motion
       continue
     }
     const path = action.motionPath
@@ -2207,10 +3747,14 @@ function animationSlide(element: PptxElement, paragraphIndex?: number, character
   const textRange = paragraphIndex !== undefined || characterStart !== undefined
   const actions = animationsByTarget.value.get(element.id)?.filter(item => {
     if (item.effect !== 'slide') return false
-    if (!textRange) return !item.paragraphRange && !item.characterRange
-    return Boolean(item.paragraphRange || item.characterRange)
+    const iterationIndex = characterStart !== undefined && characterEnd !== undefined
+      ? iterationIndexFor(item, characterStart, characterEnd)
+      : undefined
+    if (!textRange) return !item.paragraphRange && !item.characterRange && !item.iteration
+    return (Boolean(item.paragraphRange || item.characterRange) || iterationIndex !== undefined && iterationIndex >= 0)
       && (!item.paragraphRange || paragraphIndex !== undefined && paragraphIndex >= item.paragraphRange.start && paragraphIndex <= item.paragraphRange.end)
       && (!item.characterRange || characterStart !== undefined && characterEnd !== undefined && characterStart < item.characterRange.end && characterEnd > item.characterRange.start)
+      && (!item.iteration || iterationIndex !== undefined && iterationIndex >= 0)
   }) || []
   for (const action of actions) {
     const iterationIndex = characterStart !== undefined && characterEnd !== undefined
@@ -2232,12 +3776,14 @@ function animationSlide(element: PptxElement, paragraphIndex?: number, character
 
 function animationTargetsRange(action: PptxAnimation, paragraphIndex?: number, characterStart?: number, characterEnd?: number): boolean {
   if (characterStart !== undefined && characterEnd !== undefined) {
-    return Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+    const overlaps = Boolean(action.characterRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+    const iterationIndex = action.iteration ? iterationIndexFor(action, characterStart, characterEnd) : undefined
+    return overlaps || (iterationIndex !== undefined && iterationIndex >= 0)
   }
   if (paragraphIndex !== undefined) {
     return Boolean(action.paragraphRange && !action.characterRange && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
   }
-  return !action.paragraphRange && !action.characterRange
+  return !action.paragraphRange && !action.characterRange && !action.iteration
 }
 
 function animationIterationIndex(action: PptxAnimation, paragraphIndex?: number, characterStart?: number, characterEnd?: number): number | undefined {
@@ -2260,7 +3806,9 @@ function animationWipe(element: PptxElement, paragraphIndex?: number, characterS
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'wipe') return false
     if (characterStart !== undefined && characterEnd !== undefined) {
-      return Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+      const overlaps = Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+      const iterationIndex = action.iteration ? iterationIndexFor(action, characterStart, characterEnd) : undefined
+      return overlaps || (iterationIndex !== undefined && iterationIndex >= 0)
     }
     return paragraphIndex === undefined
       ? !action.paragraphRange && !action.characterRange
@@ -2272,7 +3820,7 @@ function animationWipe(element: PptxElement, paragraphIndex?: number, characterS
   let direction = first.wipeDirection
   let reset = false
   for (const action of actions) {
-    const phase = animationProgress(action)
+    const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
     if (phase === -2) {
       reset = true
       continue
@@ -2552,7 +4100,7 @@ function animationCss(actions: RenderAnimation[] | undefined, characterStart?: n
       visibility = action.direction === 'in' || progress < 1 ? 'visible' : 'hidden'
       opacity = 1
     } else {
-      const easedProgress = 1 - (1 - progress) ** 2
+      const easedProgress = action.effectProgress === undefined ? 1 - (1 - progress) ** 2 : progress
       opacity = action.direction === 'in' ? easedProgress : 1 - easedProgress
       visibility = action.direction === 'in' || progress < 1 ? 'visible' : 'hidden'
     }
@@ -2565,7 +4113,9 @@ function animationCss(actions: RenderAnimation[] | undefined, characterStart?: n
 }
 
 function animationStyle(element: PptxElement): CSSProperties {
-  const animatedStyle = animationCss(animationsByTarget.value.get(element.id)?.filter(action => !action.paragraphRange && !action.characterRange && !action.iteration))
+  const actions = animationsByTarget.value.get(element.id)
+  if (!actions?.length) return {}
+  const animatedStyle = animationCss(actions.filter(action => !action.paragraphRange && !action.characterRange && !action.iteration))
   const opacity = animationOpacity(element)
   return {
     ...animatedStyle,
@@ -2633,11 +4183,34 @@ function hasTrigger(elementId: string) {
   return !props.thumbnail && Boolean(props.slide.triggeredAnimations?.some(sequence => sequence.trigger.type === 'shape' && sequence.trigger.id === elementId))
 }
 
-function startTriggeredAnimations(indices: number[]) {
+function triggerSequenceIsActive(index: number, sequence: NonNullable<PptxSlide['triggeredAnimations']>[number], now: number) {
+  return sequence.steps.some((actions, stepIndex) => {
+    const key = triggerKey(index, stepIndex)
+    const startedAt = triggerStartedAt.get(key)
+    const endedAt = triggerStepEndedAt.get(key)
+    if (startedAt === undefined || !Number.isFinite(startedAt)) return false
+    if (endedAt !== undefined && now >= endedAt) return false
+    return actions.some(action => {
+      const actionStart = startedAt + action.delayMs
+      if (now < actionStart) return true
+      if (action.effect === 'media' && action.mediaActionKey) {
+        if (completedMediaActions.has(action.mediaActionKey)) return false
+        if (action.mediaWaitForEnd) {
+          if (blockedMediaPlaybackIds.value.includes(action.targetId)) return false
+          const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || [])
+            .find(item => item.dataset.mediaId === action.targetId)
+          return !media || !media.paused
+        }
+      }
+      return now < actionStart + naturalAnimationDuration(action)
+    })
+  })
+}
+
+function startTriggeredAnimations(indices: number[], startedAt = performance.now(), refresh = true) {
   if (props.triggerPlayback !== undefined) return
   const sequences = props.slide.triggeredAnimations || []
   if (!indices.length) return
-  const now = performance.now()
   for (const index of indices) {
     const sequence = sequences[index]
     if (!sequence) continue
@@ -2645,9 +4218,12 @@ function startTriggeredAnimations(indices: number[]) {
     if (!count) continue
     let step = triggerSteps.get(index) || 0
     if (step >= count) {
+      if (sequence.restart === 'never') continue
+      if (sequence.restart === 'whenNotActive' && triggerSequenceIsActive(index, sequence, performance.now())) continue
       for (let previous = 0; previous < count; previous++) {
         const key = triggerKey(index, previous)
         triggerStartedAt.delete(key)
+        triggerStepEndedAt.delete(key)
         triggerPlaybackByKey.delete(key)
       }
       timelineActions.value.forEach((action, actionIndex) => {
@@ -2655,14 +4231,37 @@ function startTriggeredAnimations(indices: number[]) {
       })
       step = 0
     }
+    if (step > 0 && !sequence.concurrent) endTimelineStep(index, step - 1, startedAt)
     const key = triggerKey(index, step)
-    const playback = { sequence: index, step, startedAt: performance.timeOrigin + now }
-    triggerStartedAt.set(key, now)
+    const playback = { sequence: index, step, startedAt: performance.timeOrigin + startedAt }
+    triggerStartedAt.set(key, startedAt)
     triggerPlaybackByKey.set(key, playback)
     triggerSteps.set(index, step + 1)
   }
-  refreshTimeline()
+  if (refresh) refreshTimeline()
   emit('trigger-playback', [...triggerPlaybackByKey.values()].sort((a, b) => a.sequence - b.sequence || a.step - b.step))
+}
+
+function runTimingNodeTriggeredAnimations(now: number): number {
+  if (props.thumbnail || props.triggerPlayback !== undefined) return Infinity
+  const due: Array<{index: number; startedAt: number}> = []
+  let next = Infinity
+  props.slide.triggeredAnimations?.forEach((sequence, index) => {
+    const trigger = sequence.trigger
+    if (trigger.type !== 'timeNode' || firedTimingNodeTriggers.has(index)) return
+    const sourceStartedAt = trigger.sourceStep === undefined ? automaticStartedAt : stepStartedAt.get(trigger.sourceStep)
+    if (sourceStartedAt === undefined || sourceStartedAt === Number.NEGATIVE_INFINITY) return
+    const sourceEndedAt = trigger.event === 'onEnd' && trigger.sourceStep !== undefined ? mainStepEndedAt.get(trigger.sourceStep) : undefined
+    const startedAt = (sourceEndedAt ?? sourceStartedAt + trigger.sourceDelayMs) + trigger.delayMs
+    if (!Number.isFinite(startedAt)) return
+    if (startedAt > now) next = Math.min(next, startedAt)
+    else {
+      firedTimingNodeTriggers.add(index)
+      due.push({index, startedAt})
+    }
+  })
+  for (const trigger of due) startTriggeredAnimations([trigger.index], trigger.startedAt, false)
+  return next
 }
 
 function runTriggeredAnimations(event: Event, elementId: string, triggerEvent: 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut') {
@@ -2677,9 +4276,32 @@ function runTriggeredAnimations(event: Event, elementId: string, triggerEvent: '
   startTriggeredAnimations(matching)
 }
 
-function runNavigationTriggeredAnimations(triggerEvent: 'onNext' | 'onPrev') {
+function runSlideTriggeredAnimations(triggerEvent: 'onNext' | 'onPrev' | 'onStopAudio') {
   if (props.thumbnail || props.triggerPlayback !== undefined) return
   const matching = (props.slide.triggeredAnimations || []).flatMap((sequence, index) => sequence.trigger.type === 'slide' && sequence.trigger.event === triggerEvent ? [index] : [])
+  startTriggeredAnimations(matching)
+}
+
+function runMediaBookmarkAnimations(media: HTMLMediaElement, element: PptxElement, mayTrigger: boolean) {
+  const currentTime = media.currentTime
+  const previousTime = lastMediaBookmarkTimes.get(media)
+  if (media.seeking && previousTime !== undefined && currentTime < previousTime) mediaBookmarkPlaybackStarted.delete(media)
+  const startingAtBeginning = mayTrigger
+    && !media.paused
+    && !media.seeking
+    && !mediaBookmarkPlaybackStarted.has(media)
+    && (previousTime === undefined || previousTime === 0)
+    && (element.mediaTrim?.startMs || 0) === 0
+  lastMediaBookmarkTimes.set(media, currentTime)
+  if (mayTrigger && !media.paused && !media.seeking) mediaBookmarkPlaybackStarted.add(media)
+  if (!mayTrigger) return
+  const matching = (mediaBookmarkTriggersByMedia.value.get(element.id) || [])
+    .filter(trigger => {
+      const bookmarkTime = trigger.timeMs / 1000
+      return (previousTime ?? 0) < bookmarkTime && currentTime >= bookmarkTime
+        || startingAtBeginning && bookmarkTime === 0
+    })
+    .map(trigger => trigger.sequenceIndex)
   startTriggeredAnimations(matching)
 }
 
@@ -2738,6 +4360,25 @@ function textFrameStyle(element: PptxElement): CSSProperties {
   const mongolianVerticalText = element.textOrientation === 'mongolianVert'
   const columnCount = element.textColumnCount ?? 1
   const rect = element.customTextRect
+  const fittedSize = rect ? autoFitDimensions.get(`${props.slide.id}:${element.id}`) : undefined
+  const ellipsisLineCount = supportsTextVerticalEllipsis(element) ? textEllipsisLineCounts.get(`${props.slide.id}:${element.id}`) : undefined
+  const margins = rect ? { ...element.margins } : element.margins
+  if (rect) {
+    const availableWidth = Math.max(0, (rect.right - rect.left) * (fittedSize?.width || element.width))
+    const horizontalMargins = margins.left + margins.right
+    if (horizontalMargins > availableWidth) {
+      const ratio = availableWidth / horizontalMargins
+      margins.left *= ratio
+      margins.right *= ratio
+    }
+    const availableHeight = Math.max(0, (rect.bottom - rect.top) * (fittedSize?.height || element.height))
+    const verticalMargins = margins.top + margins.bottom
+    if (verticalMargins > availableHeight) {
+      const ratio = availableHeight / verticalMargins
+      margins.top *= ratio
+      margins.bottom *= ratio
+    }
+  }
   return {
     position: rect ? 'absolute' : undefined,
     left: rect ? `${rect.left * 100}%` : undefined,
@@ -2745,14 +4386,17 @@ function textFrameStyle(element: PptxElement): CSSProperties {
     width: rect ? `${(rect.right - rect.left) * 100}%` : undefined,
     height: rect ? `${(rect.bottom - rect.top) * 100}%` : undefined,
     boxSizing: rect ? 'border-box' : undefined,
-    display: columnCount > 1 ? 'block' : undefined,
+    display: ellipsisLineCount ? '-webkit-box' : columnCount > 1 ? 'block' : undefined,
+    WebkitBoxOrient: ellipsisLineCount ? 'vertical' : undefined,
+    WebkitBoxPack: ellipsisLineCount ? element.verticalAlign === 'middle' ? 'center' : element.verticalAlign === 'bottom' ? 'end' : 'start' : undefined,
+    WebkitLineClamp: ellipsisLineCount,
     columnCount: columnCount > 1 ? columnCount : undefined,
     columnGap: columnCount > 1 ? `${(element.textColumnSpacing ?? 0) * scale.value}px` : undefined,
     columnFill: columnCount > 1 ? 'auto' : undefined,
-    padding: `${element.margins.top * scale.value}px ${element.margins.right * scale.value}px ${element.margins.bottom * scale.value}px ${element.margins.left * scale.value}px`,
+    padding: `${margins.top * scale.value}px ${margins.right * scale.value}px ${margins.bottom * scale.value}px ${margins.left * scale.value}px`,
     justifyContent: element.verticalAlign === 'middle' ? 'center' : element.verticalAlign === 'bottom' ? 'flex-end' : 'flex-start',
     overflowX: element.textHorizontalOverflow === undefined ? undefined : element.textHorizontalOverflow === 'clip' ? 'clip' : 'visible',
-    overflowY: element.textVerticalOverflow === undefined ? undefined : element.textVerticalOverflow === 'overflow' ? 'visible' : 'clip',
+    overflowY: ellipsisLineCount ? 'hidden' : element.textVerticalOverflow === undefined ? undefined : element.textVerticalOverflow === 'overflow' ? 'visible' : 'clip',
     whiteSpace: element.textWrap === 'none' ? 'nowrap' : undefined,
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.textverticalvalues?view=openxml-3.0.1
     // https://www.w3.org/TR/css-writing-modes-3/#block-flow
@@ -2776,57 +4420,66 @@ function effectiveTableCellFontScale(element: PptxElement, rowIndex: number, cel
   return normalAutoFitScales.get(tableCellAutoFitKey(element.id, rowIndex, cellIndex)) ?? cell.textFontScale ?? 1
 }
 
-function geometryStyle(geometry: string): CSSProperties {
-  if (geometry === 'ellipse') return { borderRadius: '50%' }
-  if (geometry === 'roundRect') return { borderRadius: '10%' }
+function geometryStyle(element: PptxElement): CSSProperties {
+  const geometry = element.geometry
+  if (['ellipse', 'flowChartConnector', 'flowChartSummingJunction', 'flowChartOr'].includes(geometry)) return { borderRadius: '50%' }
+  if (geometry === 'roundRect' || geometry === 'flowChartAlternateProcess') { const [x, y] = roundRectRadii(element); return { borderRadius: `${x / 10}% / ${y / 10}%` } }
   const clipPaths: Record<string, string> = {
-    triangle: 'polygon(50% 0, 100% 100%, 0 100%)',
-    rtTriangle: 'polygon(0 0, 100% 100%, 0 100%)',
-    diamond: 'polygon(50% 0, 100% 50%, 50% 100%, 0 50%)',
-    parallelogram: 'polygon(22% 0, 100% 0, 78% 100%, 0 100%)',
-    hexagon: 'polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%)',
-    chevron: 'polygon(0 0, 72% 0, 100% 50%, 72% 100%, 0 100%, 28% 50%)',
   }
   return clipPaths[geometry] ? { clipPath: clipPaths[geometry] } : {}
 }
 
-type ScriptFont = 'latin' | 'eastAsia' | 'complexScript'
 
-type TextSegment = { text: string; script: ScriptFont; start: number; end: number }
+type TextSegment = { text: string; script: ScriptFont; start: number; end: number; separateDecorations?: boolean }
 
-function cssFontFamily(fontFamily: string | undefined): string {
-  const safeFontFamily = (fontFamily || '').replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 128)
-  return safeFontFamily ? `'${safeFontFamily}', Arial, sans-serif` : 'Arial, sans-serif'
-}
 
 function runTextShadowStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties['textShadow'] {
-  const shadow = run.shadow
-  if (!shadow) return undefined
-  const angle = (shadow.angle || 0) * Math.PI / 180
-  const shadowColor = animationColor(element, 'shadow.color', paragraphIndex, characterStart, characterEnd) || shadow.color
-  return `${Math.cos(angle) * shadow.distance * scale.value}px ${Math.sin(angle) * shadow.distance * scale.value}px ${shadow.blur * scale.value}px ${animatedRunColor(shadowColor, animationOpacity(element, 'shadow.opacity', paragraphIndex, characterStart, characterEnd))}`
+  const shadows = run.shadows?.length ? run.shadows : run.shadow ? [run.shadow] : []
+  const glows = run.glows?.length ? run.glows : run.glow ? [run.glow] : []
+  const effects = shadows.map(shadow => {
+    const shadowColor = animationColor(element, 'shadow.color', paragraphIndex, characterStart, characterEnd) || shadow.color
+    return shadowCss(shadow, animatedRunColor(shadowColor, animationOpacity(element, 'shadow.opacity', paragraphIndex, characterStart, characterEnd)) || shadowColor)
+  })
+  effects.push(...glows.map(glow => `0 0 ${glow.radius * scale.value}px ${glow.color}`))
+  return effects.length ? effects.join(', ') : undefined
 }
 
-function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], script: ScriptFont, fontScale: number, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
+function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], script: ScriptFont, fontScale: number, paragraphIndex: number, characterStart: number, characterEnd: number, separateDecorations = false): CSSProperties {
   const requestedFont = script === 'eastAsia' ? run.fontFamilyEastAsia : script === 'complexScript' ? run.fontFamilyComplexScript : run.fontFamily
   const fillOpacity = animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)
   const strokeOpacity = animationOpacity(element, 'stroke.opacity', paragraphIndex, characterStart, characterEnd)
-  const textDecorationLine = [run.underline ? 'underline' : undefined, run.lineThrough ? 'line-through' : undefined].filter(Boolean).join(' ')
-  const textDecorationStyle = run.underline && run.lineThrough
-    ? (run.underlineStyle ?? (run.lineThroughStyle === 'double' ? 'solid' : run.lineThroughStyle))
-    : run.underlineStyle ?? run.lineThroughStyle
+  const textDecorationLine = separateDecorations ? run.lineThrough ? 'line-through' : undefined : [run.underline ? 'underline' : undefined, run.lineThrough ? 'line-through' : undefined].filter(Boolean).join(' ')
+  const textDecorationStyle = separateDecorations
+    ? run.lineThroughStyle
+    : run.underline && run.lineThrough
+      ? (run.underlineStyle ?? (run.lineThroughStyle === 'double' ? 'solid' : run.lineThroughStyle))
+      : run.underlineStyle ?? run.lineThroughStyle
   return {
     fontFamily: cssFontFamily(requestedFont || run.fontFamily),
     fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value}px`,
     letterSpacing: run.letterSpacingPt === undefined ? undefined : `${run.letterSpacingPt * fontScale * EMU_PER_POINT * scale.value}px`,
     verticalAlign: run.baselineOffsetEm === undefined ? undefined : `${run.baselineOffsetEm}em`,
     color: animatedRunColor(run.color, fillOpacity),
+    '--pptx-text-pattern': run.fillPattern ? applyColorOpacity(run.fillPattern, fillOpacity) : undefined,
+    '--pptx-text-pattern-color': animatedRunColor(run.color, fillOpacity),
     WebkitTextStroke: run.outlineColor !== undefined && run.outlineWidth !== undefined ? `${run.outlineWidth * scale.value}px ${animatedRunColor(run.outlineColor, strokeOpacity)}` : undefined,
     fontWeight: run.bold ? 700 : undefined,
     fontStyle: run.italic ? 'italic' : undefined,
+    ...(separateDecorations ? { '--pptx-underline-line': run.underline ? 'underline' : 'none' } : {}),
     textDecorationLine: textDecorationLine || undefined,
     textDecorationStyle,
+    textDecorationColor: !separateDecorations && run.underline ? run.underlineColor : undefined,
+    textDecorationThickness: !separateDecorations && run.underline && run.underlineThicknessEmu ? `${run.underlineThicknessEmu * scale.value}px` : undefined,
     textShadow: runTextShadowStyle(element, run, paragraphIndex, characterStart, characterEnd),
+  }
+}
+
+function textUnderlineStyle(run: PptxElement['paragraphs'][number]['runs'][number]): CSSProperties {
+  return {
+    textDecorationLine: 'var(--pptx-underline-line, none)',
+    textDecorationStyle: run.underlineStyle,
+    textDecorationColor: run.underlineColor,
+    textDecorationThickness: run.underlineThicknessEmu ? `${run.underlineThicknessEmu * scale.value}px` : undefined,
   }
 }
 
@@ -2839,6 +4492,17 @@ function runCharacterOffset(element: PptxElement, paragraphIndex: number, runInd
   const paragraph = element.paragraphs[paragraphIndex]
   if (paragraph) for (let index = 0; index < runIndex; index++) offset += paragraph.runs[index]?.text.length || 0
   return offset
+}
+
+function separateTextDecorations(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): boolean {
+  if (run.underline && run.lineThrough) return true
+  return (animationsByTarget.value.get(element.id) || []).some((action) => {
+    if (action.effect !== 'textStyle' || (action.textStyleProperty !== 'underline' && action.textStyleProperty !== 'lineThrough')) return false
+    const iterationIndex = iterationIndexFor(action, characterStart, characterEnd)
+    return (!action.paragraphRange || paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
+      && (!action.characterRange || characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+      && (!action.iteration || iterationIndex !== undefined && iterationIndex >= 0)
+  })
 }
 
 function runSegments(run: PptxElement['paragraphs'][number]['runs'][number], element: PptxElement, paragraphIndex: number, runIndex: number): TextSegment[] {
@@ -2855,13 +4519,7 @@ function runSegments(run: PptxElement['paragraphs'][number]['runs'][number], ele
     let previousScript: ScriptFont = 'latin'
     let offset = 0
     for (const character of run.text) {
-      const script: ScriptFont = EAST_ASIAN_SCRIPT.test(character) || /[\u3000-\u303f\uff00-\uffef]/u.test(character)
-        ? 'eastAsia'
-        : COMPLEX_SCRIPT.test(character)
-          ? 'complexScript'
-          : /\p{Mark}/u.test(character)
-            ? previousScript
-            : 'latin'
+      const script = characterScript(character, previousScript)
       if (segmentScript && script !== segmentScript) {
         segments.push({ text: run.text.slice(segmentStart, offset), script: segmentScript, start: runStart + segmentStart, end: runStart + offset })
         segmentStart = offset
@@ -2871,7 +4529,7 @@ function runSegments(run: PptxElement['paragraphs'][number]['runs'][number], ele
       offset += character.length
     }
     if (segmentScript && offset > segmentStart) segments.push({ text: run.text.slice(segmentStart), script: segmentScript, start: runStart + segmentStart, end: runStart + offset })
-    return segments
+    return segments.map(segment => ({ ...segment, separateDecorations: separateTextDecorations(element, run, paragraphIndex, segment.start, segment.end) }))
   }
 
   const characters: { text: string; script: ScriptFont; start: number; end: number }[] = []
@@ -2879,13 +4537,7 @@ function runSegments(run: PptxElement['paragraphs'][number]['runs'][number], ele
   let previousScript: ScriptFont = 'latin'
   let offset = 0
   for (const character of run.text) {
-    const script: ScriptFont = EAST_ASIAN_SCRIPT.test(character) || /[\u3000-\u303f\uff00-\uffef]/u.test(character)
-      ? 'eastAsia'
-      : COMPLEX_SCRIPT.test(character)
-        ? 'complexScript'
-        : /\p{Mark}/u.test(character)
-          ? previousScript
-          : 'latin'
+    const script = characterScript(character, previousScript)
     const end = offset + character.length
     if (characters.length && characters.at(-1)?.script !== script) cuts.add(offset)
     characters.push({ text: character, script, start: offset, end })
@@ -2911,74 +4563,13 @@ function runSegments(run: PptxElement['paragraphs'][number]['runs'][number], ele
     if (!first || end <= start) continue
     segments.push({ text: run.text.slice(start, end), script: first.script, start: runStart + start, end: runStart + end })
   }
-  return segments
-}
-
-function alphabeticNumber(value: number): string {
-  let number = Math.max(1, value)
-  let result = ''
-  while (number > 0) {
-    number--
-    result = String.fromCharCode(97 + number % 26) + result
-    number = Math.floor(number / 26)
-  }
-  return result
-}
-
-function romanNumber(value: number): string {
-  let number = Math.max(1, value)
-  let result = ''
-  for (const [amount, numeral] of [[1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']] as [number, string][]) {
-    while (number >= amount) {
-      result += numeral
-      number -= amount
-    }
-  }
-  return result
-}
-
-function numberedMarker(value: number, type: string): string {
-  if (type === 'arabicPlain') return String(value)
-  let label = String(value)
-  if (type.startsWith('alpha')) {
-    label = alphabeticNumber(value)
-    if (type.startsWith('alphaUc')) label = label.toUpperCase()
-  } else if (type.startsWith('roman')) {
-    label = romanNumber(value)
-    if (type.startsWith('romanUc')) label = label.toUpperCase()
-  }
-  if (type.endsWith('ParenBoth')) return `(${label})`
-  if (type.endsWith('ParenR')) return `${label})`
-  return `${label}.`
+  return segments.map(segment => ({ ...segment, separateDecorations: separateTextDecorations(element, run, paragraphIndex, segment.start, segment.end) }))
 }
 
 function paragraphBulletStyle(paragraph: PptxParagraph): CSSProperties {
   const size = paragraph.bullet?.size
   if (!size) return {}
   return { fontSize: size.unit === 'ratio' ? `${size.value * 100}%` : `${size.value * EMU_PER_POINT * scale.value}px` }
-}
-
-function paragraphEntries(paragraphs: PptxParagraph[]): { paragraph: PptxParagraph; marker: string }[] {
-  const counters = new Map<string, number>()
-  return paragraphs.map((paragraph) => {
-    const bullet = paragraph.bullet
-    if (!bullet) {
-      counters.clear()
-      return { paragraph, marker: '' }
-    }
-    if (bullet.kind === 'char') {
-      counters.clear()
-      return { paragraph, marker: bullet.char }
-    }
-    if (bullet.kind === 'image') {
-      counters.clear()
-      return { paragraph, marker: '' }
-    }
-    const key = `${bullet.type}:${paragraph.level || 0}`
-    const number = counters.get(key) ?? bullet.startAt ?? 1
-    counters.set(key, number + 1)
-    return { paragraph, marker: numberedMarker(number, bullet.type) }
-  })
 }
 
 function cssSpacing(spacing: PptxParagraph['lineSpacing']): string | undefined {
@@ -3020,15 +4611,17 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
 
 function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperties {
   const columnCount = cell.textColumnCount ?? 1
-  return columnCount > 1 ? {
+  return columnCount > 1 || cell.textAutoFitDynamic ? {
     height: rowHeight > 0 ? `${Math.max(0, rowHeight - cell.margins.top - cell.margins.bottom) * scale.value}px` : '100%',
     boxSizing: 'border-box',
     minHeight: 0,
     overflow: 'hidden',
-    columnCount,
-    columnGap: `${(cell.textColumnSpacing ?? 0) * scale.value}px`,
-    columnFill: 'auto',
-    direction: cell.textColumnsRightToLeft ? 'rtl' : undefined,
+    ...(columnCount > 1 ? {
+      columnCount,
+      columnGap: `${(cell.textColumnSpacing ?? 0) * scale.value}px`,
+      columnFill: 'auto',
+      direction: cell.textColumnsRightToLeft ? 'rtl' : undefined,
+    } : {}),
   } : {}
 }
 </script>
@@ -3044,6 +4637,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
   >
     <div
       v-for="element in slide.elements"
+      v-memo="elementMemoDependencies(element)"
       :key="element.id"
       :data-element-id="element.id"
       :data-element-name="element.name"
@@ -3060,15 +4654,25 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
       :tabindex="canActivateHyperlink(element.hyperlink) || hasTrigger(element.id) ? 0 : undefined"
       :aria-label="element.hyperlink?.tooltip || (hasTrigger(element.id) ? `Play animation from ${element.name}` : undefined)"
       :data-pptx-hyperlink="canActivateHyperlink(element.hyperlink) ? JSON.stringify(element.hyperlink) : undefined"
-      :style="[elementStyle(element), geometryStyle(element.geometry), animationStyle(element)]"
+      :style="[elementStyle(element), geometryStyle(element), animationStyle(element)]"
       :title="element.hyperlink?.tooltip || element.name"
       @click="onElementClick($event, element.id, element.hyperlink)"
       @dblclick="onElementDoubleClick($event, element.id)"
       @mouseenter="onElementMouseEnter($event, element.id)"
       @mouseleave="onElementMouseLeave($event, element.id)"
-      @keydown.enter.space.stop.prevent="onElementKeyActivate($event, element.id, element.hyperlink)"
+      @keydown.enter.space.self.stop.prevent="onElementKeyActivate($event, element.id, element.hyperlink)"
     >
-      <svg v-if="element.kind === 'shape' && element.geometry === 'custom' && element.customPaths?.length" class="custom-geometry" viewBox="0 0 1000 1000" preserveAspectRatio="none" :style="customGeometryStyle(element)" aria-hidden="true">
+      <svg v-if="usesSvgOutline(element)" class="preset-outline" viewBox="0 0 1000 1000" preserveAspectRatio="none" :style="usesSvgPolygon(element) ? customGeometryStyle(element) : undefined" aria-hidden="true">
+        <defs>
+          <template v-for="gradient in customGeometryGradients(element).filter(item => usesSvgPolygon(element) || item.id === customGradientId(element, 'stroke'))" :key="gradient.id">
+            <linearGradient v-if="gradient.kind === 'linear'" :id="gradient.id" gradientUnits="userSpaceOnUse" :x1="gradient.x1" :y1="gradient.y1" :x2="gradient.x2" :y2="gradient.y2"><stop v-for="(stop, index) in gradient.stops" :key="index" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></linearGradient>
+            <radialGradient v-else :id="gradient.id" gradientUnits="userSpaceOnUse" :cx="gradient.cx" :cy="gradient.cy" :r="gradient.r"><stop v-for="(stop, index) in gradient.stops" :key="index" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></radialGradient>
+          </template>
+        </defs>
+        <path :d="presetOutlinePath(element)" :fill="usesSvgPolygon(element) ? customGeometryFill(element, { d: '', fill: true, stroke: true }) : 'none'" :stroke="presetOutlineDetailPaths(element).length ? 'none' : customGeometryStroke(element, { d: '', fill: false, stroke: true })" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
+        <path v-for="(detailPath, index) in presetOutlineDetailPaths(element)" :key="index" :d="detailPath" fill="none" :stroke="customGeometryStroke(element, { d: detailPath, fill: false, stroke: true })" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
+      </svg>
+      <svg v-if="element.kind === 'shape' && element.customPaths?.length" class="custom-geometry" viewBox="0 0 1000 1000" preserveAspectRatio="none" :style="customGeometryStyle(element)" aria-hidden="true">
         <defs>
           <template v-for="gradient in customGeometryGradients(element)" :key="gradient.id">
             <linearGradient v-if="gradient.kind === 'linear'" :id="gradient.id" gradientUnits="userSpaceOnUse" :x1="gradient.x1" :y1="gradient.y1" :x2="gradient.x2" :y2="gradient.y2"><stop v-for="(stop, stopIndex) in gradient.stops" :key="stopIndex" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></linearGradient>
@@ -3102,6 +4706,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         <g v-else>
           <template v-if="element.chart.type === 'radar'"><path v-for="(grid, index) in chartVisuals.get(element.id)?.radarGrid" :key="`radar-grid-${index}`" class="chart-major-gridline chart-radar-gridline" :d="grid.d" fill="none" stroke="#d1d5db" stroke-width="1" /><line v-for="(spoke, index) in chartVisuals.get(element.id)?.radarSpokes" :key="`radar-spoke-${index}`" class="chart-major-gridline chart-radar-spoke" v-bind="spoke" stroke="#d1d5db" stroke-width="1" /></template>
           <template v-else>
+            <line v-if="!element.chart.categoryAxisDeleted && element.chart.categoryAxisMajorGridlines" v-for="(grid, index) in chartVisuals.get(element.id)?.categoryGridlines" :key="`category-grid-${index}`" class="chart-major-gridline chart-category-major-gridline" data-axis="category" v-bind="grid" stroke="#d1d5db" stroke-width="1" />
             <template v-if="!element.chart.valueAxis?.deleted && element.chart.valueAxis?.majorGridlines"><line v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`grid-${index}`" class="chart-major-gridline" :x1="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left" :x2="element.chart.direction === 'horizontal' ? tick.x : chartPlot(element.id).left + chartPlot(element.id).width" :y1="element.chart.direction === 'horizontal' ? chartPlot(element.id).top : tick.y" :y2="element.chart.direction === 'horizontal' ? chartPlot(element.id).top + chartPlot(element.id).height : tick.y" stroke="#d1d5db" stroke-width="1" /></template>
             <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-grid-${axis.id}`"><line v-if="!axis.deleted && axis.majorGridlines" v-for="(tick, index) in axis.ticks" :key="index" class="chart-major-gridline chart-secondary-gridline" :x1="axis.horizontal ? tick.x : chartPlot(element.id).left" :x2="axis.horizontal ? tick.x : chartPlot(element.id).left + chartPlot(element.id).width" :y1="axis.horizontal ? chartPlot(element.id).top : tick.y" :y2="axis.horizontal ? chartPlot(element.id).top + chartPlot(element.id).height : tick.y" stroke="#d1d5db" stroke-width="1" /></template>
             <template v-if="['scatter', 'bubble'].includes(element.chart.type) && !element.chart.xAxis?.deleted && element.chart.xAxis?.majorGridlines"><line v-for="(tick, index) in chartVisuals.get(element.id)?.xTicks" :key="`x-grid-${index}`" class="chart-major-gridline chart-x-gridline" :x1="tick.x" :x2="tick.x" :y1="chartPlot(element.id).top" :y2="chartPlot(element.id).top + chartPlot(element.id).height" stroke="#d1d5db" stroke-width="1" /></template>
@@ -3109,7 +4714,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
           <template v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-value-axis-label">{{ tick.label }}</text></template>
           <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-tick-${axis.id}`"><template v-for="(tick, index) in axis.ticks" :key="index"><text v-if="tick.showLabel" :data-axis-id="axis.id" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-value-axis-label chart-secondary-value-axis-label">{{ tick.label }}</text></template></template>
           <template v-for="(tick, index) in chartVisuals.get(element.id)?.xTicks" :key="`x-tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-x-value-axis-label">{{ tick.label }}</text></template>
-          <line v-for="(tick, index) in chartVisuals.get(element.id)?.axisTicks" :key="`axis-tick-${index}`" class="chart-axis-tick" :data-axis="tick.axis" :x1="tick.x1" :y1="tick.y1" :x2="tick.x2" :y2="tick.y2" stroke="#64748b" stroke-width="1.5" />
+          <line v-for="(tick, index) in chartVisuals.get(element.id)?.axisTicks" :key="`axis-tick-${index}`" :class="tick.minor ? 'chart-axis-minor-tick' : 'chart-axis-tick'" :data-axis="tick.axis" :x1="tick.x1" :y1="tick.y1" :x2="tick.x2" :y2="tick.y2" stroke="#64748b" :stroke-width="tick.minor ? 1 : 1.5" />
           <g :clip-path="`url(#chart-plot-${element.id})`">
             <line v-if="element.chart.type !== 'radar' && (['scatter', 'bubble'].includes(element.chart.type) ? !element.chart.xAxis?.deleted : !element.chart.categoryAxisDeleted) && chartVisuals.get(element.id)?.baseline" class="chart-category-axis-line" :class="{ 'chart-x-axis-line': ['scatter', 'bubble'].includes(element.chart.type) }" :data-axis="['scatter', 'bubble'].includes(element.chart.type) ? 'xValue' : 'category'" :x1="chartVisuals.get(element.id)?.baseline.x1" :y1="chartVisuals.get(element.id)?.baseline.y1" :x2="chartVisuals.get(element.id)?.baseline.x2" :y2="chartVisuals.get(element.id)?.baseline.y2" stroke="#64748b" stroke-width="2" />
             <line v-if="!element.chart.valueAxis?.deleted && chartVisuals.get(element.id)?.valueAxisLine" class="chart-value-axis-line" :x1="chartVisuals.get(element.id)?.valueAxisLine?.x1" :y1="chartVisuals.get(element.id)?.valueAxisLine?.y1" :x2="chartVisuals.get(element.id)?.valueAxisLine?.x2" :y2="chartVisuals.get(element.id)?.valueAxisLine?.y2" stroke="#64748b" stroke-width="2" />
@@ -3117,11 +4722,14 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
             <path v-for="(area, index) in chartVisuals.get(element.id)?.areas" :key="`area-${index}`" class="chart-area" :d="area.d" :fill="area.color" :fill-opacity="area.opacity ?? 1" :stroke="area.color" stroke-width="1" />
             <rect v-for="(bar, index) in chartVisuals.get(element.id)?.bars" :key="`bar-${index}`" class="chart-bar" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" :fill="bar.color" :stroke="bar.stroke" stroke-width="1" />
             <path v-for="(line, index) in chartVisuals.get(element.id)?.lines" :key="`line-${index}`" class="chart-series-line" :d="line.d" fill="none" :stroke="line.color" :stroke-width="line.width ?? 4" stroke-linecap="round" />
-            <circle v-for="(marker, index) in chartVisuals.get(element.id)?.markers" :key="`marker-${index}`" class="chart-line-marker" :class="{ 'chart-bubble-marker': element.chart.type === 'bubble' }" :cx="marker.x" :cy="marker.y" :r="marker.radius ?? 5" :fill="marker.color" />
+            <template v-for="(marker, index) in chartVisuals.get(element.id)?.markers" :key="`marker-${index}`">
+              <circle v-if="!chartMarkerPath(marker)" class="chart-line-marker" :class="{ 'chart-bubble-marker': element.chart.type === 'bubble' }" :data-marker-shape="marker.symbol ?? 'circle'" :data-x="marker.x" :data-y="marker.y" :data-radius="marker.radius ?? 5" :cx="marker.x" :cy="marker.y" :r="marker.symbol === 'dot' ? (marker.radius ?? 5) * 0.45 : marker.radius ?? 5" :fill="marker.color" />
+              <path v-else class="chart-line-marker" :data-marker-shape="marker.symbol" :data-x="marker.x" :data-y="marker.y" :data-radius="marker.radius ?? 5" :d="chartMarkerPath(marker)" :fill="marker.color" />
+            </template>
           </g>
           <text v-for="(label, index) in chartVisuals.get(element.id)?.categories" :key="`category-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" class="chart-label chart-category-label">{{ label.text }}</text>
         </g>
-        <text v-for="(label, index) in chartVisuals.get(element.id)?.dataLabels" :key="`data-label-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" class="chart-data-label"><tspan v-for="(line, lineIndex) in label.lines" :key="lineIndex" :x="label.x" :y="label.y + (lineIndex - (label.lines.length - 1) / 2) * 22">{{ line }}</tspan></text>
+        <g v-for="(label, index) in chartVisuals.get(element.id)?.dataLabels" :key="`data-label-${index}`"><rect v-if="label.legendKey" :data-key-id="chartDataLabelKeyId(element.id, index)" :x="chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18" :y="label.y - 12" width="12" height="12" :fill="label.legendKey.color" class="chart-data-label-key" /><text :x="label.x" :y="label.y" :text-anchor="label.anchor" :style="{ fill: label.style?.color, fontFamily: label.style?.fontFamily ? cssFontFamily(label.style.fontFamily) : undefined, fontSize: label.style?.fontSizePt === undefined ? undefined : `${label.style.fontSizePt * 4 / 3}px`, fontWeight: label.style?.bold === undefined ? undefined : label.style.bold ? 700 : 400, fontStyle: label.style?.italic === undefined ? undefined : label.style.italic ? 'italic' : 'normal', letterSpacing: label.style?.letterSpacingPt === undefined ? undefined : `${label.style.letterSpacingPt * 4 / 3}px`, textDecorationLine: label.style?.underline === undefined && label.style?.lineThrough === undefined ? undefined : [label.style?.underline ? 'underline' : undefined, label.style?.lineThrough ? 'line-through' : undefined].filter(Boolean).join(' ') || 'none', textDecorationStyle: label.style?.underline ? label.style.underlineStyle : label.style?.lineThrough ? label.style.lineThroughStyle : undefined, textDecorationColor: label.style?.underline ? label.style.underlineColor : undefined, textDecorationThickness: label.style?.underline && label.style.underlineThicknessEmu !== undefined ? `${label.style.underlineThicknessEmu * 4 / (3 * EMU_PER_POINT)}px` : undefined }" class="chart-data-label"><tspan v-for="(line, lineIndex) in label.lines" :key="lineIndex" :x="label.x" :y="label.y + (lineIndex - (label.lines.length - 1) / 2) * 22" :dy="label.style?.baselineOffsetEm === undefined ? undefined : `${-label.style.baselineOffsetEm}em`">{{ line }}</tspan></text></g>
         <g class="chart-legend-group" :clip-path="chartVisuals.get(element.id)?.legendClip ? `url(#${chartVisuals.get(element.id)?.legendClip?.id})` : undefined">
           <g v-for="(entry, index) in chartVisuals.get(element.id)?.legend" :key="`legend-${index}`">
             <rect :x="entry.x" :y="entry.y - 12" width="12" height="12" :fill="entry.color" />
@@ -3152,6 +4760,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
           </defs>
         </svg>
         <img class="slide-image" :src="element.imageUrl" :alt="element.name" :style="imageStyle(element)">
+        <div v-if="pictureInnerShadowStyle(element)" class="picture-inner-shadow" :style="pictureInnerShadowStyle(element)" aria-hidden="true"></div>
       </div>
       <table v-else-if="element.kind === 'table' && element.table" class="slide-table">
         <colgroup>
@@ -3161,12 +4770,12 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
           <tr v-for="(row, rowIndex) in element.table.rows" :key="rowIndex" :style="{ height: `${row.height / Math.max(element.table.rows.reduce((sum, item) => sum + item.height, 0), 1) * 100}%` }">
             <template v-for="(cell, cellIndex) in row.cells" :key="cellIndex">
               <td v-if="!cell.hidden" :colspan="cell.colSpan" :rowspan="cell.rowSpan" :data-autofit="cell.textAutoFitDynamic ? 'normal' : undefined" :data-row-index="rowIndex" :data-cell-index="cellIndex" :style="tableCellStyle(cell)">
-                <div class="table-cell-text" :style="tableCellTextStyle(cell, row.height)">
+                <div class="table-cell-text" :style="tableCellTextStyle(cell, element.table.rows.slice(rowIndex, rowIndex + cell.rowSpan).reduce((height, item) => height + item.height, 0))">
                   <div v-for="(entry, paragraphIndex) in paragraphEntries(cell.paragraphs)" :key="paragraphIndex" class="text-paragraph" :style="paragraphStyle(entry.paragraph, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), cell.textLineSpacingReduction, cell.textColumnsRightToLeft && (cell.textColumnCount ?? 1) > 1 ? 'ltr' : undefined)">
                     <img v-if="entry.paragraph.bullet?.kind === 'image' && entry.paragraph.bullet.url" class="paragraph-picture-bullet" :src="entry.paragraph.bullet.url" :style="paragraphBulletStyle(entry.paragraph)" alt="" aria-hidden="true">
                     <span v-else-if="entry.marker" class="paragraph-marker" :style="paragraphBulletStyle(entry.paragraph)" aria-hidden="true">{{ entry.marker }}</span>
                     <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
-                      <component v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), paragraphIndex, segment.start, segment.end), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRunAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), segment.script), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]">{{ segment.text }}</component>
+                      <component v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-pattern-fill': !segment.separateDecorations && runHasTextPattern(element, run, paragraphIndex, segment.start, segment.end) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), paragraphIndex, segment.start, segment.end, segment.separateDecorations), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRunAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), segment.script, segment.separateDecorations), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]"><span v-if="segment.separateDecorations" class="text-run-underline" :class="{ 'text-run-pattern-fill': runHasTextPattern(element, run, paragraphIndex, segment.start, segment.end) }" :style="textUnderlineStyle(run)">{{ segment.text }}</span><template v-else>{{ segment.text }}</template></component>
                     </template>
                   </div>
                 </div>
@@ -3176,7 +4785,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         </tbody>
       </table>
       <span v-else-if="element.kind === 'placeholder'">{{ element.mediaType ? 'Media unavailable' : 'Image unavailable' }}</span>
-      <div v-if="element.paragraphs.length" class="text-frame" :data-element-id="element.id" :data-autofit="element.textAutoFit === 'shape' ? 'shape' : element.textAutoFitDynamic ? 'normal' : undefined" :style="textFrameStyle(element)">
+      <div v-if="element.paragraphs.length" class="text-frame" :data-element-id="element.id" :data-autofit="element.textAutoFit === 'shape' ? 'shape' : element.textAutoFitDynamic ? 'normal' : undefined" :data-text-overflow="supportsTextVerticalEllipsis(element) ? 'ellipsis' : undefined" :style="textFrameStyle(element)">
         <div
           v-for="(entry, index) in paragraphEntries(element.paragraphs)"
           :key="index"
@@ -3186,30 +4795,33 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
           <img v-if="entry.paragraph.bullet?.kind === 'image' && entry.paragraph.bullet.url" class="paragraph-picture-bullet" :src="entry.paragraph.bullet.url" :style="paragraphBulletStyle(entry.paragraph)" alt="" aria-hidden="true">
           <span v-else-if="entry.marker" class="paragraph-marker" :style="paragraphBulletStyle(entry.paragraph)" aria-hidden="true">{{ entry.marker }}</span>
           <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
-            <component v-for="(segment, segmentIndex) in runSegments(run, element, index, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element), index, segment.start, segment.end), textColorAnimationStyle(element, index, segment.start, segment.end), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, index, segment.start, segment.end), textRunAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element), segment.script), textTransformAnimationStyle(element, index, segment.start, segment.end)]">{{ segment.text }}</component>
+            <component v-for="(segment, segmentIndex) in runSegments(run, element, index, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-pattern-fill': !segment.separateDecorations && runHasTextPattern(element, run, index, segment.start, segment.end) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element), index, segment.start, segment.end, segment.separateDecorations), textColorAnimationStyle(element, index, segment.start, segment.end), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, index, segment.start, segment.end), textRunAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element), segment.script, segment.separateDecorations), textTransformAnimationStyle(element, index, segment.start, segment.end)]"><span v-if="segment.separateDecorations" class="text-run-underline" :class="{ 'text-run-pattern-fill': runHasTextPattern(element, run, index, segment.start, segment.end) }" :style="textUnderlineStyle(run)">{{ segment.text }}</span><template v-else>{{ segment.text }}</template></component>
           </template>
         </div>
       </div>
       <svg v-if="element.kind === 'line'" class="line-render" :style="lineRenderStyle(element)" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
         <defs>
-          <marker v-if="element.lineHeadEnd && element.lineHeadEnd.type !== 'none'" :id="lineEndId(element, 'head')" :markerWidth="lineEndMarkerSize(element, 'head').width" :markerHeight="lineEndMarkerSize(element, 'head').height" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="strokeWidth" orient="auto-start-reverse">
-            <path :d="lineEndPath(element.lineHeadEnd.type)" :fill="element.lineHeadEnd.type === 'arrow' ? 'none' : 'currentColor'" :stroke="element.lineHeadEnd.type === 'arrow' ? 'currentColor' : 'none'" />
+          <marker v-if="animationLineEnd(element, 'head').type !== 'none'" :id="lineEndId(element, 'head')" :markerWidth="lineEndMarkerSize(element, 'head').width" :markerHeight="lineEndMarkerSize(element, 'head').height" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="strokeWidth" orient="auto-start-reverse">
+            <path :d="lineEndPath(animationLineEnd(element, 'head').type)" :fill="lineEndUsesStroke(animationLineEnd(element, 'head').type) ? 'none' : 'currentColor'" :stroke="lineEndUsesStroke(animationLineEnd(element, 'head').type) ? 'currentColor' : 'none'" />
           </marker>
-          <marker v-if="element.lineTailEnd && element.lineTailEnd.type !== 'none'" :id="lineEndId(element, 'tail')" :markerWidth="lineEndMarkerSize(element, 'tail').width" :markerHeight="lineEndMarkerSize(element, 'tail').height" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="strokeWidth" orient="auto">
-            <path :d="lineEndPath(element.lineTailEnd.type)" :fill="element.lineTailEnd.type === 'arrow' ? 'none' : 'currentColor'" :stroke="element.lineTailEnd.type === 'arrow' ? 'currentColor' : 'none'" />
+          <marker v-if="animationLineEnd(element, 'tail').type !== 'none'" :id="lineEndId(element, 'tail')" :markerWidth="lineEndMarkerSize(element, 'tail').width" :markerHeight="lineEndMarkerSize(element, 'tail').height" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="strokeWidth" orient="auto">
+            <path :d="lineEndPath(animationLineEnd(element, 'tail').type)" :fill="lineEndUsesStroke(animationLineEnd(element, 'tail').type) ? 'none' : 'currentColor'" :stroke="lineEndUsesStroke(animationLineEnd(element, 'tail').type) ? 'currentColor' : 'none'" />
           </marker>
         </defs>
-        <line x1="0" y1="0" :x2="element.width > 0 ? 1000 : 0" :y2="element.height > 0 ? 1000 : 0" :stroke="lineStrokeColor(element)" :stroke-width="Math.max(animationStrokeWidth(element) * scale, 1)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
+        <path v-if="element.linePath" :d="element.linePath" fill="none" :stroke="lineStrokeColor(element)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
+        <line v-else x1="0" :y1="element.geometry === 'lineInv' ? 1000 : 0" :x2="element.width > 0 ? 1000 : 0" :y2="element.height > 0 ? (element.geometry === 'lineInv' ? 0 : 1000) : 0" :stroke="lineStrokeColor(element)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
       </svg>
     </div>
     <span v-if="backgroundTileWarning" class="media-warning" role="status">{{ backgroundTileWarning }}</span>
+    <span v-if="textOverflowWarning && (!thumbnail || playbackPreview)" class="media-warning" role="status">{{ textOverflowWarning }}</span>
   </div>
 </template>
 
 <style scoped>
 .image-viewport { position: relative; width: 100%; height: 100%; overflow: hidden; }
 .image-tone-defs { position: absolute; width: 0; height: 0; overflow: visible; pointer-events: none; }
-.custom-geometry { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.picture-inner-shadow { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.custom-geometry, .preset-outline { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .slide-image { position: absolute; max-width: none; }
 .slide-video { position: absolute; max-width: none; object-fit: fill; }
 .audio-viewport { position: relative; width: 100%; height: 100%; display: grid; align-items: center; }
@@ -3223,6 +4835,11 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
 .slide-chart .chart-data-label { fill: #1f2937; font-size: 18px; font-weight: 600; }
 .slide-table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
 .slide-table td { box-sizing: border-box; overflow: hidden; }
+.text-run-break { white-space: pre; }
+.text-run-pattern-fill { color: var(--pptx-text-pattern-color, currentColor); }
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .text-run-pattern-fill { background: var(--pptx-text-pattern); background-clip: text; -webkit-background-clip: text; color: transparent !important; -webkit-text-fill-color: transparent; }
+}
 .paragraph-marker { display: inline-block; width: 1em; margin-left: -1em; margin-right: .45em; text-align: right; white-space: pre; }
 .paragraph-picture-bullet { display: inline-block; width: 1em; height: 1em; margin-left: -1em; margin-right: .45em; object-fit: contain; vertical-align: middle; }
 .is-thumbnail .text-frame { overflow: hidden; }

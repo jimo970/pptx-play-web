@@ -1,4 +1,5 @@
-import type { PptxDocument } from './pptx'
+import type { PptxDocument } from './pptx-model'
+import { registerPptxEmbeddedFonts, releasePptxFontFaces } from './pptx-fonts'
 
 interface ParseReply {
   id: number
@@ -9,6 +10,7 @@ interface ParseReply {
 let parserWorker: Worker | undefined
 let nextRequestId = 0
 const pending = new Map<number, { resolve: (document: PptxDocument) => void; reject: (error: Error) => void }>()
+const loadedFonts = new WeakMap<PptxDocument, FontFace[]>()
 
 function failWorker(error: Error) {
   parserWorker?.terminate()
@@ -51,6 +53,12 @@ function addMediaCapabilityWarnings(document: PptxDocument) {
   document.warnings = [...warnings]
 }
 
+async function loadEmbeddedFonts(presentation: PptxDocument) {
+  const loaded = await registerPptxEmbeddedFonts(presentation.embeddedFonts)
+  loadedFonts.set(presentation, loaded.faces)
+  presentation.warnings = [...new Set([...presentation.warnings, ...loaded.warnings])]
+}
+
 export async function parsePptxInWorker(file: File): Promise<PptxDocument> {
   let document: PptxDocument
   if (typeof Worker === 'undefined') {
@@ -70,7 +78,14 @@ export async function parsePptxInWorker(file: File): Promise<PptxDocument> {
     })
   }
   addMediaCapabilityWarnings(document)
+  await loadEmbeddedFonts(document)
   return document
+}
+
+export function disposePptxDocument(document: PptxDocument) {
+  releasePptxFontFaces(loadedFonts.get(document) || [])
+  loadedFonts.delete(document)
+  document.objectUrls.forEach(URL.revokeObjectURL)
 }
 
 export function stopPptxParserWorker() {
