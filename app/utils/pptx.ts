@@ -15,6 +15,7 @@ import type {
     AnimatedVisibility,
     PptxAnimation,
     PptxAnimationTriggerCondition,
+    PptxAlphaInverse,
     PptxChart,
     PptxChartAxis,
     PptxChartAxisCrosses,
@@ -2380,14 +2381,33 @@ function singleAlphaInverseEffect(container: Element): Element | undefined {
     }
 }
 
-function drawingEffectDag(effects: Element, theme: Record<string, string>, warnings: Set<string>, target: 'shape' | 'picture' | 'text', supportsInset: boolean, supportsSvg = false): {shadow?: PptxShadow; shadows?: PptxShadow[]; glow?: PptxGlow; glows?: PptxGlow[]; alphaInverse?: [number, number, number] | null} {
+function treeAlphaInverseEffectSequence(container: Element): Element[] | undefined {
+    const type = container.getAttribute('type') || 'sib'
+    const entries = children(container)
+    if (!['sib', 'tree'].includes(type) || (type === 'sib' && entries.length > 1)) return undefined
+    const effects: Element[] = []
+    for (const entry of entries) {
+        if (entry.localName === 'alphaInv') effects.push(entry)
+        else if (entry.localName === 'cont') {
+            const nested = treeAlphaInverseEffectSequence(entry)
+            if (!nested) return undefined
+            effects.push(...nested)
+        } else return undefined
+    }
+    return effects.length ? effects : undefined
+}
+
+function drawingEffectDag(effects: Element, theme: Record<string, string>, warnings: Set<string>, target: 'shape' | 'picture' | 'text', supportsInset: boolean, supportsSvg = false): {shadow?: PptxShadow; shadows?: PptxShadow[]; glow?: PptxGlow; glows?: PptxGlow[]; alphaInverse?: PptxAlphaInverse} {
     const type = effects.getAttribute('type') || 'sib'
     const entries = children(effects)
     if (type !== 'sib' && type !== 'tree') {
         warnings.add(`The ${target} effect DAG container type "${type}" is not supported.`)
         return {}
     }
-    if (type === 'tree' && entries.length > 1) {
+    const multiTreeAlphaInverseNodes = target === 'picture' && type === 'tree' && entries.length > 1
+        ? treeAlphaInverseEffectSequence(effects)
+        : undefined
+    if (type === 'tree' && entries.length > 1 && !multiTreeAlphaInverseNodes) {
         // ECMA-376: tree containers apply each effect to the previous effect's result.
         warnings.add(`Multi-effect tree-ordered ${target} effect DAGs are not rendered.`)
         return {}
@@ -2397,16 +2417,25 @@ function drawingEffectDag(effects: Element, theme: Record<string, string>, warni
     const glows: PptxGlow[] = []
     const alphaInverseEntry = target === 'picture' && entries.length === 1 ? entries[0] : undefined
     const alphaInverseNode = alphaInverseEntry ? singleAlphaInverseEffect(effects) : undefined
-    const alphaInverseColorNode = children(alphaInverseNode)[0]
-    const alphaInverseColor = animationColorChannels(alphaInverseColorNode, theme, 'rgb')
-    const alphaInverse = alphaInverseNode
-        ? alphaInverseColor
-            ? [alphaInverseColor[0] / 255, alphaInverseColor[1] / 255, alphaInverseColor[2] / 255] as [number, number, number]
-            : null
-        : undefined
-    if (alphaInverseColorNode && !alphaInverseColor) warnings.add('An invalid picture alpha inverse color in an effect DAG was ignored; alpha-only inversion was applied.')
+    const alphaInverseNodes = multiTreeAlphaInverseNodes || (alphaInverseNode ? [alphaInverseNode] : undefined)
+    let alphaInverse: PptxAlphaInverse | undefined
+    if (alphaInverseNodes) {
+        let color: [number, number, number] | undefined
+        for (const node of alphaInverseNodes) {
+            const colorNode = children(node)[0]
+            if (!colorNode) continue
+            const channels = animationColorChannels(colorNode, theme, 'rgb')
+            if (!channels) {
+                warnings.add('An invalid picture alpha inverse color in an effect DAG was ignored; alpha-only inversion was applied.')
+                continue
+            }
+            color = [channels[0] / 255, channels[1] / 255, channels[2] / 255]
+        }
+        const invertAlpha = alphaInverseNodes.length % 2 === 1
+        if (invertAlpha || color) alphaInverse = {invertAlpha, color}
+    }
     for (const effect of entries) {
-        if (effect === alphaInverseEntry && alphaInverseNode) {
+        if (multiTreeAlphaInverseNodes || (effect === alphaInverseEntry && alphaInverseNode)) {
             continue
         } else if (effect.localName === 'outerShdw') {
             shadows.push(parsedShadow(effect, theme, warnings))
@@ -2431,7 +2460,7 @@ function drawingEffectDag(effects: Element, theme: Record<string, string>, warni
     return {shadow: shadows[0], shadows: shadows.length > 1 ? shadows : undefined, glow: glows[0], glows: glows.length > 1 ? glows : undefined, alphaInverse}
 }
 
-function referencedShapeEffects(shape: Element, theme: Record<string, string>, warnings: Set<string>, styles?: ParsedTheme, target: 'shape' | 'picture' = 'shape'): {shadow?: PptxShadow; shadows?: PptxShadow[]; glow?: PptxGlow; glows?: PptxGlow[]; alphaInverse?: [number, number, number] | null} {
+function referencedShapeEffects(shape: Element, theme: Record<string, string>, warnings: Set<string>, styles?: ParsedTheme, target: 'shape' | 'picture' = 'shape'): {shadow?: PptxShadow; shadows?: PptxShadow[]; glow?: PptxGlow; glows?: PptxGlow[]; alphaInverse?: PptxAlphaInverse} {
     const properties = child(shape, 'spPr')
     const geometry = child(properties, 'prstGeom')?.getAttribute('prst') || (child(properties, 'custGeom') ? 'custom' : 'rect')
     const supportsInset = target === 'picture' || (CSS_INSET_SHADOW_GEOMETRIES.has(geometry) && !isSvgPolygonGeometry(geometry))
@@ -3266,11 +3295,11 @@ function parseTable(frame: Element, theme: Record<string, string>, warnings: Set
     }
 }
 
-async function parseSmartArtCachedDrawing(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, animationTargetIds: Set<string>, parentTransform: Matrix2D | undefined, sourceTheme: Record<string, string>, fillStyles?: ParsedTheme): Promise<PptxElement[] | undefined> {
+async function parseSmartArtCachedDrawing(frame: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, frameAnimationTargetIds: Set<string>, parentTransform: Matrix2D | undefined, sourceTheme: Record<string, string>, fillStyles: ParsedTheme | undefined, smartArtAnimationTargets: Map<string, string>): Promise<PptxElement[] | undefined> {
     const graphicData = firstDescendant(frame, 'graphicData')
     if (!graphicData?.getAttribute('uri')?.endsWith('/diagram')) return undefined
     const frameId = firstDescendant(frame, 'cNvPr')?.getAttribute('id') || ''
-    if (animationTargetIds.has(frameId)) {
+    if (frameAnimationTargetIds.has(frameId)) {
         warnings.add('SmartArt with frame-targeted animation uses the text fallback to preserve its animation.')
         return undefined
     }
@@ -3321,16 +3350,17 @@ async function parseSmartArtCachedDrawing(frame: Element, rels: Map<string, Pptx
         const drawingRels = await loadRelationships(zip, relationshipPath(drawingRelation.target))
         const elements: PptxElement[] = []
         for (const node of children(tree)) {
-            elements.push(...(await parseSceneElements(node, drawingRels, zip, theme, warnings, urls, imageUrlCache, drawingTransform, animationTargetIds, sourceTheme, fillStyles)))
+            elements.push(...(await parseSceneElements(node, drawingRels, zip, theme, warnings, urls, imageUrlCache, drawingTransform, frameAnimationTargetIds, sourceTheme, fillStyles, undefined, smartArtAnimationTargets)))
         }
         if (!elements.length) return undefined
         warnings.add('SmartArt uses its last saved diagram drawing; its data-driven layout is not regenerated in the browser.')
         const frameName = firstDescendant(frame, 'cNvPr')?.getAttribute('name') || 'SmartArt'
-        return elements.map((element, index) => ({
-            ...element,
-            id: `${frameId}:smartart:${drawingRelation.target}:${element.id || index}`,
-            name: `${frameName}: ${element.name}`
-        }))
+        return elements.map((element, index) => {
+            const sourceId = element.id || String(index)
+            const id = `${frameId}:smartart:${drawingRelation.target}:${sourceId}`
+            if (element.id) smartArtAnimationTargets.set(`${frameId}:${element.id}`, id)
+            return {...element, id, name: `${frameName}: ${element.name}`}
+        })
     } catch {
         warnings.add('The SmartArt cached drawing could not be parsed; its text fallback was used.')
         return undefined
@@ -5255,7 +5285,7 @@ function parseLineArrowSize(property: AnimatedLineArrowSizeProperty, value: stri
     return normalized && allowed.includes(normalized) ? normalized as AnimatedLineArrowSize : undefined
 }
 
-function parseAnimations(slideRoot: Element, theme: Record<string, string>, warnings: Set<string>, elements: PptxElement[], slideWidth: number, slideHeight: number): Pick<PptxSlide, 'automaticAnimations' | 'animationSteps' | 'animationSequence' | 'animationStepSequences' | 'triggeredAnimations'> {
+function parseAnimations(slideRoot: Element, theme: Record<string, string>, warnings: Set<string>, elements: PptxElement[], slideWidth: number, slideHeight: number, smartArtAnimationTargets: Map<string, string>): Pick<PptxSlide, 'automaticAnimations' | 'animationSteps' | 'animationSequence' | 'animationStepSequences' | 'triggeredAnimations'> {
     // p:timing is a direct p:sld child; ignore same-named nodes embedded in extension payloads.
     // Source: https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-presentation-slides
     const timing = child(slideRoot, 'timing')
@@ -5527,11 +5557,15 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const textElement = firstDescendant(shape, 'txEl')
             const paragraphNode = firstDescendant(textElement, 'pRg')
             const characterNode = firstDescendant(textElement, 'charRg')
+            const diagramId = shape?.getAttribute('spid') || ''
+            const subShapeId = child(shape, 'subSp')?.getAttribute('spid')
+            const targetId = subShapeId ? smartArtAnimationTargets.get(`${diagramId}:${subShapeId}`) || '' : diagramId
+            if (subShapeId && !targetId) warnings.add('A diagram subshape animation target could not be matched to a saved SmartArt shape and was skipped.')
             const start = numberAttr(characterNode, 'st')
             const end = numberAttr(characterNode, 'end')
             const entireText = start === 0xffff_ffff && end === 0xffff_ffff
             return {
-                targetId: shape?.getAttribute('spid') || '',
+                targetId,
                 paragraphRange: paragraphNode ? {start: numberAttr(paragraphNode, 'st'), end: numberAttr(paragraphNode, 'end')} : undefined,
                 characterRange: characterNode ? {start: entireText ? 0 : start, end: entireText ? Number.MAX_SAFE_INTEGER : end} : undefined,
                 hasUnsupportedTextRange: Boolean(textElement && ((!paragraphNode && !characterNode) || (paragraphNode && characterNode)))
@@ -7958,7 +7992,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         })
     }
 
-    const conditionalSequencePlans: Array<{step: PptxAnimation[]; actions: PptxAnimation[][]}> = []
+    const conditionalSequencePlans: Array<{step: PptxAnimation[]; actions: PptxAnimation[][]; concurrent: boolean; nextAction: 'none' | 'seek'}> = []
     const appendSubTimeEntry = (
         entry: Element,
         ownerGroup: Element,
@@ -7980,11 +8014,14 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         }
         const supportsConditionalSequence = (sequenceNode: Element, timeNode: Element, childCount: number) => {
             const concurrent = sequenceNode.getAttribute('concurrent')
+            const nextAction = sequenceNode.getAttribute('nextAc')
+            const previousAction = sequenceNode.getAttribute('prevAc')
             const duration = timeNode.getAttribute('dur')
+            // Expanded child actions are separated by onNext boundaries, which are skipTimed rewind stops.
             return childCount > 1
-                && (concurrent === null || concurrent === '0' || concurrent === 'false')
-                && ['none', null].includes(sequenceNode.getAttribute('nextAc'))
-                && ['none', null].includes(sequenceNode.getAttribute('prevAc'))
+                && [null, '0', 'false', '1', 'true'].includes(concurrent)
+                && [null, 'none', 'seek'].includes(nextAction)
+                && [null, 'none', 'skipTimed'].includes(previousAction)
                 && (!duration || duration === 'indefinite')
                 && !['accel', 'decel', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => timeNode.hasAttribute(attribute))
                 && !descendants(sequenceNode, 'subTnLst').length
@@ -8035,7 +8072,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 return undefined
             }
             if (depth > 0 && timeNode.hasAttribute('masterRel')) warnings.add('A nested p:subTnLst masterRel value is ignored; only the root entry relation is applied.')
-            const sequenceControlsPresent = node.localName === 'seq' && (child(node, 'nextCondLst') || child(node, 'prevCondLst') || (node.hasAttribute('nextAc') && node.getAttribute('nextAc') !== 'none') || (node.hasAttribute('prevAc') && node.getAttribute('prevAc') !== 'none'))
+            const sequenceControlsPresent = node.localName === 'seq' && (child(node, 'nextCondLst') || child(node, 'prevCondLst') || (node.hasAttribute('concurrent') && !['0', 'false'].includes(node.getAttribute('concurrent') || '')) || (node.hasAttribute('nextAc') && node.getAttribute('nextAc') !== 'none') || (node.hasAttribute('prevAc') && node.getAttribute('prevAc') !== 'none'))
             const conditionalSequence = depth === 0
                 && node === entry
                 && sequenceKey === 'main'
@@ -8043,7 +8080,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 && sequence.length === 0
                 && supportsConditionalSequence(node, timeNode, childTimeNodes.length)
             if (sequenceControlsPresent && !conditionalSequence) {
-                warnings.add('Conditional advancement and seek/skip actions on a nested p:seq are not applied.')
+                warnings.add('Some navigation, concurrency, or seek/skip behavior on a nested p:seq is not applied.')
             }
             const containerStartMs = nodeStartMs + timelineTime(rawDelay)
             const isSequential = node.localName === 'seq'
@@ -8137,7 +8174,13 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 if (canSplit) {
                     const childSteps = conditionalChildActions.map(({actions, startMs}) => actions.map(action => ({...action, delayMs: Math.max(0, action.delayMs + containerStartMs - startMs)})))
                     sequence.push(...childSteps[0]!)
-                    conditionalSequencePlans.push({step: sequence, actions: childSteps})
+                    const concurrentValue = node.getAttribute('concurrent')
+                    conditionalSequencePlans.push({
+                        step: sequence,
+                        actions: childSteps,
+                        concurrent: concurrentValue === '1' || concurrentValue === 'true',
+                        nextAction: node.getAttribute('nextAc') === 'seek' ? 'seek' : 'none'
+                    })
                 } else {
                     sequence.push(...conditionalChildActions.flatMap(({actions}) => actions))
                     warnings.add('A nested p:seq with slide navigation conditions could not be split safely; its children use natural timing.')
@@ -8474,22 +8517,23 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
             remappedSteps.set(stepIndex, expandedSteps.length)
             expandedSteps.push(steps[stepIndex]!)
-            expandedStepSequences.push(undefined)
             const plans = plansByStep.get(stepIndex) || []
             const childCount = Math.max(0, ...plans.map(plan => plan.actions.length))
-            for (let childIndex = 0; childIndex < childCount; childIndex++) {
-                if (childIndex > 0) {
-                    expandedSteps.push(plans.flatMap(plan => plan.actions[childIndex] || []))
-                }
+            const sequenceMetadata = (childIndex: number) => {
                 const advancesOnNext = plans.some(plan => plan.actions.length > childIndex + 1)
                 const rewindsOnPrevious = childIndex > 0 && plans.some(plan => plan.actions.length > childIndex)
-                expandedStepSequences.push(advancesOnNext || rewindsOnPrevious
+                const advancingPlan = advancesOnNext ? plans.find(plan => plan.actions.length > childIndex + 1) : undefined
+                return advancesOnNext || rewindsOnPrevious
                     ? {
-                          concurrent: false,
-                          ...(advancesOnNext ? {nextAction: 'none' as const, advancesOnNext: true} : {}),
+                          ...(advancesOnNext ? {concurrent: advancingPlan!.concurrent, nextAction: advancingPlan!.nextAction, advancesOnNext: true} : {}),
                           ...(rewindsOnPrevious ? {rewindsOnPrevious: true} : {})
                       }
-                    : undefined)
+                    : undefined
+            }
+            expandedStepSequences.push(childCount ? sequenceMetadata(0) : undefined)
+            for (let childIndex = 1; childIndex < childCount; childIndex++) {
+                expandedSteps.push(plans.flatMap(plan => plan.actions[childIndex] || []))
+                expandedStepSequences.push(sequenceMetadata(childIndex))
             }
         }
         steps.splice(0, steps.length, ...expandedSteps)
@@ -9038,7 +9082,7 @@ async function resolveConnectorAttachments(tree: Element | undefined, elements: 
     }
 }
 
-async function parseSceneElements(node: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, parentTransform: Matrix2D | undefined, animationTargetIds: Set<string>, sourceTheme: Record<string, string>, fillStyles?: ParsedTheme, groupFill?: string): Promise<PptxElement[]> {
+async function parseSceneElements(node: Element, rels: Map<string, PptxRelationship>, zip: JSZip, theme: Record<string, string>, warnings: Set<string>, urls: string[], imageUrlCache: Map<string, string>, parentTransform: Matrix2D | undefined, frameAnimationTargetIds: Set<string>, sourceTheme: Record<string, string>, fillStyles?: ParsedTheme, groupFill?: string, smartArtAnimationTargets = new Map<string, string>()): Promise<PptxElement[]> {
     if (node.localName === 'grpSp') {
         const localTransform = groupTransformMatrix(node)
         if (!localTransform) {
@@ -9051,7 +9095,7 @@ async function parseSceneElements(node: Element, rels: Map<string, PptxRelations
         const elements: PptxElement[] = []
         for (const item of children(node)) {
             if (!['sp', 'pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(item.localName)) continue
-            elements.push(...(await parseSceneElements(item, rels, zip, theme, warnings, urls, imageUrlCache, transform, animationTargetIds, sourceTheme, fillStyles, currentGroupFill)))
+            elements.push(...(await parseSceneElements(item, rels, zip, theme, warnings, urls, imageUrlCache, transform, frameAnimationTargetIds, sourceTheme, fillStyles, currentGroupFill, smartArtAnimationTargets)))
         }
         return elements
     }
@@ -9065,7 +9109,7 @@ async function parseSceneElements(node: Element, rels: Map<string, PptxRelations
         else if (!element) {
             element = await parseOlePreview(node, rels, zip, theme, warnings, urls, imageUrlCache, fillStyles)
             if (!element) {
-                const cachedDrawing = await parseSmartArtCachedDrawing(node, rels, zip, theme, warnings, urls, imageUrlCache, animationTargetIds, parentTransform, sourceTheme, fillStyles)
+                const cachedDrawing = await parseSmartArtCachedDrawing(node, rels, zip, theme, warnings, urls, imageUrlCache, frameAnimationTargetIds, parentTransform, sourceTheme, fillStyles, smartArtAnimationTargets)
                 if (cachedDrawing) return cachedDrawing
                 element = await parseSmartArtTextFallback(node, rels, zip, theme, warnings)
             }
@@ -9315,7 +9359,8 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             const masterPlaceholders = parsePlaceholderCandidates(masterXml, theme, warnings, masterTextStyles, [], false, masterRels, themeData)
             const layoutPlaceholders = parsePlaceholderCandidates(layoutXml, theme, warnings, masterTextStyles, masterPlaceholders, false, layoutRels, themeData)
             const tree = firstDescendant(xml.documentElement, 'spTree')
-            const animationTargetIds = new Set(descendants(xml.documentElement, 'spTgt').map(target => target.getAttribute('spid') || '').filter(Boolean))
+            const frameAnimationTargetIds = new Set(descendants(xml.documentElement, 'spTgt').filter(target => !child(target, 'subSp')).map(target => target.getAttribute('spid') || '').filter(Boolean))
+            const smartArtAnimationTargets = new Map<string, string>()
             // p:sld and p:sldLayout showMasterSp both default to true and gate master-slide shapes.
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.slide.showmastershapes?view=openxml-3.0.1
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.slidelayout.showmastershapes?view=openxml-3.0.1
@@ -9342,14 +9387,14 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
                     element = inheritPlaceholderProperties(element, node, layoutPlaceholder || masterPlaceholder, warnings)
                     elements.push(element)
                 } else if (['pic', 'graphicFrame', 'grpSp', 'cxnSp'].includes(node.localName)) {
-                    elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache, undefined, animationTargetIds, themeData.colors, themeData)))
+                    elements.push(...(await parseSceneElements(node, rels, zip, theme, warnings, urls, imageUrlCache, undefined, frameAnimationTargetIds, themeData.colors, themeData, undefined, smartArtAnimationTargets)))
                 }
             }
             await resolveConnectorAttachments(tree, elements.slice(slideElementStart), warnings)
             await resolvePictureBullets(elements, zip, warnings, urls, imageUrlCache)
             const notes = parseSpeakerNotes(notesXml, notesMasterXml, notesTheme, warnings, notesRels, notesMasterRels)
             if (notes.speakerNoteParagraphs) await resolvePictureBullets([{paragraphs: notes.speakerNoteParagraphs}], zip, warnings, urls, imageUrlCache)
-            const animations = parseAnimations(xml.documentElement, theme, warnings, elements, width, height)
+            const animations = parseAnimations(xml.documentElement, theme, warnings, elements, width, height, smartArtAnimationTargets)
             const slideInfo = firstDescendant(xml.documentElement, 'cSld')
             const slideBackground = await backgroundFill(xml, rels, {...themeData, colors: theme}, warnings, zip, urls, imageUrlCache)
             const layoutBackground = await backgroundFill(layoutXml, layoutRels, {...themeData, colors: layoutTheme}, warnings, zip, urls, imageUrlCache)

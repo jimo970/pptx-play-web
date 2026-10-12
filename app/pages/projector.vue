@@ -5,7 +5,7 @@ import { registerPptxEmbeddedFonts, releasePptxFontFaces } from '~/utils/pptx-fo
 import { presenterChannelName, type PresenterInkStroke, type PresenterMessage, type PresenterPoint } from '~/utils/presenter-channel'
 import { useSlideTransition } from '~/composables/useSlideTransition'
 
-const { locale, t, toggleLocale } = useLocale()
+const { locale, t, toggleLocale, translateWarning } = useLocale()
 
 interface ProjectorDocument { name: string; width: number; height: number; totalSlides: number; showAnimations: boolean; showNarration: boolean }
 
@@ -307,12 +307,21 @@ onBeforeUnmount(() => {
         <button class="projector-fullscreen-button" @click="toggleProjectorFullscreen">{{ t('fullscreen') }}</button>
         <span>{{ slideCountLabel }} · {{ t('projectorKeyboardHelp') }}</span>
         <button class="locale-toggle" :aria-label="t(locale === 'en' ? 'switchLanguageToChinese' : 'switchLanguageToEnglish')" @click="toggleLocale">{{ t(locale === 'en' ? 'switchToChinese' : 'switchToEnglish') }}</button>
-        <span v-if="locale === 'zh' && fontWarnings.length" class="warning-pill">{{ t('warningDetailsEnglish') }}</span>
-        <span v-for="warning in fontWarnings" :key="warning" class="warning-pill" role="status">{{ warning }}</span>
+        <span v-if="locale === 'zh' && fontWarnings.length" class="warning-pill">{{ t('warningProjectorDetails') }}</span>
+        <template v-for="warning in fontWarnings" :key="warning">
+          <details v-if="locale === 'zh'" class="warning-original projector-warning-original">
+            <summary class="warning-pill">{{ translateWarning(warning) }}</summary>
+            <code>{{ warning }}</code>
+          </details>
+          <span v-else class="warning-pill" role="status">{{ warning }}</span>
+        </template>
       </div>
     </template>
     <div v-else-if="blank" class="projector-blank" :class="`is-${blank}`" :aria-label="t('blankScreen', { color: t(blank) })" />
-    <p v-else-if="channelError" class="projector-message" role="alert">{{ t(channelError) }}</p>
-    <p v-else class="projector-message" data-projector-waiting>{{ documentInfo?.name || t('waitingForPresenter') }}</p>
+    <div v-else class="projector-message-state">
+      <p v-if="channelError" class="projector-message" role="alert">{{ t(channelError) }}</p>
+      <p v-else class="projector-message" data-projector-waiting>{{ documentInfo?.name || t('waitingForPresenter') }}</p>
+      <button class="locale-toggle projector-message-locale-toggle" :aria-label="t(locale === 'en' ? 'switchLanguageToChinese' : 'switchLanguageToEnglish')" @click="toggleLocale">{{ t(locale === 'en' ? 'switchToChinese' : 'switchToEnglish') }}</button>
+    </div>
   </main>
 </template>

@@ -258,6 +258,11 @@ export type PptxTextOrientation = 'horz' | 'vert' | 'vert270' | 'wordArtVert' | 
 
 export type PptxLineEnd = {type: 'none' | 'triangle' | 'stealth' | 'diamond' | 'oval' | 'arrow' | 'chevron' | 'doubleChevron'; width: 'sm' | 'med' | 'lg'; length: 'sm' | 'med' | 'lg'}
 
+export interface PptxAlphaInverse {
+    invertAlpha: boolean
+    color?: [number, number, number]
+}
+
 export interface PptxElement {
     id: string
     name: string
@@ -302,7 +307,7 @@ export interface PptxElement {
     imageGrayscale?: boolean
     imageAlphaInverse?: [number, number, number] | null
     imageAlphaInverseAfterGrayscale?: boolean
-    imageEffectDagAlphaInverse?: [number, number, number] | null
+    imageEffectDagAlphaInverse?: PptxAlphaInverse
     table?: PptxTable
     chart?: PptxChart
     paragraphs: PptxParagraph[]

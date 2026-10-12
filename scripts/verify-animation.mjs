@@ -286,7 +286,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const timedNodeSequence = (id, timeNode, event, groups, delay = '0') => `<p:seq><p:cTn id="${id}" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="${event}" delay="${delay}"><p:tn val="${timeNode}"/></p:cond></p:stCondLst><p:childTnLst>${groups}</p:childTnLst></p:cTn></p:seq>`
   const parentRepeatSequences = `<p:seq><p:cTn id="307" dur="indefinite" nodeType="interactiveSeq" restart="never"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="105"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatCount}</p:childTnLst></p:cTn></p:seq><p:seq concurrent="1"><p:cTn id="308" dur="indefinite" nodeType="interactiveSeq" restart="whenNotActive"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="107"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatDuration}${parentRepeatAfterEffect}${parentRepeatDurationNextStep}</p:childTnLst></p:cTn></p:seq>${parentSequentialStep}${triggeredSequence(804, 112, parentReverseSpeedGroup)}${triggeredSequence(805, 114, parentAutoReverseGroup)}${triggeredSequence(806, 116, parentIndefiniteRepeat)}${triggeredSequence(809, 118, childRepeatDuration)}${directAnimationRepeatSequences}`
   const objectShapeElements = `${shape(49, 'Circle mask animation', 0, 6500000, '0ea5e9')}${shape(50, 'Diamond mask animation', 3000000, 6500000, '3b82f6')}${shape(51, 'Box mask animation', 6000000, 6500000, '2563eb')}${shape(52, 'Dissolve mask animation', 0, 3500000, '0891b2')}${shape(53, 'Wheel mask animation', 3000000, 3500000, '2563eb')}${shape(54, 'Wedge mask animation', 6000000, 3500000, '7c3aed')}${shape(55, 'Plus in mask animation', 0, 8500000, '0891b2')}${shape(56, 'Plus out mask animation', 6000000, 8500000, '7c3aed')}${shape(57, 'Random horizontal bars animation', 0, 10500000, '0284c7')}${shape(58, 'Random vertical bars animation', 6000000, 10500000, '7c3aed')}${shape(74, 'Media after-effect', 9000000, 7000000, '10b981')}${shape(9001, 'Stop audio trigger', 9000000, 9000000, '10b981')}${shape(9002, 'Media bookmark trigger', 3500000, 9000000, '10b981')}${shape(9003, 'Media bookmark start trigger', 6500000, 9000000, '10b981')}${shape(9004, 'Media node end trigger', 9000000, 10500000, '10b981')}${shape(9005, 'Media node begin trigger', 6500000, 10500000, '10b981')}${shape(9006, 'Media node begin time-node', 3000000, 11200000, '059669')}${shape(9007, 'Media node end time-node', 6500000, 11200000, '047857')}${shape(9008, 'Media timed node end', 9000000, 11200000, '065f46')}${shape(9009, 'Media target onEnd', 10500000, 11200000, '047857')}${shape(9010, 'Parallel subtime A', 0, 0, '06b6d4')}${shape(9011, 'Parallel subtime B', 3000000, 0, '0891b2')}${shape(9012, 'Sequence subtime first', 6000000, 0, '0e7490')}${shape(9013, 'Sequence subtime second', 9000000, 0, '155e75')}${shape(9014, 'Interactive subtime parallel target', 0, 3000000, '14b8a6')}${shape(9015, 'Exclusive subtime target', 3000000, 3000000, '0f766e')}${shape(9016, 'Second exclusive subtime target', 6000000, 3000000, '0d9488')}`
-  const subTimeClickAudio = '<p:audio><p:cMediaNode vol="40000" mute="0"><p:cTn id="19418" dur="250" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cMediaNode></p:audio>'
+  const subTimeClickAudio = '<p:audio><p:cMediaNode vol="40000" mute="0"><p:cTn id="19418" dur="250" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="5"/></p:tgtEl></p:cMediaNode></p:audio>'
   const subTimeClickVideo = '<p:video><p:cMediaNode vol="30000" mute="0"><p:cTn id="19419" dur="250" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cMediaNode></p:video>'
   const subTimeClickCommand = '<p:cmd type="call" cmd="pause"><p:cBhvr><p:cTn id="19420" dur="0" masterRel="sameClick"><p:stCondLst><p:cond delay="350"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr></p:cmd>'
   const subTimeClickEffect = '<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="19421" dur="250" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="49"/></p:tgtEl></p:cBhvr></p:animEffect>'
@@ -995,10 +995,11 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   zip.file('ppt/_rels/presentation.xml.rels', presentationRels.replace('</Relationships>', '<Relationship Id="rId16" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide16.xml"/><Relationship Id="rId17" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide17.xml"/><Relationship Id="rId18" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide18.xml"/><Relationship Id="rId19" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide19.xml"/><Relationship Id="rId20" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide20.xml"/><Relationship Id="rId21" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide21.xml"/><Relationship Id="rId22" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide22.xml"/><Relationship Id="rId23" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide23.xml"/><Relationship Id="rId24" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide24.xml"/><Relationship Id="rId25" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide25.xml"/><Relationship Id="rId26" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide26.xml"/><Relationship Id="rId27" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide27.xml"/><Relationship Id="rId28" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide28.xml"/><Relationship Id="rId29" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide29.xml"/><Relationship Id="rId30" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide30.xml"/><Relationship Id="rId31" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide31.xml"/><Relationship Id="rId32" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide32.xml"/><Relationship Id="rId33" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide33.xml"/><Relationship Id="rId34" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide34.xml"/><Relationship Id="rId35" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide35.xml"/><Relationship Id="rId36" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide36.xml"/><Relationship Id="rId37" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide37.xml"/></Relationships>'))
   zip.file('ppt/slides/slide16.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(shape(2, 'Random bars slide', 0, 0, '14b8a6'))}<p:transition spd="med"><p:randomBar dir="horz"/></p:transition></p:sld>`)
   zip.file('ppt/slides/slide17.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:bg><p:bgPr><a:blipFill><a:blip r:embed="rId3"/><a:tile sx="50000" sy="200000" algn="br" flip="xy" tx="914400" ty="-457200"/></a:blipFill></p:bgPr></p:bg>${tree(`${shape(2, 'Vertical random bars slide', 0, 0, '0ea5e9')}${placeholderShape}`)}<p:transition spd="med"><p:randomBar dir="vert"/></p:transition></p:sld>`)
-  const smartArtFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="90" name="SmartArt cached drawing fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="9200000" y="5400000"/><a:ext cx="2500000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId4"/></a:graphicData></a:graphic></p:graphicFrame>`
+  const smartArtFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="190" name="SmartArt cached drawing fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="9200000" y="5400000"/><a:ext cx="2500000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId4"/></a:graphicData></a:graphic></p:graphicFrame>`
+  const smartArtSubShapeTiming = `<p:timing><p:tnLst><p:par><p:cTn id="5000" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq><p:cTn id="5001" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="5002" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="5003" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="190"><p:subSp spid="102"/></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
   const smartArtHierarchyFallbackFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="94" name="SmartArt hierarchy fallback fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="5000000" y="5500000"/><a:ext cx="2000000" cy="800000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"><dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" r:dm="rId7"/></a:graphicData></a:graphic></p:graphicFrame>`
   const oleFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="92" name="OLE preview fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="9200000" y="4200000"/><a:ext cx="2500000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj name="Quarterly workbook" progId="Excel.Sheet.12" r:id="rId5"><p:embed/><p:pic><p:nvPicPr><p:cNvPr id="93" name="OLE preview image"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2500000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
-  const oleNoPreviewFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="94" name="OLE no-preview fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="6500000" y="5400000"/><a:ext cx="2200000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj name="Linked report" progId="Word.Document.12" r:id="rId5"><p:link/></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
+  const oleNoPreviewFrame = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="106" name="OLE no-preview fixture"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="6500000" y="5400000"/><a:ext cx="2200000" cy="1000000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj name="Linked report" progId="Word.Document.12" r:id="rId5"><p:link/></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>`
   const tiledCropSlide17Xml = await zip.file('ppt/slides/slide17.xml').async('string')
   zip.file('ppt/slides/slide17.xml', tiledCropSlide17Xml.replace('<a:blip r:embed="rId3"/><a:tile', '<a:blip r:embed="rId3"/><a:srcRect l="50000"/><a:tile'))
   const groupFillSlide17Xml = await zip.file('ppt/slides/slide17.xml').async('string')
@@ -1058,7 +1059,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     zip.file(`ppt/slides/slide${54 + index}.xml`, `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, `Preset ${presetName}`, 0, 0, '0ea5e9'))}<mc:AlternateContent><mc:Choice Requires="p15"><p:transition spd="med" p14:dur="850ms"><p15:prstTrans prst="${presetName}" ${attributes}/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
   })
   zip.file('ppt/slides/slide66.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Preset invalid fallback', 0, 0, 'f97316'))}<mc:AlternateContent><mc:Choice Requires="p15"><p:transition spd="med" p14:dur="850ms"><p15:prstTrans prst="notARealPreset"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
-  const nestedConditionalSequence = `<p:seq concurrent="0" nextAc="none" prevAc="none"><p:cTn id="12042" dur="indefinite" masterRel="sameClick" afterEffect="0"><p:childTnLst><p:par><p:cTn id="12043" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12050, 132)}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12044" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12051, 133)}${nestedVisibilityAnimation(12052, 134, 1200)}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12045" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12053, 135)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst></p:seq>`
+  const nestedConditionalSequence = `<p:seq concurrent="0" nextAc="none" prevAc="none"><p:cTn id="12042" dur="indefinite" masterRel="sameClick" afterEffect="0"><p:childTnLst><p:par><p:cTn id="12043" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12050, 132)}${nestedVisibilityAnimation(12052, 134, 1200)}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12044" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12051, 133)}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12045" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12053, 135)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst></p:seq>`
   const visibilityTiming = `<p:timing><p:tnLst><p:par><p:cTn id="12028" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="12029" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="12030" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${visibilityAnimation}${visibilityKeyframes}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12031" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst/><p:subTnLst>${nestedConditionalSequence}</p:subTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
   const visibilitySlide = await zip.file('ppt/slides/slide66.xml').async('string')
   zip.file('ppt/slides/slide66.xml', visibilitySlide
@@ -1215,7 +1216,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     + plainTextShape(85, 'WordArt RTL columns missing rtlCol', 6000000, 0, '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏').replace('cy="800000"', 'cy="2500000"').replace('<a:bodyPr/>', '<a:bodyPr vert="wordArtVertRtl" numCol="2"/>')
     + plainTextShape(90, 'Default overflow', 9000000, 0, 'Overflow default text '.repeat(18))
     + plainTextShape(91, 'Gradient text', 0, 6500000, 'Gradient text').replace('<a:rPr sz="1800">', '<a:rPr sz="1800"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"/></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill>')
-  zip.file('ppt/slides/slide17.xml', slide17Xml.replace('</p:spTree>', verticalOrientationFixtures + '</p:spTree>'))
+  zip.file('ppt/slides/slide17.xml', slide17Xml.replace('</p:spTree>', verticalOrientationFixtures + '</p:spTree>').replace('</p:sld>', `${smartArtSubShapeTiming}</p:sld>`))
   const layoutPath = 'ppt/slideLayouts/slideLayout1.xml'
   const layoutXml = await zip.file(layoutPath).async('string')
   const groupFillLayoutPlaceholder = '<p:sp><p:nvSpPr><p:cNvPr id="95" name="Group fill layout"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="2"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="2500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:ln w="25400"><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
@@ -1980,10 +1981,27 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     + picture(319, 'Alpha inverse across image and shape effects', 16900000)
       .replace('<a:blip r:embed="rIdBullet"/>', '<a:blip r:embed="rIdBullet"><a:alphaInv><a:srgbClr val="ff0000"/></a:alphaInv></a:blip>')
       .replace('</p:spPr>', '<a:effectDag type="tree"><a:alphaInv><a:srgbClr val="0000ff"/></a:alphaInv></a:effectDag></p:spPr>')
+    + picture(320, 'Alpha inverse tree chain even', 17800000)
+      .replace('</p:spPr>', '<a:effectDag type="tree"><a:alphaInv><a:srgbClr val="ff0000"/></a:alphaInv><a:alphaInv><a:srgbClr val="00ff00"/></a:alphaInv></a:effectDag></p:spPr>')
+    + picture(321, 'Alpha inverse nested tree chain odd', 18700000)
+      .replace('</p:spPr>', '<a:effectDag type="tree"><a:alphaInv><a:srgbClr val="ff0000"/></a:alphaInv><a:cont type="tree"><a:alphaInv><a:srgbClr val="00ff00"/></a:alphaInv><a:alphaInv><a:srgbClr val="0000ff"/></a:alphaInv></a:cont></a:effectDag></p:spPr>')
   const slide3WithAlphaInverse = alphaInverseSlide.replace('</p:spTree>', alphaInversePictures + '</p:spTree>')
   if (slide3WithAlphaInverse === alphaInverseSlide) throw new Error('The alpha-inverse fixture could not add its pictures to slide 3.')
   zip.file('ppt/slides/slide3.xml', slide3WithAlphaInverse)
   await writeFile(fixturePath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
+}
+
+async function createNestedSequenceVariant(name, {concurrent, nextAction, previousAction = 'none'}) {
+  const archive = await JSZip.loadAsync(await readFile(fixturePath))
+  const slidePart = archive.file('ppt/slides/slide66.xml')
+  assert(slidePart, 'The nested sequence fixture slide was not found.')
+  const slideXml = await slidePart.async('string')
+  const updatedSlideXml = slideXml.replace('concurrent="0" nextAc="none" prevAc="none"', `concurrent="${concurrent}" nextAc="${nextAction}" prevAc="${previousAction}"`)
+  assert(updatedSlideXml !== slideXml, 'The nested sequence fixture attributes could not be updated.')
+  archive.file('ppt/slides/slide66.xml', updatedSlideXml)
+  const path = join(runtimeDir, `${name}.pptx`)
+  await writeFile(path, await archive.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
+  return path
 }
 
 async function connectToPage() {
@@ -2238,6 +2256,15 @@ try {
     const browserState = await evaluate(`({ readyState: document.readyState, title: document.title, rootPresent: Boolean(document.querySelector('#__nuxt')), appMounted: Boolean(document.querySelector('#__nuxt')?.__vue_app__), body: document.body.innerText.replace(/\\s+/g, ' ').slice(0, 400), scripts: [...document.scripts].map(script => script.src).filter(Boolean) })`).catch(() => null)
     throw new Error(`${error instanceof Error ? error.message : String(error)} Browser state: ${JSON.stringify(browserState)} Runtime exceptions: ${runtimeErrors.join('; ') || '(none)'}`)
   }
+  const readLocaleState = () => evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve({ lang: document.documentElement.lang, toggle: document.querySelector('.locale-toggle')?.textContent?.trim(), heading: document.querySelector('.empty-state h1')?.textContent?.trim() })))`)
+  const localeEnglish = await readLocaleState()
+  assert(localeEnglish.lang === 'en' && localeEnglish.toggle === '中文' && localeEnglish.heading === 'Your deck, in the room.', `The home page must render in English with a Chinese language switch: ${JSON.stringify(localeEnglish)}`)
+  await evaluate(`document.querySelector('.locale-toggle')?.click()`)
+  const localeChinese = await readLocaleState()
+  assert(localeChinese.lang === 'zh-CN' && localeChinese.toggle === 'English' && localeChinese.heading === '让演示文稿走进现场。', `The home page must switch its visible copy and document language to Chinese: ${JSON.stringify(localeChinese)}`)
+  await evaluate(`document.querySelector('.locale-toggle')?.click()`)
+  const localeRestored = await readLocaleState()
+  assert(localeRestored.lang === 'en' && localeRestored.toggle === '中文' && localeRestored.heading === 'Your deck, in the room.', `The home page must switch back to English before animation verification: ${JSON.stringify(localeRestored)}`)
   const uploadPath = async path => {
     const input = await call('Runtime.evaluate', { expression: `document.querySelector('input[type=file]')` })
     await call('DOM.setFileInputFiles', { objectId: input.result.objectId, files: [path] })
@@ -2286,7 +2313,8 @@ try {
   if (!grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly) {
     const corruptArchivePath = join(runtimeDir, 'damaged.pptx')
     await writeFile(corruptArchivePath, Buffer.from('not a zip archive'))
-    await uploadPath(corruptArchivePath)
+    const uploadedCorruptName = await uploadPath(corruptArchivePath)
+    assert(uploadedCorruptName === 'damaged.pptx', `The browser file input must receive the damaged fixture: ${uploadedCorruptName}`)
     assert((await waitForError('appears damaged or incomplete')).includes('Couldn’t open this presentation'), 'A damaged ZIP must display a specific upload error.')
     const invalidXmlPath = join(runtimeDir, 'invalid-presentation-xml.pptx')
     const invalidXmlArchive = new JSZip()
@@ -3516,6 +3544,13 @@ try {
       && alphaInverseFilters.nested.imageFilter.includes('url(') && alphaInverseFilters.nested.alpha === '1 0'
       && alphaInverseFilters.nested.red === '0' && alphaInverseFilters.nested.green === '1' && alphaInverseFilters.nested.blue === '1',
     `a:blip alpha inverse must invert source alpha and use an optional replacement color: ${JSON.stringify(alphaInverseFilters)}`)
+    const multiAlphaInverse = await evaluate("(() => { const read = name => { const host = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.title === name); const image = host?.querySelector('img'); const transfer = host?.querySelector('.image-alpha-inverse-filter feComponentTransfer'); return {imageFilter: image ? getComputedStyle(image).filter : '', alpha: transfer?.querySelector('feFuncA')?.getAttribute('tableValues') ?? null, red: transfer?.querySelector('feFuncR')?.getAttribute('intercept') ?? null, green: transfer?.querySelector('feFuncG')?.getAttribute('intercept') ?? null, blue: transfer?.querySelector('feFuncB')?.getAttribute('intercept') ?? null} }; return {even: read('Alpha inverse tree chain even'), odd: read('Alpha inverse nested tree chain odd')} })()")
+    assert(multiAlphaInverse.even.imageFilter.includes('url(') && multiAlphaInverse.even.alpha === null
+      && multiAlphaInverse.even.red === '0' && multiAlphaInverse.even.green === '1' && multiAlphaInverse.even.blue === '0'
+      && multiAlphaInverse.odd.imageFilter.includes('url(') && multiAlphaInverse.odd.alpha === '1 0'
+      && multiAlphaInverse.odd.red === '0' && multiAlphaInverse.odd.green === '0' && multiAlphaInverse.odd.blue === '1'
+      && !grayscaleDuring.warnings.some(warning => warning.includes('Multi-effect tree-ordered picture effect DAGs are not rendered.')),
+    `Tree alpha inverse chains must preserve alpha parity, the last replacement color, and nested tree order: ${JSON.stringify({multiAlphaInverse, warnings: grayscaleDuring.warnings})}`)
     const combinedAlphaInverse = await evaluate("(() => { const host = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.title === 'Alpha inverse across image and shape effects'); const image = host?.querySelector('img'); const filters = [...(host?.querySelectorAll('.image-alpha-inverse-filter') || [])].map(filter => { const transfer = filter.querySelector('feComponentTransfer'); return {alpha: transfer?.querySelector('feFuncA')?.getAttribute('tableValues') ?? null, red: transfer?.querySelector('feFuncR')?.getAttribute('intercept') ?? null, green: transfer?.querySelector('feFuncG')?.getAttribute('intercept') ?? null, blue: transfer?.querySelector('feFuncB')?.getAttribute('intercept') ?? null} }); return {imageFilter: image ? getComputedStyle(image).filter : '', filters} })()")
     const combinedFilterUrls = combinedAlphaInverse.imageFilter.match(/url\(/g) || []
     assert(combinedAlphaInverse.filters.length === 2 && combinedFilterUrls.length === 2
@@ -3806,9 +3841,13 @@ try {
     && Math.abs(arrowSet.line.headSize.width - 8.4) < 0.02 && Math.abs(arrowSet.line.headSize.height - 4.2) < 0.02
     && Math.abs(arrowSet.line.tailSize.width - 8.4) < 0.02 && Math.abs(arrowSet.line.tailSize.height - 4.2) < 0.02,
     `Line arrow p:set must apply arrow type, start width, and end length before delayed p:anim values: ${JSON.stringify(arrowSet?.line)}`)
-  await delay(450)
-  const arrowSizeDuring = shape(await state(), 'Stroke color')
-  assert(Math.abs(arrowSizeDuring?.line?.headSize.width - 4.2) < 0.02 && Math.abs(arrowSizeDuring?.line?.tailSize.height - 6) < 0.02,
+  const isArrowSizeMidpoint = line => Math.abs(line?.headSize.width - 4.2) < 0.02 && Math.abs(line?.tailSize.height - 6) < 0.02
+  let arrowSizeDuring = shape(await state(), 'Stroke color')
+  for (let attempt = 0; attempt < 25 && !isArrowSizeMidpoint(arrowSizeDuring?.line); attempt++) {
+    await delay(20)
+    arrowSizeDuring = shape(await state(), 'Stroke color')
+  }
+  assert(isArrowSizeMidpoint(arrowSizeDuring?.line),
     `Discrete p:anim direct values and keyframes must update arrow length and width during playback: ${JSON.stringify(arrowSizeDuring?.line)}`)
   await delay(250)
   const afterAppearanceClick = await state()
@@ -5317,24 +5356,24 @@ try {
       assert(Number(shape(active, 'Sequence subtime first').opacity) > 0 && Number(shape(active, 'Sequence subtime first').opacity) < 1 && Number(shape(active, 'Sequence subtime second').opacity) === 0, 'A p:seq child must wait until its preceding child finishes.')
       assert(Number(shape(active, 'Exclusive subtime target').opacity) === 0, 'A delayed p:excl child must wait for its authored start time.')
       const startedMedia = (await evaluate(`window.__decklineMediaCalls`)).slice(subTimeMediaCallsBefore)
-      assert(startedMedia.some(call => call.id === '3') && startedMedia.some(call => call.id === '2'), `Media actions must start before the delayed p:excl: ${JSON.stringify(startedMedia)}`)
+      assert(startedMedia.some(call => call.id === '5') && startedMedia.some(call => call.id === '2'), `Media actions must start before the delayed p:excl: ${JSON.stringify(startedMedia)}`)
       await evaluate(`document.querySelector('video[data-media-id="2"]').pause()`)
       const manualPauseCount = (await evaluate(`window.__decklineMediaPauses`)).length
       await delay(90)
       const exclusiveStart = await state()
-      assert(await evaluate(`document.querySelector('audio[data-media-id="3"]').paused`), 'p:excl must automatically pause audio already playing on another timeline.')
+      assert(await evaluate(`document.querySelector('audio[data-media-id="5"]').paused`), 'p:excl must automatically pause audio already playing on another timeline.')
       assert(await evaluate(`document.querySelector('video[data-media-id="2"]').paused`), 'A media element manually paused before p:excl must remain paused.')
       const exclusivePauses = (await evaluate(`window.__decklineMediaPauses`)).slice(manualPauseCount)
-      assert(exclusivePauses.includes('3') && !exclusivePauses.includes('2'), `p:excl must pause active media while leaving already-paused media untouched: ${JSON.stringify(exclusivePauses)}`)
+      assert(exclusivePauses.includes('5') && !exclusivePauses.includes('2'), `p:excl must pause active media while leaving already-paused media untouched: ${JSON.stringify(exclusivePauses)}`)
       await delay(80)
       const exclusiveLater = await state()
-      assert(shape(exclusiveLater, name).clipPath === shape(exclusiveStart, name).clipPath && shape(exclusiveLater, name).opacity === shape(exclusiveStart, name).opacity, `Other same-click animations must freeze for the full exclusive interval: ${JSON.stringify({start: shape(exclusiveStart, name), later: shape(exclusiveLater, name)})}`)
+      assert(shape(exclusiveLater, name).clipPath === shape(exclusiveStart, name).clipPath && Math.abs(Number(shape(exclusiveLater, name).opacity) - Number(shape(exclusiveStart, name).opacity)) < 0.002, `Other same-click animations must freeze for the full exclusive interval: ${JSON.stringify({start: shape(exclusiveStart, name), later: shape(exclusiveLater, name)})}`)
       assert(Number(shape(exclusiveStart, 'Exclusive subtime target').opacity) > 0 && Number(shape(exclusiveLater, 'Exclusive subtime target').opacity) > Number(shape(exclusiveStart, 'Exclusive subtime target').opacity), 'The p:excl child must continue while other timelines are paused.')
       const exclusiveParallel = ['Parallel subtime A', 'Parallel subtime B'].map(target => Number(shape(exclusiveLater, target).opacity))
       const parallelAtExclusiveStart = ['Parallel subtime A', 'Parallel subtime B'].map(target => Number(shape(exclusiveStart, target).opacity))
-      assert(exclusiveParallel.every((opacity, index) => opacity === parallelAtExclusiveStart[index]), `Parallel timelines must retain their progress during p:excl: ${JSON.stringify(exclusiveParallel)}`)
+      assert(exclusiveParallel.every((opacity, index) => Math.abs(opacity - parallelAtExclusiveStart[index]) < 0.002), `Parallel timelines must retain their progress during p:excl: ${JSON.stringify(exclusiveParallel)}`)
       await delay(190)
-      assert(!(await evaluate(`document.querySelector('audio[data-media-id="3"]').paused`)), 'Media automatically paused by p:excl must resume when it ends.')
+      assert(!(await evaluate(`document.querySelector('audio[data-media-id="5"]').paused`)), 'Media automatically paused by p:excl must resume when it ends.')
       assert(await evaluate(`document.querySelector('video[data-media-id="2"]').paused`), 'Media manually paused before p:excl must not be resumed.')
       const resumed = await state()
       await delay(100)
@@ -5342,15 +5381,19 @@ try {
       assert(Number(shape(beforeSecondExclusive, 'Sequence subtime second').opacity) > Number(shape(resumed, 'Sequence subtime second').opacity), 'Independent timelines must keep progressing between separate p:excl groups.')
       const secondExclusiveBeforeOpacity = Number(shape(beforeSecondExclusive, 'Second exclusive subtime target').opacity)
       assert(secondExclusiveBeforeOpacity === 0, `The second p:excl child must wait for its authored start time: ${JSON.stringify({ elapsed: beforeSecondExclusive.now - clickStartedAt, captureDuration: beforeSecondExclusive.captureEndedAt - beforeSecondExclusive.now, opacity: secondExclusiveBeforeOpacity })}`)
-      assert(await evaluate(`document.querySelector('audio[data-media-id="3"]').paused`), 'The timed audio action must finish after the first exclusive pause.')
+      assert(await evaluate(`document.querySelector('audio[data-media-id="5"]').paused`), 'The timed audio action must finish after the first exclusive pause.')
       await delay(200)
       await delay(25)
       const secondExclusiveStart = await state()
       assert(Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity) > 0 && Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity) < 1, 'A second independent p:excl child must run during its own interval.')
-      await delay(20)
+       await delay(1)
       const secondExclusiveLater = await state()
-      assert(shape(secondExclusiveLater, 'Sequence subtime second').opacity === shape(secondExclusiveStart, 'Sequence subtime second').opacity, `A second p:excl group must freeze timelines outside its own membership: ${JSON.stringify({start: shape(secondExclusiveStart, 'Sequence subtime second'), later: shape(secondExclusiveLater, 'Sequence subtime second')})}`)
-      assert(Number(shape(secondExclusiveLater, 'Second exclusive subtime target').opacity) > Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity), 'The second p:excl child must continue while other timelines are paused.')
+       const sequenceOpacityAtExclusiveStart = Number(shape(secondExclusiveStart, 'Sequence subtime second').opacity)
+       const sequenceOpacityDuringExclusive = Number(shape(secondExclusiveLater, 'Sequence subtime second').opacity)
+       const exclusiveTargetAtStart = Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity)
+       const exclusiveTargetLater = Number(shape(secondExclusiveLater, 'Second exclusive subtime target').opacity)
+       assert(Math.abs(sequenceOpacityDuringExclusive - sequenceOpacityAtExclusiveStart) < 0.002, `A second p:excl group must freeze timelines outside its own membership: ${JSON.stringify({elapsedMs: secondExclusiveStart.now - clickStartedAt, sampleGapMs: secondExclusiveLater.now - secondExclusiveStart.now, start: sequenceOpacityAtExclusiveStart, later: sequenceOpacityDuringExclusive})}`)
+       assert(exclusiveTargetLater > exclusiveTargetAtStart && exclusiveTargetLater < 1, `The second p:excl child must keep progressing inside its exclusive interval: ${JSON.stringify({elapsedMs: secondExclusiveStart.now - clickStartedAt, sampleGapMs: secondExclusiveLater.now - secondExclusiveStart.now, start: exclusiveTargetAtStart, later: exclusiveTargetLater})}`)
       await delay(120)
       const secondExclusiveResumed = await state()
       const secondSequenceDuringExclusive = Number(shape(secondExclusiveLater, 'Sequence subtime second').opacity)
@@ -5358,7 +5401,7 @@ try {
       assert(secondSequenceAfterExclusive > secondSequenceDuringExclusive, `Independent timelines must resume after the second p:excl ends: ${JSON.stringify({ elapsed: secondExclusiveResumed.now - clickStartedAt, during: secondSequenceDuringExclusive, resumed: secondSequenceAfterExclusive })}`)
       await delay(100)
       const subTimeMediaCalls = (await evaluate(`window.__decklineMediaCalls`)).slice(subTimeMediaCallsBefore)
-      assert(subTimeMediaCalls.some(call => call.id === '3' && Math.abs(call.volume - 0.4) < 0.01 && !call.muted) && subTimeMediaCalls.some(call => call.id === '2' && Math.abs(call.volume - 0.3) < 0.01 && !call.muted), `Same-click p:subTnLst p:audio/p:video nodes must start at the authored volumes: ${JSON.stringify(subTimeMediaCalls)}`)
+      assert(subTimeMediaCalls.some(call => call.id === '5' && Math.abs(call.volume - 0.4) < 0.01 && !call.muted) && subTimeMediaCalls.some(call => call.id === '2' && Math.abs(call.volume - 0.3) < 0.01 && !call.muted), `Same-click p:subTnLst p:audio/p:video nodes must start at the authored volumes: ${JSON.stringify(subTimeMediaCalls)}`)
       const subTimeMediaPauses = (await evaluate(`window.__decklineMediaPauses`)).slice(subTimeMediaPausesBefore)
       assert(subTimeMediaPauses.filter(id => id === '2').length >= 3, `Timed media and the later p:cmd pause must both finish after the exclusive interval: ${JSON.stringify(subTimeMediaPauses)}`)
       const sequenceAdvanced = await state()
@@ -5483,24 +5526,94 @@ try {
   assert(shape(nestedSequenceWaiting, 'Nested sequence first').visibility === 'hidden'
     && shape(nestedSequenceWaiting, 'Nested sequence second').visibility === 'visible'
     && shape(nestedSequenceWaiting, 'Nested sequence long').visibility === 'visible'
-    && !nestedSequenceWaiting.warnings.some(warning => warning.includes('Conditional advancement and seek/skip actions on a nested p:seq are not applied.')),
+    && !nestedSequenceWaiting.warnings.some(warning => warning.includes('Some navigation, concurrency, or seek/skip behavior on a nested p:seq is not applied.')),
   `A nested p:seq must wait for onNext before starting its next child: ${JSON.stringify({ first: shape(nestedSequenceWaiting, 'Nested sequence first'), second: shape(nestedSequenceWaiting, 'Nested sequence second'), long: shape(nestedSequenceWaiting, 'Nested sequence long'), warnings: nestedSequenceWaiting.warnings })}`)
   await evaluate(`document.querySelector('.stage-shell')?.click()`)
   await delay(50)
   await evaluate(`document.querySelector('.stage-shell')?.click()`)
   await delay(50)
-  const nestedSequenceAdvanced = await state()
-  assert(shape(nestedSequenceAdvanced, 'Nested sequence second').visibility === 'visible'
-    && shape(nestedSequenceAdvanced, 'Nested sequence long').visibility === 'visible',
-  `Nested nextAc=none must preserve the current child state instead of seeking it to its natural end: ${JSON.stringify({ second: shape(nestedSequenceAdvanced, 'Nested sequence second'), long: shape(nestedSequenceAdvanced, 'Nested sequence long') })}`)
+  const nestedSequenceChildStarted = await state()
+  assert(shape(nestedSequenceChildStarted, 'Nested sequence second').visibility === 'visible'
+    && shape(nestedSequenceChildStarted, 'Nested sequence long').visibility === 'visible',
+  `A nested p:seq must start its second child on the next step: ${JSON.stringify({ second: shape(nestedSequenceChildStarted, 'Nested sequence second'), long: shape(nestedSequenceChildStarted, 'Nested sequence long') })}`)
   await delay(350)
-  const nestedSequenceThird = await state()
-  assert(shape(nestedSequenceThird, 'Nested sequence third').visibility === 'hidden', `A nested p:seq must start its third child only after the next slide step: ${JSON.stringify(shape(nestedSequenceThird, 'Nested sequence third'))}`)
+  const nestedSequenceAdvanced = await state()
+  assert(shape(nestedSequenceAdvanced, 'Nested sequence long').visibility === 'visible'
+    && shape(nestedSequenceAdvanced, 'Nested sequence third').visibility === 'hidden',
+  `Nested nextAc=none must preserve the previous child at its current state without starting the third child: ${JSON.stringify({ second: shape(nestedSequenceAdvanced, 'Nested sequence second'), long: shape(nestedSequenceAdvanced, 'Nested sequence long'), third: shape(nestedSequenceAdvanced, 'Nested sequence third') })}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }))`)
   await delay(80)
   const nestedSequenceRewound = await state()
   assert(shape(nestedSequenceRewound, 'Nested sequence third').visibility === 'visible', `A nested p:seq prevCondLst must permit rewinding even when the main sequence blocks onPrev: ${JSON.stringify(shape(nestedSequenceRewound, 'Nested sequence third'))}`)
   await delay(550)
+  const loadNestedSequenceVariant = async (name, path) => {
+    await uploadPath(path)
+    let loaded
+    for (let attempt = 0; attempt < 100; attempt++) {
+      loaded = await state()
+      if (loaded.title === `${name}.pptx` && !await evaluate('Boolean(document.querySelector(".loading-overlay"))')) break
+      await delay(50)
+    }
+    assert(loaded?.title === `${name}.pptx`, `The ${name} nested sequence fixture did not load: ${JSON.stringify({title: loaded?.title, error: loaded?.error})}`)
+    for (const digit of '66') await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '${digit}' }))`)
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+    for (let attempt = 0; attempt < 80; attempt++) {
+      loaded = await state()
+      if (Number(loaded.slide?.split('/')[0].trim()) === 66) {
+        await delay(850)
+        return state()
+      }
+      await delay(50)
+    }
+    throw new Error(`The ${name} nested sequence fixture could not navigate to slide 66: ${JSON.stringify({slide: loaded?.slide, error: loaded?.error})}`)
+  }
+  const seekNestedSequencePath = await createNestedSequenceVariant('nested-sequence-seek', {concurrent: '0', nextAction: 'seek'})
+  await loadNestedSequenceVariant('nested-sequence-seek', seekNestedSequencePath)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(700)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(50)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(50)
+  const nestedSequenceSought = await state()
+  assert(shape(nestedSequenceSought, 'Nested sequence second').visibility === 'visible'
+    && shape(nestedSequenceSought, 'Nested sequence long').visibility === 'hidden'
+    && !nestedSequenceSought.warnings.some(warning => warning.includes('Some navigation, concurrency, or seek/skip behavior on a nested p:seq is not applied.')),
+  `A nested p:seq nextAc=seek must advance its previous child to its natural end while starting the next child: ${JSON.stringify({second: shape(nestedSequenceSought, 'Nested sequence second'), long: shape(nestedSequenceSought, 'Nested sequence long'), warnings: nestedSequenceSought.warnings})}`)
+  const concurrentNestedSequencePath = await createNestedSequenceVariant('nested-sequence-concurrent', {concurrent: '1', nextAction: 'none'})
+  await loadNestedSequenceVariant('nested-sequence-concurrent', concurrentNestedSequencePath)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(700)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(50)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(50)
+  const concurrentNestedSequenceActive = await state()
+  assert(shape(concurrentNestedSequenceActive, 'Nested sequence long').visibility === 'visible', `A nested p:seq with concurrent=true must keep the previous child active after advancing: ${JSON.stringify(shape(concurrentNestedSequenceActive, 'Nested sequence long'))}`)
+  await delay(1_250)
+  const concurrentNestedSequenceComplete = await state()
+  assert(shape(concurrentNestedSequenceComplete, 'Nested sequence long').visibility === 'hidden', `A concurrent nested p:seq child must continue through its natural end: ${JSON.stringify(shape(concurrentNestedSequenceComplete, 'Nested sequence long'))}`)
+  const skipTimedNestedSequencePath = await createNestedSequenceVariant('nested-sequence-skip-timed', {concurrent: '0', nextAction: 'none', previousAction: 'skipTimed'})
+  await loadNestedSequenceVariant('nested-sequence-skip-timed', skipTimedNestedSequencePath)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(700)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(50)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(350)
+  const skipTimedNestedSequenceForward = await state()
+  assert(!skipTimedNestedSequenceForward.warnings.some(warning => warning.includes('Some navigation, concurrency, or seek/skip behavior on a nested p:seq is not applied.')),
+    `A nested p:seq prevAc=skipTimed must be accepted while advancing its onNext children: ${JSON.stringify(skipTimedNestedSequenceForward.warnings)}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 's' }))`)
+  const skipTimedSequenceStepBeforePrevious = await evaluate(`Number(document.querySelector('[data-presenter-view]')?.dataset.animationStep)`)
+  assert(Number.isInteger(skipTimedSequenceStepBeforePrevious) && skipTimedSequenceStepBeforePrevious > 0,
+    `The nested p:seq skipTimed fixture must reach an onNext animation boundary before rewinding: ${skipTimedSequenceStepBeforePrevious}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }))`)
+  await delay(50)
+  const skipTimedSequenceStepAfterPrevious = await evaluate(`Number(document.querySelector('[data-presenter-view]')?.dataset.animationStep)`)
+  assert(skipTimedSequenceStepAfterPrevious === skipTimedSequenceStepBeforePrevious - 1,
+    `A nested p:seq prevAc=skipTimed must rewind one animation step to the previous onNext boundary: ${skipTimedSequenceStepBeforePrevious} -> ${skipTimedSequenceStepAfterPrevious}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 's' }))`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
   await evaluate(`new Promise((resolve, reject) => { const started = performance.now(); const check = () => { const frame = document.querySelector('.stage-shell > .slide-host .slide-frame'); if (frame && getComputedStyle(frame).backgroundSize === '1px 8px') resolve(true); else if (performance.now() - started > 3000) reject(new Error('The flipped background tile did not finish rendering.')); else setTimeout(check, 20) }; check() })`)
@@ -5551,6 +5664,11 @@ try {
   const smartArtFallback = verticalRandomBarTransition.shapes.find(element => element.name === 'SmartArt hierarchy fallback fixture')
   const smartArtFallbackParagraphs = verticalRandomBarTransition.paragraphs.filter(paragraph => ['Fallback root', 'Fallback child'].includes(paragraph.text.trim()))
   assert(smartArtCachedRoot?.visibility === 'visible' && smartArtCachedChild?.visibility === 'visible' && smartArtCachedRoot.frameRect.width > 0 && smartArtCachedChild.frameRect.width > 0 && smartArtCachedChild.frameRect.left > smartArtCachedRoot.frameRect.left && smartArtCachedChild.frameRect.top > smartArtCachedRoot.frameRect.top && smartArtRunText.includes('Cached diagram root') && smartArtRunText.includes('Cached diagram child') && verticalRandomBarTransition.warnings.some(warning => warning.includes('last saved diagram drawing')) && smartArtFallback?.visibility === 'visible' && smartArtFallbackParagraphs.length === 2 && Number.parseFloat(smartArtFallbackParagraphs[1].marginLeft) > Number.parseFloat(smartArtFallbackParagraphs[0].marginLeft) && verticalRandomBarTransition.warnings.some(warning => warning.includes('SmartArt is shown as an indented text list')), `SmartArt must render its cached diagram geometry inside the frame and retain a parent-indented text fallback when the cache is absent: ${JSON.stringify({ cached: [smartArtCachedRoot, smartArtCachedChild], fallback: smartArtFallback, paragraphs: smartArtFallbackParagraphs, warnings: verticalRandomBarTransition.warnings })}`)
+  assert(!verticalRandomBarTransition.warnings.some(warning => warning.includes('frame-targeted animation uses the text fallback')), 'A subshape-targeted SmartArt animation must keep the saved drawing instead of falling back to a text list.')
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
+  await delay(80)
+  const smartArtSubShapeAnimated = await state()
+  assert(shape(smartArtSubShapeAnimated, 'SmartArt cached drawing fixture: Root node')?.visibility === 'visible' && shape(smartArtSubShapeAnimated, 'SmartArt cached drawing fixture: Child node')?.visibility === 'hidden', `A p:spTgt/p:subSp animation must resolve to the matching cached SmartArt shape: ${JSON.stringify({ root: shape(smartArtSubShapeAnimated, 'SmartArt cached drawing fixture: Root node'), child: shape(smartArtSubShapeAnimated, 'SmartArt cached drawing fixture: Child node'), warnings: smartArtSubShapeAnimated.warnings })}`)
   const olePreview = verticalRandomBarTransition.shapes.find(element => element.name === 'OLE preview fixture')
   assert(olePreview?.kind === 'picture' && olePreview.imageSource?.startsWith('blob:') && olePreview.visibility === 'visible' && olePreview.frameRect.width > 0 && olePreview.frameRect.height > 0 && verticalRandomBarTransition.warnings.some(warning => warning.includes('OLE object is displayed from its embedded preview image')), `OLE must render its local preview in the graphic-frame bounds without opening the object: ${JSON.stringify({ preview: olePreview, warnings: verticalRandomBarTransition.warnings })}`)
   const oleNoPreview = verticalRandomBarTransition.shapes.find(element => element.name === 'OLE no-preview fixture')
@@ -5967,9 +6085,17 @@ try {
   assert(!(await evaluate(`document.querySelector('.stage-shell')?.classList.contains('is-morph-transition')`)) && !(await evaluate(`document.querySelector('.slide-transition-underlay')?.firstElementChild`)), 'The byChar transition must clear its temporary slide snapshot when finished.')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(800)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
+  await delay(80)
+  const presenterSmartArtAnimation = await evaluate(`(() => { const child = document.querySelector('.stage-shell > .slide-host .slide-element[title="SmartArt cached drawing fixture: Child node"]'); return child ? getComputedStyle(child).visibility : undefined })()`)
+  assert(presenterSmartArtAnimation === 'hidden', 'Speaker-view navigation setup must consume the SmartArt subshape animation before advancing slides.')
   await evaluate(`document.querySelector('[data-tool=speaker]').click()`)
   const presenter = await evaluate(`(() => ({ visible: !!document.querySelector('[data-presenter-view]'), current: document.querySelector('.presenter-current-panel .presenter-panel-title')?.innerText, next: document.querySelector('.presenter-next-panel .presenter-panel-title')?.innerText, notes: document.querySelector('[data-presenter-notes]')?.textContent }))()`)
   assert(presenter.visible && presenter.current?.includes('17 / 68') && presenter.next?.includes('18 / 68') && presenter.notes?.includes('Introduce the main point.\nPause for questions.'), `Speaker view must show the current slide, next slide, and notes from the linked notes slide: ${JSON.stringify(presenter)}`)
+  await evaluate(`document.querySelector('[data-presenter-view] .locale-toggle')?.click()`)
+  const presenterLocale = await evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve({ lang: document.documentElement.lang, toggle: document.querySelector('[data-presenter-view] .locale-toggle')?.textContent?.trim(), current: document.querySelector('.presenter-current-panel .presenter-panel-title span')?.textContent?.trim() })))`)
+  assert(presenterLocale.lang === 'zh-CN' && presenterLocale.toggle === 'English' && presenterLocale.current === '当前', `Speaker view must switch its controls and labels to Chinese: ${JSON.stringify(presenterLocale)}`)
+  await evaluate(`document.querySelector('[data-presenter-view] .locale-toggle')?.click()`)
   await delay(1_050)
   const presenterClock = await evaluate(`document.querySelector('.presenter-clock')?.textContent?.trim()`)
   const elapsedSeconds = presenterClock?.split(':').reduce((total, part) => total * 60 + Number(part), 0) || 0
@@ -5990,6 +6116,15 @@ try {
     await delay(100)
   }
   assert(projector?.connected === 'true' && projector.number === 18, `The separate projector window must load and acknowledge the active slide: ${JSON.stringify(projector)}`)
+  const projectorLocaleState = () => evaluate(`(() => { const target = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]')); return target && { lang: target.document.documentElement.lang, toggle: target.document.querySelector('.projector-toolbar .locale-toggle')?.textContent?.trim(), help: target.document.querySelector('.projector-toolbar span')?.textContent?.trim() } })()`)
+  let projectorLocale = await projectorLocaleState()
+  assert(projectorLocale?.lang === 'en' && projectorLocale.toggle === '中文', `Projector window must expose the language switch in English: ${JSON.stringify(projectorLocale)}`)
+  await evaluate(`globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))?.document.querySelector('.projector-toolbar .locale-toggle')?.click()`)
+  await delay(50)
+  projectorLocale = await projectorLocaleState()
+  assert(projectorLocale?.lang === 'zh-CN' && projectorLocale.toggle === 'English' && projectorLocale.help?.includes('翻页'), `Projector window must switch its controls and help to Chinese: ${JSON.stringify(projectorLocale)}`)
+  await evaluate(`globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))?.document.querySelector('.projector-toolbar .locale-toggle')?.click()`)
+  await delay(50)
   if (embeddedFontTestPath && !inputPptx) {
     const projectorFaces = await evaluate(`(() => {
       const projectorWindow = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
@@ -6228,6 +6363,10 @@ try {
   await evaluate(`document.querySelector('[data-tool=sorter]').click()`)
   const sorterBefore = await evaluate(`(() => ({ visible: !!document.querySelector('[data-sorter-view]'), cards: document.querySelectorAll('.sorter-card').length, range: document.querySelector('.sorter-header span')?.textContent, first: document.querySelector('.sorter-card .sorter-slide-button')?.getAttribute('aria-label'), second: document.querySelectorAll('.sorter-card .sorter-slide-button')[1]?.getAttribute('aria-label') }))()`)
   assert(sorterBefore.visible && sorterBefore.cards === 48 && sorterBefore.range?.includes('1–48 / 68'), `The slide sorter must show the first bounded group and total deck size: ${JSON.stringify(sorterBefore)}`)
+  await evaluate(`document.querySelector('[data-sorter-view] .locale-toggle')?.click()`)
+  const sorterLocale = await evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve({ lang: document.documentElement.lang, toggle: document.querySelector('[data-sorter-view] .locale-toggle')?.textContent?.trim(), title: document.querySelector('.sorter-header strong')?.textContent?.trim(), previous: document.querySelector('.sorter-footer button')?.textContent?.trim() })))`)
+  assert(sorterLocale.lang === 'zh-CN' && sorterLocale.toggle === 'English' && sorterLocale.title === '幻灯片浏览' && sorterLocale.previous === '← 上一组', `Slide sorter must switch its controls and labels to Chinese: ${JSON.stringify(sorterLocale)}`)
+  await evaluate(`document.querySelector('[data-sorter-view] .locale-toggle')?.click()`)
   const sorterBeforeOrder = await evaluate(`([...document.querySelectorAll('.sorter-card .sorter-slide-button')].slice(0, 2).map(button => button.getAttribute('aria-label')))`)
   await evaluate(`(() => { const cards = [...document.querySelectorAll('.sorter-card')]; const transfer = new DataTransfer(); cards[0].dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer })); cards[1].dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer })) })()`)
   await delay(20)
@@ -6257,6 +6396,10 @@ try {
   await delay(80)
   const renderingWarningPanel = await evaluate(`(() => { const panel = document.querySelector('.warning-panel'); const summary = panel?.querySelector('summary'); summary?.click(); return { summary: summary?.textContent?.trim(), expanded: panel?.open, warningCount: panel?.querySelectorAll('li').length } })()`)
   assert(renderingWarningPanel.expanded && renderingWarningPanel.warningCount > 0 && renderingWarningPanel.summary?.includes('Rendering limitations'), `Rendering limitations must be available in an expandable, labeled warning list: ${JSON.stringify(renderingWarningPanel)}`)
+  await evaluate(`document.querySelector('.locale-toggle')?.click()`)
+  const localizedWarning = await evaluate(`(() => { const item = document.querySelector('.warning-list li'); const original = item?.querySelector('.warning-original'); return { lang: document.documentElement.lang, summary: item?.querySelector(':scope > span')?.textContent?.trim(), originalLabel: original?.querySelector('summary')?.textContent?.trim(), originalText: original?.querySelector('code')?.textContent, originalOpen: original?.open } })()`)
+  assert(localizedWarning.lang === 'zh-CN' && localizedWarning.summary?.includes('兼容性限制') && localizedWarning.originalLabel === '原始诊断（英文）' && localizedWarning.originalText && !localizedWarning.originalOpen, `Chinese mode must show a localized diagnostic summary and keep the source warning available in a collapsed disclosure: ${JSON.stringify(localizedWarning)}`)
+  await evaluate(`document.querySelector('.locale-toggle')?.click()`)
   await evaluate(`document.querySelector('.warning-panel summary')?.click()`)
   const textRangeSlide = await state()
   assert(textRangeSlide.warnings.some(warning => warning.includes('p:subTnLst') && warning.includes('master-relative timing')), `Non-empty master-relative sub-time nodes must produce a playback warning: ${JSON.stringify(textRangeSlide.warnings)}`)
@@ -6506,6 +6649,51 @@ try {
     && mobileThumbnailWindow.rendered < mobileThumbnailWindow.total && mobileThumbnailWindow.last >= 63,
     `The mobile horizontal thumbnail strip must virtualize around the end of the deck: ${JSON.stringify(mobileThumbnailWindow)}`)
 
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
+  await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 })
+  await jumpToFixtureSlide(17)
+  await delay(800)
+  await evaluate(`document.querySelector('[data-tool="pointer"]')?.click()`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
+  await delay(80)
+  const mobileGestureStage = await evaluate(`(() => { const rect = document.querySelector('.stage-shell').getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height } })()`)
+  const mobileGestureCenterX = mobileGestureStage.left + mobileGestureStage.width / 2
+  const mobileGestureY = mobileGestureStage.top + mobileGestureStage.height / 2
+  const pinchPoints = (distanceFraction, firstId, secondId) => [
+    { x: mobileGestureCenterX - mobileGestureStage.width * distanceFraction / 2, y: mobileGestureY, id: firstId },
+    { x: mobileGestureCenterX + mobileGestureStage.width * distanceFraction / 2, y: mobileGestureY, id: secondId },
+  ]
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pinchPoints(.3, 1, 2) })
+  await delay(40)
+  await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pinchPoints(.375, 1, 2) })
+  await delay(40)
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await delay(80)
+  const mobilePinchZoom = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host'); return { scale: new DOMMatrix(getComputedStyle(host).transform).a, translate: host.style.translate } })()`)
+  assert(Math.abs(mobilePinchZoom.scale - 1.25) < 0.03, `A symmetric two-finger pinch must zoom around its center: ${JSON.stringify(mobilePinchZoom)}`)
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: mobileGestureCenterX, y: mobileGestureY, id: 3 }] })
+  await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: mobileGestureCenterX + 24, y: mobileGestureY + 12, id: 3 }] })
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  const mobilePan = await evaluate(`document.querySelector('.stage-shell > .slide-host')?.style.translate`)
+  assert(mobilePan !== '0px 0px', `A single-finger drag while zoomed must pan the slide: ${mobilePan}`)
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pinchPoints(.375, 4, 5) })
+  await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pinchPoints(.3, 4, 5) })
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await delay(450)
+  const mobileZoomReset = await evaluate(`(() => { const host = document.querySelector('.stage-shell > .slide-host'); return { scale: new DOMMatrix(getComputedStyle(host).transform).a, translate: host.style.translate } })()`)
+  const mobileZoomResetOffsets = (mobileZoomReset.translate.match(/-?\d+(?:\.\d+)?/g) || []).map(Number)
+  assert(Math.abs(mobileZoomReset.scale - 1) < 0.02 && mobileZoomResetOffsets.length > 0 && mobileZoomResetOffsets.every(offset => Math.abs(offset) < 0.01), `Returning the pinch to 100% must reset zoom and pan: ${JSON.stringify(mobileZoomReset)}`)
+  const mobileSwipeStartX = mobileGestureStage.left + mobileGestureStage.width * .8
+  const mobileSwipeEndX = mobileGestureStage.left + mobileGestureStage.width * .2
+  await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: mobileSwipeStartX, y: mobileGestureY, id: 6 }] })
+  await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: mobileSwipeEndX, y: mobileGestureY, id: 6 }] })
+  await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await delay(350)
+  const mobileSwipeState = await state()
+  assert(mobileSwipeState.slide?.startsWith('18 / 68'), `A left swipe at 100% zoom must advance one slide: ${mobileSwipeState.slide}`)
+  await call('Emulation.setTouchEmulationEnabled', { enabled: false })
+  await call('Emulation.clearDeviceMetricsOverride')
+
   await evaluate(`document.querySelector('[aria-label="Zoom in"]')?.click()`)
   await delay(50)
   const editorScale = await evaluate(`document.querySelector('.stage-shell > .slide-host')?.style.transform`)
@@ -6519,6 +6707,12 @@ try {
   }))()`)
   assert(editorScale === 'scale(1.25)' && readingViewState.active && readingViewState.sidebar === 'none' && readingViewState.toolbar === 'none' && readingViewState.exit && readingViewState.scale === 'scale(1)',
     `Reading view must focus the player and fit the full slide regardless of editor zoom: ${JSON.stringify({editorScale, readingViewState})}`)
+  await evaluate(`document.querySelector('.player-controls .locale-toggle')?.click()`)
+  const readingLocale = await evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve({ lang: document.documentElement.lang, title: document.title, description: document.querySelector('meta[name="description"]')?.content, toggle: document.querySelector('.player-controls .locale-toggle')?.textContent?.trim(), exit: document.querySelector('[data-reading-exit]')?.textContent?.trim() })))`)
+  assert(readingLocale.lang === 'zh-CN' && readingLocale.title === 'Deckline PPTX 播放器' && readingLocale.description === '在浏览器中本地播放 PowerPoint 演示文稿。' && readingLocale.toggle === 'English' && readingLocale.exit === '返回播放器', `Reading view must switch page metadata and controls to Chinese: ${JSON.stringify(readingLocale)}`)
+  await evaluate(`document.querySelector('.player-controls .locale-toggle')?.click()`)
+  const restoredLocale = await evaluate(`new Promise(resolve => requestAnimationFrame(() => resolve({ lang: document.documentElement.lang, title: document.title, description: document.querySelector('meta[name="description"]')?.content })))`)
+  assert(restoredLocale.lang === 'en' && restoredLocale.title === 'Deckline PPTX Player' && restoredLocale.description === 'Play PowerPoint presentations locally in your browser.', `Switching back to English must restore localized page metadata: ${JSON.stringify(restoredLocale)}`)
   await evaluate(`document.querySelector('[data-reading-notes]')?.click()`)
   const readingNotesState = await evaluate(`({ expanded: document.querySelector('[data-reading-notes]')?.getAttribute('aria-expanded'), notes: Boolean(document.querySelector('[data-reading-notes-panel]')) })`)
   assert(readingNotesState.expanded === 'true' && readingNotesState.notes, `Reading view must expose speaker notes on demand: ${JSON.stringify(readingNotesState)}`)

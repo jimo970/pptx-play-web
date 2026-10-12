@@ -5,7 +5,7 @@ import { disposePptxDocument, parsePptxInWorker, stopPptxParserWorker } from '~/
 import { presenterChannelName, type PresenterMessage } from '~/utils/presenter-channel'
 import { useSlideTransition } from '~/composables/useSlideTransition'
 
-const { locale, t, toggleLocale, translateError } = useLocale()
+const { locale, t, toggleLocale, translateError, translateWarning } = useLocale()
 
 const fileInput = ref<HTMLInputElement | null>(null)
 let fileLoadGeneration = 0
@@ -1208,9 +1208,18 @@ onBeforeUnmount(() => {
           </div>
           <details v-if="deck?.warnings.length" class="warning-panel" @click.stop>
             <summary>{{ t('renderingLimitations', { count: deck.warnings.length }) }}</summary>
-            <p v-if="locale === 'zh'" class="warning-detail-note">{{ t('warningDetailsEnglish') }}</p>
+            <p v-if="locale === 'zh'" class="warning-detail-note">{{ t('warningDetails') }}</p>
             <ul class="warning-list">
-              <li v-for="warning in deck.warnings" :key="warning">{{ warning }}</li>
+              <li v-for="warning in deck.warnings" :key="warning">
+                <template v-if="locale === 'zh'">
+                  <span>{{ translateWarning(warning) }}</span>
+                  <details class="warning-original">
+                    <summary>{{ t('warningOriginal') }}</summary>
+                    <code>{{ warning }}</code>
+                  </details>
+                </template>
+                <template v-else>{{ warning }}</template>
+              </li>
             </ul>
           </details>
           <div v-if="deck" class="progress-track" aria-hidden="true"><div class="progress-value" :style="{ width: `${progress}%` }" /></div>

@@ -1859,10 +1859,33 @@ const mediaSlideCounts = computed(() => {
   return counts
 })
 
+// shortcut: parsed slide targets stay immutable, invalidate on slide/visibility changes; add an animation revision if editing is introduced.
+const elementMemoMetadata = new WeakMap<PptxElement, {
+  slide: PptxSlide
+  slideId: string
+  showAnimations: boolean
+  animations: RenderAnimation[] | undefined
+  hasStepAnimations: boolean
+  layoutKey: string
+}>()
+
 function elementMemoDependencies(element: PptxElement) {
-  const animations = animationsByTarget.value.get(element.id)
-  const hasStepAnimations = animations?.some(action => !action.automatic && action.triggerSequence === undefined)
-  const layoutKey = `${props.slide.id}:${element.id}`
+  const slide = props.slide
+  const slideId = slide.id
+  let metadata = elementMemoMetadata.get(element)
+  if (!metadata || metadata.slide !== slide || metadata.slideId !== slideId || metadata.showAnimations !== props.showAnimations) {
+    const animations = animationsByTarget.value.get(element.id)
+    metadata = {
+      slide,
+      slideId,
+      showAnimations: props.showAnimations,
+      animations,
+      hasStepAnimations: Boolean(animations?.some(action => !action.automatic && action.triggerSequence === undefined)),
+      layoutKey: `${slideId}:${element.id}`,
+    }
+    elementMemoMetadata.set(element, metadata)
+  }
+  const {animations, hasStepAnimations, layoutKey} = metadata
   const step = hasStepAnimations ? props.animationStep : null
   const animationTime = animations?.length ? animationClock.value : null
   const fitted = autoFitDimensions.get(layoutKey)
@@ -1874,7 +1897,7 @@ function elementMemoDependencies(element: PptxElement) {
   const blockedPlayback = blockedMediaPlaybackIds.value.includes(element.id)
   return [
     props.slide,
-    props.slide.id,
+    slideId,
     element,
     props.width,
     props.height,
@@ -5507,13 +5530,13 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
       <div v-else-if="(element.kind === 'picture' || element.kind === 'video') && element.imageUrl" class="image-viewport" aria-hidden="true">
         <svg v-if="element.kind === 'picture' && (element.imageAlphaInverse !== undefined || element.imageEffectDagAlphaInverse !== undefined)" class="image-tone-defs image-alpha-inverse-defs" aria-hidden="true" width="0" height="0">
           <defs>
-            <template v-for="(alphaInverse, index) in [element.imageAlphaInverse, element.imageEffectDagAlphaInverse]" :key="index">
+            <template v-for="(alphaInverse, index) in [element.imageAlphaInverse === undefined ? undefined : {invertAlpha: true, color: element.imageAlphaInverse ?? undefined}, element.imageEffectDagAlphaInverse]" :key="index">
               <filter v-if="alphaInverse !== undefined" :id="imageAlphaInverseFilterId(element, index === 1)" class="image-alpha-inverse-filter" color-interpolation-filters="sRGB">
                 <feComponentTransfer>
-                  <feFuncR v-if="alphaInverse" type="linear" slope="0" :intercept="alphaInverse[0]" />
-                  <feFuncG v-if="alphaInverse" type="linear" slope="0" :intercept="alphaInverse[1]" />
-                  <feFuncB v-if="alphaInverse" type="linear" slope="0" :intercept="alphaInverse[2]" />
-                  <feFuncA type="table" tableValues="1 0" />
+                  <feFuncR v-if="alphaInverse.color" type="linear" slope="0" :intercept="alphaInverse.color[0]" />
+                  <feFuncG v-if="alphaInverse.color" type="linear" slope="0" :intercept="alphaInverse.color[1]" />
+                  <feFuncB v-if="alphaInverse.color" type="linear" slope="0" :intercept="alphaInverse.color[2]" />
+                  <feFuncA v-if="alphaInverse.invertAlpha" type="table" tableValues="1 0" />
                 </feComponentTransfer>
               </filter>
             </template>

@@ -3,6 +3,7 @@ export type UiLocale = 'en' | 'zh'
 const en = {
   brandLabel: 'PPTX PLAYER',
   brandAria: 'Deckline PPTX Player',
+  metaDescription: 'Play PowerPoint presentations locally in your browser.',
   localSession: 'LOCAL SESSION · FILES STAY ON DEVICE',
   switchToChinese: '中文',
   switchToEnglish: 'English',
@@ -124,7 +125,16 @@ const en = {
   tiledBackgroundCropEncodeFailed: 'The browser could not encode the tiled background crop; the original image is used.',
   tiledBackgroundFlipEncodeFailed: 'The browser could not encode the tiled background flip; the unflipped image is used.',
   textEllipsisUnsupported: 'Vertical text ellipsis is clipped because this browser does not support CSS line clamping.',
-  warningDetailsEnglish: 'Detailed compatibility diagnostics are currently available in English.',
+  warningDetails: 'Diagnostics show a localized category summary; expand an item to read its original message.',
+  warningProjectorDetails: 'Expand a warning to read the original English diagnostic.',
+  warningOriginal: 'Original diagnostic (English)',
+  warningChartSummary: 'Chart data or formatting has a compatibility limitation; cached values or fallback formats may be used.',
+  warningFontSummary: 'Font resources have a compatibility limitation; fallback fonts may be used or embedded fonts may be skipped.',
+  warningMediaSummary: 'Audio or video has a compatibility limitation; playback or controls may be limited.',
+  warningAnimationSummary: 'An animation or transition has a compatibility limitation; the effect may be approximated, simplified, or skipped.',
+  warningLinkSummary: 'A link or resource relationship has a compatibility limitation; some links or resources may be unavailable.',
+  warningSlideSummary: 'Slide graphics or text have a compatibility limitation; some content may be simplified or skipped.',
+  warningGeneralSummary: 'A compatibility limitation may prevent some content from being reproduced fully.',
   en: 'English',
   zh: '中文',
 } as const
@@ -134,6 +144,7 @@ type MessageKey = keyof typeof en
 const zh: Record<MessageKey, string> = {
   brandLabel: 'PPTX 播放器',
   brandAria: 'Deckline PPTX 播放器',
+  metaDescription: '在浏览器中本地播放 PowerPoint 演示文稿。',
   localSession: '本地会话 · 文件仅在此设备处理',
   switchToChinese: '中文',
   switchToEnglish: 'English',
@@ -255,7 +266,16 @@ const zh: Record<MessageKey, string> = {
   tiledBackgroundCropEncodeFailed: '浏览器无法编码平铺背景裁剪区域，已使用原始图片。',
   tiledBackgroundFlipEncodeFailed: '浏览器无法编码平铺背景翻转，已使用未翻转的图片。',
   textEllipsisUnsupported: '此浏览器不支持 CSS 多行截断，竖排文本省略部分将被裁切。',
-  warningDetailsEnglish: '详细兼容性诊断目前仅提供英文。',
+  warningDetails: '诊断项显示中文分类摘要；展开单项可查看解析器提供的英文原始信息。',
+  warningProjectorDetails: '展开字体提示可查看英文原始诊断。',
+  warningOriginal: '原始诊断（英文）',
+  warningChartSummary: '图表数据或格式存在兼容性限制，部分数值或格式可能使用缓存或回退值。',
+  warningFontSummary: '字体资源存在兼容性限制，可能使用替代字体或跳过嵌入字体。',
+  warningMediaSummary: '音视频存在兼容性限制，播放或控制功能可能受限。',
+  warningAnimationSummary: '动画或切换效果存在兼容性限制，效果可能被近似、简化或跳过。',
+  warningLinkSummary: '链接或资源关系存在兼容性限制，部分链接或资源可能无法使用。',
+  warningSlideSummary: '幻灯片图形或文本存在兼容性限制，部分内容可能被简化或跳过。',
+  warningGeneralSummary: '存在兼容性限制，部分内容可能无法完整还原。',
   en: 'English',
   zh: '中文',
 }
@@ -307,9 +327,20 @@ export function useLocale() {
     return t(errorKeys[message] || 'presentationCouldNotBeOpened')
   }
 
+  function translateWarning(message: string) {
+    const warning = message.toLowerCase()
+    if (/\b(chart|workbook|worksheet|cell|series|axis|data point|number format)\b/.test(warning)) return t('warningChartSummary')
+    if (/\b(font|typeface)\b/.test(warning)) return t('warningFontSummary')
+    if (/\b(audio|video|media|sound|playback)\b/.test(warning)) return t('warningMediaSummary')
+    if (/\b(animation|transition|timing|sequence|motion|trigger|keyframe)\b/.test(warning)) return t('warningAnimationSummary')
+    if (/\b(hyperlink|relationship|unsafe url|link)\b/.test(warning)) return t('warningLinkSummary')
+    if (/\b(text|paragraph|shape|picture|image|drawingml|geometry|fill|bullet|table|svg|glow|shadow|color)\b/.test(warning)) return t('warningSlideSummary')
+    return t('warningGeneralSummary')
+  }
+
   function toggleLocale() {
     locale.value = locale.value === 'en' ? 'zh' : 'en'
   }
 
-  return { locale, t, translateError, toggleLocale }
+  return { locale, t, translateError, translateWarning, toggleLocale }
 }

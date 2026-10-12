@@ -124,6 +124,11 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2
 .warning-list { max-height: min(35vh,260px); overflow: auto; margin: 6px 0 0; padding: 4px 10px; list-style: none; border: 1px solid #8a7146; border-radius: 7px; background: #211f1b; box-shadow: 0 4px 12px #0005; }
 .warning-list li { padding: 6px 0; overflow-wrap: anywhere; }
 .warning-list li + li { border-top: 1px solid #ffffff1a; }
+.warning-original { margin-top: 5px; }
+.warning-original code { display: block; margin-top: 5px; color: #c3b498; font: inherit; white-space: pre-wrap; }
+.projector-toolbar .warning-original { position: relative; min-width: 0; margin: 0; }
+.projector-toolbar .warning-original summary { border: 0; background: transparent; padding: 0; box-shadow: none; }
+.projector-toolbar .warning-original code { position: absolute; right: 0; bottom: calc(100% + 7px); width: min(420px, 70vw); max-height: 18vh; overflow: auto; margin: 0; padding: 8px; border: 1px solid #ffffff2b; border-radius: 6px; background: #111e; }
 .player-controls { height: 48px; display: flex; justify-content: center; align-items: center; gap: 12px; }
 .zoom-button { width: 27px; height: 27px; color: #c5ccc6; }
 .zoom-value { min-width: 40px; color: #909991; text-align: center; font: 10px Consolas, monospace; }
@@ -172,7 +177,9 @@ button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2
 .projector-blank { position: fixed; inset: 0; }
 .projector-blank.is-black { background: #000; }
 .projector-blank.is-white { background: #fff; }
+.projector-message-state { position: absolute; inset: 0; display: grid; place-items: center; }
 .projector-message { max-width: 520px; padding: 24px; color: #d4d8d4; text-align: center; font-size: 15px; }
+.projector-message-locale-toggle { position: absolute; top: 14px; right: 14px; border-color: #ffffff2b; color: #ddd; }
 .presenter-next-frame .slide-frame { width: 100%; height: auto; aspect-ratio: var(--slide-ratio, 1.7778); }
 .presenter-side-panel { gap: 14px; }
 .presenter-next-panel { flex: 0 0 42%; }
