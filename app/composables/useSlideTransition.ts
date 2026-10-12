@@ -40,6 +40,27 @@ interface MorphTextToken {
   style: Pick<CSSStyleDeclaration, 'color' | 'fontFamily' | 'fontSize' | 'fontStyle' | 'fontWeight' | 'fontVariant' | 'fontStretch' | 'lineHeight' | 'letterSpacing' | 'wordSpacing' | 'textDecoration' | 'textShadow' | 'textTransform' | 'direction' | 'writingMode' | 'verticalAlign'>
 }
 
+function withoutMorphTransforms<T>(elements: HTMLElement[], measure: () => T): T {
+  const styles = new Map<HTMLElement, [string, string]>()
+  for (const element of elements) {
+    for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+      if (getComputedStyle(current).transform !== 'none' && !styles.has(current)) {
+        styles.set(current, [current.style.getPropertyValue('transform'), current.style.getPropertyPriority('transform')])
+        current.style.setProperty('transform', 'none', 'important')
+      }
+      if (current.classList.contains('slide-frame')) break
+    }
+  }
+  try {
+    return measure()
+  } finally {
+    for (const [element, [value, priority]] of styles) {
+      if (value) element.style.setProperty('transform', value, priority)
+      else element.style.removeProperty('transform')
+    }
+  }
+}
+
 function morphTextSegments(text: string, mode: 'byWord' | 'byChar'): {text: string; key: string; start: number; end: number}[] {
   if (typeof Intl.Segmenter !== 'function') {
     if (mode === 'byChar') {
@@ -224,16 +245,6 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
     const newByName = uniqueByName(incomingElements)
     const restoreTextStyles: (() => void)[] = []
     if (textMode && incomingFrame) {
-      const transformed = (element: HTMLElement) => {
-        const value = getComputedStyle(element).transform
-        if (value === 'none') return false
-        try {
-          const matrix = new DOMMatrixReadOnly(value)
-          return Math.abs(matrix.a - 1) > 0.001 || Math.abs(matrix.b) > 0.001 || Math.abs(matrix.c) > 0.001 || Math.abs(matrix.d - 1) > 0.001
-        } catch {
-          return true
-        }
-      }
       for (const [key, element] of newByName) {
         const previous = oldByName.get(key)
         if (!previous) continue
@@ -244,12 +255,10 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
           console.warn(`Morph ${textMode} text matching is not supported on ${element.dataset.elementKind} elements; object motion is used.`)
           continue
         }
-        if (transformed(previous) || transformed(element)) {
-          console.warn(`Morph ${textMode} text matching uses object motion for transformed shape "${element.dataset.elementName}".`)
-          continue
-        }
-        const sourceTokens = morphTextTokens(sourceText, textMode)
-        const targetTokens = morphTextTokens(targetText, textMode)
+        const [sourceTokens, targetTokens] = withoutMorphTransforms([previous, element], () => [
+          morphTextTokens(sourceText, textMode),
+          morphTextTokens(targetText, textMode),
+        ])
         if (!sourceTokens.length && !targetTokens.length) continue
         const position = targetText.style.getPropertyValue('position')
         const positionPriority = targetText.style.getPropertyPriority('position')

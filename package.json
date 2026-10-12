@@ -8,7 +8,9 @@
     "preview": "nuxt preview",
     "typecheck": "nuxt typecheck",
     "verify:animation": "node scripts/verify-animation.mjs",
-    "verify:chart-number-format": "node scripts/verify-chart-number-format.mjs"
+    "verify:chart-number-format": "node scripts/verify-chart-number-format.mjs",
+    "verify:narration": "node scripts/verify-animation.mjs --narration-only",
+    "verify:pptx-input-errors": "node scripts/verify-pptx-input-errors.mjs"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",

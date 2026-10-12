@@ -11,6 +11,8 @@ export interface PptxRun {
     baselineOffsetEm?: number
     color?: string
     fillPattern?: string
+    fillGradient?: string
+    highlightColor?: string
     outlineColor?: string
     outlineWidth?: number
     bold?: boolean
@@ -49,6 +51,7 @@ export interface PptxGlow {
 export interface PptxParagraph {
     align: 'left' | 'center' | 'right' | 'justify'
     direction?: 'ltr' | 'rtl'
+    tabStopInterval?: number
     runs: PptxRun[]
     level?: number
     marginLeft?: number
@@ -62,6 +65,7 @@ export interface PptxParagraph {
 
 export interface PptxTableCell {
     paragraphs: PptxParagraph[]
+    textAnchorCenter?: boolean
     textColumnCount?: number
     textColumnSpacing?: number
     textColumnsRightToLeft?: boolean
@@ -106,10 +110,12 @@ export interface PptxChartSeries {
     valueAxisId?: string
     lineShowLine?: boolean
     lineShowMarker?: boolean
+    lineSmooth?: boolean
     xValues?: Array<number | null>
     bubbleSizes?: Array<number | null>
     scatterShowLine?: boolean
     scatterShowMarker?: boolean
+    scatterSmooth?: boolean
     radarShowLine?: boolean
     radarShowMarker?: boolean
     radarMarkerSize?: number
@@ -118,7 +124,15 @@ export interface PptxChartSeries {
     markerSymbolOverrides?: Record<number, PptxChartMarkerSymbol>
     markerSizeOverrides?: Record<number, number>
     color: string
+    stroke?: string
+    strokeWidthEmu?: number
+    strokeDash?: PptxElement['strokeDash']
+    strokeCap?: PptxElement['strokeCap']
     pointColors: Record<number, string>
+    pointStrokes?: Record<number, string>
+    pointStrokeWidthsEmu?: Record<number, number>
+    pointStrokeDashes?: Record<number, NonNullable<PptxElement['strokeDash']>>
+    pointStrokeCaps?: Record<number, NonNullable<PptxElement['strokeCap']>>
     showLegendKey: boolean
     legendKeyOverrides: Record<number, boolean>
     showValueLabels: boolean
@@ -134,9 +148,13 @@ export interface PptxChartSeries {
     labelSeparator?: string
     labelSeparatorOverrides: Record<number, string>
     numberFormat?: string
+    cachedNumberFormat?: string
+    xNumberFormat?: string
     valueNumberFormatOverrides: Record<number, string>
     dataLabelPosition?: PptxChartDataLabelPosition
     dataLabelPositionOverrides: Record<number, PptxChartDataLabelPosition>
+    showLeaderLines?: boolean
+    leaderLineOverrides?: Record<number, boolean>
     dataLabelStyle?: PptxChartDataLabelStyle
     dataLabelStyleOverrides: Record<number, PptxChartDataLabelStyle>
 }
@@ -195,6 +213,7 @@ export interface PptxChart {
     title?: string
     categories: string[]
     palette: string[]
+    indexedColors?: string[]
     series: PptxChartSeries[]
     valueAxes?: Array<{id: string; axis: PptxChartAxis; primary?: boolean}>
     labelSeparator?: string
@@ -261,6 +280,7 @@ export interface PptxElement {
     motionParent?: {matrix: [number, number, number, number, number, number]; x: number; y: number}
     fill: string
     stroke: string
+    strokePattern?: string
     strokeWidth: number
     strokeDash?: string | number[]
     strokeCap?: 'butt' | 'round' | 'square'
@@ -279,6 +299,10 @@ export interface PptxElement {
     mediaFade?: {inMs: number; outMs: number}
     mediaBookmarks?: Array<{name: string; timeMs: number}>
     imageCrop?: {left: number; top: number; right: number; bottom: number}
+    imageGrayscale?: boolean
+    imageAlphaInverse?: [number, number, number] | null
+    imageAlphaInverseAfterGrayscale?: boolean
+    imageEffectDagAlphaInverse?: [number, number, number] | null
     table?: PptxTable
     chart?: PptxChart
     paragraphs: PptxParagraph[]
@@ -288,6 +312,7 @@ export interface PptxElement {
     textHorizontalOverflow?: 'overflow' | 'clip'
     textVerticalOverflow?: 'overflow' | 'clip' | 'ellipsis'
     textOrientation?: PptxTextOrientation
+    textAnchorCenter?: boolean
     textColumnCount?: number
     textColumnSpacing?: number
     textColumnsRightToLeft?: boolean
@@ -298,10 +323,17 @@ export interface PptxElement {
     placeholder?: {type: string; index?: string}
 }
 
+export type PptxAnimationTriggerCondition =
+    | {type: 'shape'; id: string; event: 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut'; delayMs: number}
+    | {type: 'slide'; event: 'onNext' | 'onPrev' | 'onStopAudio'; delayMs: number}
+    | {type: 'mediaBookmark'; id: string; bookmarkName: string; timeMs: number; delayMs: number}
+    | {type: 'timeNode'; id: string; event: 'begin' | 'onBegin' | 'end' | 'onEnd'; sourceStep?: number; sourceDelayMs: number; sourceMediaActionKey?: string; delayMs: number}
+
 export interface PptxSlide {
     id: string
     packagePath?: string
     name: string
+    hidden?: boolean
     elements: PptxElement[]
     background: string
     backgroundImage?: {
@@ -319,12 +351,14 @@ export interface PptxSlide {
         advancesOnNext?: boolean
         rewindsOnPrevious?: boolean
     }
+    animationStepSequences?: Array<{
+        concurrent?: boolean
+        nextAction?: 'none' | 'seek'
+        advancesOnNext?: boolean
+        rewindsOnPrevious?: boolean
+    } | undefined>
     triggeredAnimations?: {
-        trigger:
-            | {type: 'shape'; id: string; event: 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut'}
-            | {type: 'slide'; event: 'onNext' | 'onPrev' | 'onStopAudio'}
-            | {type: 'mediaBookmark'; id: string; bookmarkName: string; timeMs: number}
-            | {type: 'timeNode'; id: string; event: 'onBegin' | 'onEnd'; sourceStep?: number; sourceDelayMs: number; delayMs: number}
+        conditions: PptxAnimationTriggerCondition[]
         restart?: 'always' | 'whenNotActive' | 'never'
         concurrent?: boolean
         steps: PptxAnimation[][]
@@ -427,10 +461,11 @@ export interface PptxAnimation {
     characterRange?: {start: number; end: number}
     iteration?: {intervalMs: number; ranges: Array<{start: number; end: number}>; backwards?: boolean}
     effectProgress?: number
-    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
+    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'zoom' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
     direction: 'in' | 'out'
     durationMs: number
     delayMs: number
+    exclusiveGroups?: Array<{id: string; startMs: number; endMs: number}>
     fillMode?: 'hold' | 'freeze' | 'remove'
     sequenceKey?: string
     sequenceOrder?: number
@@ -446,12 +481,18 @@ export interface PptxAnimation {
     barnMotion?: 'in' | 'out'
     shapeFilter?: 'circle' | 'diamond' | 'box' | 'plus'
     shapeDirection?: 'in' | 'out'
-    slideFrom?: 'left' | 'right' | 'top' | 'bottom'
+    slideFrom?: 'left' | 'right' | 'top' | 'bottom' | 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
     wheelSpokes?: 1 | 2 | 3 | 4 | 8
     scaleFrom?: [number, number]
     scaleTo?: [number, number]
+    scaleAxis?: 'x' | 'y'
+    scaleKeyframes?: Array<{offset: number; value: number}>
+    scaleKeyframeMode?: 'lin' | 'discrete'
+    scaleAccumulate?: boolean
     rotationFrom?: number
     rotationTo?: number
+    rotationKeyframes?: Array<{offset: number; value: number}>
+    rotationKeyframeMode?: 'lin' | 'discrete'
     rotationRelative?: boolean
     rotationAdditive?: boolean
     rotationAccumulate?: boolean
@@ -527,10 +568,12 @@ export interface PptxAnimation {
     mediaStartSeconds?: number
     mediaVolume?: number
     mediaMuted?: boolean
+    mediaIsNarration?: boolean
     motionCoordinateProperty?: 'ppt_x' | 'ppt_y'
     motionPath?: Array<{x: number; y: number; distance: number}>
     motionPathLength?: number
     motionPathSamples?: Array<{progress: number; x: number; y: number}>
+    motionAccumulate?: boolean
     acceleration?: number
     deceleration?: number
     playbackSpeed?: number
@@ -558,6 +601,7 @@ export interface PptxDocument {
     width: number
     height: number
     slides: PptxSlide[]
+    showSettings?: {loop: boolean; showAnimation: boolean; showNarration: boolean; useTimings: boolean}
     warnings: string[]
     objectUrls: string[]
     embeddedFonts: PptxEmbeddedFontFace[]

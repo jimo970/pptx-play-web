@@ -21,14 +21,18 @@ const textOutlineRangeOnly = process.env.DECKLINE_VERIFY_TEXT_OUTLINE_RANGE === 
 const themeBackgroundOnly = process.env.DECKLINE_VERIFY_THEME_BACKGROUND === '1'
 const notesOnly = process.env.DECKLINE_VERIFY_NOTES === '1'
 const performanceOnly = process.env.DECKLINE_VERIFY_PERFORMANCE === '1'
+const FIXTURE_FIRST_SLIDE_SHAPE_COUNT = 112
+const narrationOnly = process.env.DECKLINE_VERIFY_NARRATION_ONLY === '1' || process.argv.includes('--narration-only')
 const customFillModes = ['lighten', 'lightenLess', 'darken', 'darkenLess']
 const customEllipseArcCases = [
   [1000, 1000, 400, 200, 2700000, 5400000],
-  [1000, 1000, 400, 200, 2700000, -5400000],
-  [1000, 1000, 400, 200, 2700000, 16200000],
-  [1000, 1000, 400, 200, 2700000, 21600000],
-  [1000, 1000, 400, 200, 2700000, -21600000],
-  [2000, 1000, 800, 200, 2700000, 5400000],
+  [1000, 1000, 420, 300, -5400000, 5400000],
+  [1000, 1000, 420, 300, 10800000, 10800000],
+  [1000, 1000, 420, 300, 0, -10800000],
+  [1000, 1000, 420, 300, 2700000, 32400000],
+  [1000, 1000, 400, 200, 2700000, -27000000],
+  [2000, 1000, 760, 250, 8100000, 16200000],
+  [1000, 1000, 420, 300, 5400000, 21600000],
   [1000, 1000, 400, 200, 2700000, 0],
 ]
 let presetGeometryNames = []
@@ -51,16 +55,16 @@ const colorModelCases = [
   ['<a:hslClr hue="7200000" sat="0%" lum="50%"><a:sat val="100%"/></a:hslClr>', 'rgb(0, 255, 0)'],
 ]
 const colorPercentageCases = [
-  ['000000', '<a:tint val="10%"/>', 'rgb(230, 230, 230)'],
-  ['000000', '<a:tint val="10000"/>', 'rgb(230, 230, 230)'],
+  ['000000', '<a:tint val="10%"/>', 'rgb(243, 243, 243)'],
+  ['000000', '<a:tint val="10000"/>', 'rgb(243, 243, 243)'],
   ['000000', '<a:tint val="0%"/>', 'rgb(255, 255, 255)'],
   ['000000', '<a:tint val="100%"/>', 'rgb(0, 0, 0)'],
-  ['808080', '<a:shade val="25%"/>', 'rgb(32, 32, 32)'],
+  ['808080', '<a:shade val="25%"/>', 'rgb(66, 66, 66)'],
   ['808080', '<a:alpha val="50%"/><a:alphaMod val="50%"/>', 'rgba(128, 128, 128, 0.25)'],
   ['808080', '<a:alpha val="50%"/><a:alphaOff val="-20%"/>', 'rgba(128, 128, 128, 0.3)'],
   ['808080', '<a:alpha val="20%"/><a:alphaOff val="90%"/><a:alphaMod val="50%"/>', 'rgba(128, 128, 128, 0.5)'],
   ['808080', '<a:lumMod val="150%"/><a:lumOff val="-25%"/>', 'rgb(128, 128, 128)'],
-  ['000000', '<a:tint val="10%"/><a:shade val="50%"/>', 'rgb(115, 115, 115)'],
+  ['000000', '<a:tint val="10%"/><a:shade val="50%"/>', 'rgb(179, 179, 179)'],
   ['ff0000', '<a:hue val="7200000"/>', 'rgb(0, 255, 0)'],
   ['ff0000', '<a:hueOff val="-7200000"/>', 'rgb(0, 0, 255)'],
   ['00ff00', '<a:hueMod val="200%"/>', 'rgb(0, 0, 255)'],
@@ -70,6 +74,28 @@ const colorPercentageCases = [
   ['ff0000', '<a:lum val="25%"/>', 'rgb(128, 0, 0)'],
   ['ff0000', '<a:hue val="7200000"/><a:sat val="0%"/><a:sat val="100%"/>', 'rgb(0, 255, 0)'],
   ['ff0000', '<a:satOff val="100%"/><a:satMod val="50%"/>', 'rgb(191, 64, 64)'],
+  ['808080', '<a:gamma/>', 'rgb(188, 188, 188)'],
+  ['808080', '<a:invGamma/>', 'rgb(55, 55, 55)'],
+  ['808080', '<a:gamma/><a:invGamma/>', 'rgb(128, 128, 128)'],
+  ['000000', '<a:red val="0.1%"/><a:gamma/>', 'rgb(3, 0, 0)'],
+  ['0a0a0a', '<a:invGamma/>', 'rgb(1, 1, 1)'],
+  ['808080', '<a:alpha val="50%"/><a:gamma/>', 'rgba(188, 188, 188, 0.5)'],
+  ['ff0000', '<a:gray/>', 'rgb(55, 55, 55)'],
+  ['00ff00', '<a:gray/>', 'rgb(182, 182, 182)'],
+  ['0000ff', '<a:gray/>', 'rgb(18, 18, 18)'],
+  ['4080c0', '<a:gray/>', 'rgb(119, 119, 119)'],
+  ['f1e2d3', '<a:gray/>', 'rgb(228, 228, 228)'],
+  ['123456', '<a:gray/>', 'rgb(47, 47, 47)'],
+  ['c08040', '<a:gray/>', 'rgb(137, 137, 137)'],
+  ['ff8000', '<a:gray/>', 'rgb(146, 146, 146)'],
+  ['00ffff', '<a:gray/>', 'rgb(200, 200, 200)'],
+  ['ff00ff', '<a:gray/>', 'rgb(73, 73, 73)'],
+  ['808080', '<a:gray/>', 'rgb(128, 128, 128)'],
+  ['0a0a0a', '<a:gray/>', 'rgb(10, 10, 10)'],
+  ['ff0000', '<a:alpha val="25%"/><a:gray/>', 'rgba(55, 55, 55, 0.25)'],
+  ['4080c0', '<a:tint val="25%"/>', 'rgb(226, 232, 241)'],
+  ['4080c0', '<a:shade val="50%"/>', 'rgb(44, 92, 140)'],
+  ['ff803f', '<a:tint val="40%"/><a:shade val="60%"/>', 'rgb(203, 172, 164)'],
   ['4080c0', '<a:red val="50%"/>', 'rgb(128, 128, 192)'],
   ['4080c0', '<a:redMod val="50%"/>', 'rgb(32, 128, 192)'],
   ['4080c0', '<a:redOff val="-50%"/>', 'rgb(0, 128, 192)'],
@@ -99,6 +125,23 @@ const browserPath = process.env.DECKLINE_BROWSER || [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
 ].find(existsSync)
 
+const shapePresetCases = [
+  ['Preset box default entrance', 8200, 4, 'in', 'entr', undefined, 'box', 'in'],
+  ['Preset circle subtype entrance', 8201, 6, 'in', 'entr', 16, 'circle', 'in'],
+  ['Preset diamond outward entrance', 8202, 8, 'in', 'entr', 32, 'diamond', 'out'],
+  ['Preset plus inward entrance', 8203, 13, 'in', 'entr', 16, 'plus', 'in'],
+  ['Preset box outward entrance', 8204, 4, 'in', 'entr', 32, 'box', 'out'],
+  ['Preset circle mirrored exit', 8205, 6, 'out', 'exit', 16, 'circle', 'out'],
+  ['Preset diamond mirrored exit', 8206, 8, 'out', 'exit', 32, 'diamond', 'in'],
+  ['Preset plus default exit', 8207, 13, 'out', 'exit', undefined, 'plus', 'out'],
+]
+const simpleFilterPresetCases = [
+  ['Preset dissolve entrance', 8210, 9, 'in', 'entr', 'dissolve'],
+  ['Preset dissolve exit', 8211, 9, 'out', 'exit', 'dissolve'],
+  ['Preset wedge entrance', 8212, 20, 'in', 'entr', 'wedge'],
+  ['Preset wedge exit', 8213, 20, 'out', 'exit', 'wedge'],
+]
+
 if (!browserPath) throw new Error('Set DECKLINE_BROWSER to an Edge or Chrome executable.')
 try {
   const response = await fetch(baseUrl)
@@ -118,6 +161,19 @@ let closeBrowser = async () => {}
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 const assert = (condition, message) => { if (!condition) throw new Error(message) }
+const flyDirectionCases = [
+  ['Fly preset top', 699, 1, 'in', 'entr', 0, -1],
+  ['Fly preset right', 700, 2, 'in', 'entr', 1, 0],
+  ['Fly preset bottom', 701, 4, 'in', 'entr', 0, 1],
+  ['Fly preset left', 702, 8, 'in', 'entr', -1, 0],
+  ['Fly preset top-left', 703, 9, 'in', 'entr', -1, -1],
+  ['Fly preset top-right', 704, 3, 'in', 'entr', 1, -1],
+  ['Fly preset bottom-left', 705, 12, 'in', 'entr', -1, 1],
+  ['Fly preset bottom-right', 706, 6, 'in', 'entr', 1, 1],
+  ['Fly preset exit bottom-right', 707, 6, 'out', 'exit', 1, 1],
+  ['Fly preset default bottom', 8000, undefined, 'in', 'entr', 0, 1],
+  ['Fly preset exit default bottom', 8001, undefined, 'out', 'exit', 0, 1],
+]
 
 async function createFixture() {
   const zip = new JSZip()
@@ -135,6 +191,7 @@ async function createFixture() {
     .replace(/<a:solidFill>.*?<\/a:solidFill>/, gradientFill)
   const connector = (id, name, geometry, x, y, width, height, adjustments = '<a:avLst/>', attachments = '') => `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvCxnSpPr>${attachments}</p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="${geometry}">${adjustments}</a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="1d4ed8"/></a:solidFill></a:ln></p:spPr></p:cxnSp>`
   const shadowedWithPrevious = shape(3, 'With previous', 3000000, 0, '2563eb').replace('</p:spPr>', `${shadow}</p:spPr>`)
+  const shadowedEllipse = shape(9999, 'Shadow ellipse', 8000000, 3000000, '22c55e').replace('<a:prstGeom prst="rect">', '<a:prstGeom prst="ellipse">').replace('</p:spPr>', `${shadow}</p:spPr>`)
   const appearanceToggleShape = shape(326, 'Appearance toggles', 10000000, 0, 'f43f5e', 1800000, 1200000).replace('</p:spPr>', `<a:ln w="25400"><a:solidFill><a:srgbClr val="2563eb"/></a:solidFill></a:ln>${shadow}</p:spPr>`)
   const customGeometryShape = `<p:sp><p:nvSpPr><p:cNvPr id="61" name="Custom geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="9000000" y="6100000"/><a:ext cx="2600000" cy="600000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="0" b="0"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:cubicBezTo><a:pt x="250" y="0"/><a:pt x="750" y="0"/><a:pt x="1000" y="500"/></a:cubicBezTo><a:cubicBezTo><a:pt x="750" y="1000"/><a:pt x="250" y="1000"/><a:pt x="0" y="500"/></a:cubicBezTo><a:close/></a:path><a:path w="1000" h="1000" fill="none"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:quadBezTo><a:pt x="500" y="1000"/><a:pt x="1000" y="0"/></a:quadBezTo><a:lnTo><a:pt x="1000" y="1000"/></a:lnTo><a:close/></a:path><a:path w="1000" h="1000" fill="none"><a:moveTo><a:pt x="100" y="500"/></a:moveTo><a:arcTo wR="400" hR="250" stAng="10800000" swAng="10800000"/><a:lnTo><a:pt x="100" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="a3e635"/></a:solidFill><a:ln w="25400" cap="rnd"><a:solidFill><a:srgbClr val="166534"/></a:solidFill><a:custDash><a:ds d="250000" sp="50000"/><a:ds d="50000" sp="25000"/></a:custDash></a:ln></p:spPr></p:sp>`
   const placeholderShape = `<p:sp><p:nvSpPr><p:cNvPr id="3" name="Inherited paragraph"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr lvl="2"/><a:r><a:t>Inherited placeholder</a:t></a:r></a:p></p:txBody></p:sp>`
@@ -157,6 +214,7 @@ const customEllipseArcPaths = customEllipseArcCases.map(([width, height, radiusX
 const customGeometryShapeWithGuides = customGeometryShape
   .replace('<a:avLst/><a:gdLst/>', '<a:avLst><a:gd name="adjX" fmla="val 250"/></a:avLst><a:gdLst><a:gd name="xQuarter" fmla="*/ w adjX 1000"/><a:gd name="xThreeQuarter" fmla="+- w 0 xQuarter"/><a:gd name="bottom" fmla="pin 0 750 h"/><a:gd name="top" fmla="min h 250"/><a:gd name="addDiv" fmla="+/ 300 100 2"/><a:gd name="ifElse" fmla="?: 1 50 0"/><a:gd name="ifElseFallback" fmla="?: 0 50 25"/><a:gd name="absVal" fmla="abs -10"/><a:gd name="angle45" fmla="at2 1 1"/><a:gd name="catVal" fmla="cat2 100 1 0"/><a:gd name="cosVal" fmla="cos 100 0"/><a:gd name="maxVal" fmla="max 10 20"/><a:gd name="minVal" fmla="min 10 20"/><a:gd name="modVal" fmla="mod 3 4 12"/><a:gd name="satVal" fmla="sat2 100 1 0"/><a:gd name="sinVal" fmla="sin 100 0"/><a:gd name="sqrtVal" fmla="sqrt 256"/><a:gd name="tanVal" fmla="tan 100 0"/><a:gd name="pinLow" fmla="pin 0 -5 1000"/><a:gd name="pinHigh" fmla="pin 0 1200 1000"/></a:gdLst>')
   .replace('</a:pathLst>', `${guideDrivenGeometryPath}${guideFormulaPath}${guideFormulaArcPath}${customNegativeArcPath}${customEllipseArcPaths}</a:pathLst>`)
+  .replace('</p:spPr>', `${shadow}</p:spPr>`)
 const customGeometryTextShape = `<p:sp><p:nvSpPr><p:cNvPr id="65" name="Custom text rectangle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5000000" y="4200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst><a:gd name="quarterWidth" fmla="*/ w 1 4"/></a:gdLst><a:ahLst/><a:cxnLst/><a:rect l="quarterWidth" t="200" r="900" b="800"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:lnTo><a:pt x="1000" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="38bdf8"/></a:solidFill></p:spPr><p:txBody><a:bodyPr lIns="0" rIns="0" tIns="0" bIns="0"/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"/><a:t>Inside custom text rectangle</a:t></a:r></a:p></p:txBody></p:sp>`
 const invalidCustomGeometryTextShape = `<p:sp><p:nvSpPr><p:cNvPr id="66" name="Invalid custom text rectangle"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="7500000" y="4200000"/><a:ext cx="2000000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="800" t="200" r="200" b="800"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:lnTo><a:pt x="1000" y="500"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></p:spPr><p:txBody><a:bodyPr lIns="0" rIns="0" tIns="0" bIns="0"/><a:lstStyle/><a:p><a:r><a:rPr sz="1800"/><a:t>Fallback text box</a:t></a:r></a:p></p:txBody></p:sp>`
 const customGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="67" name="Custom gradient geometry"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="10000000" y="4200000"/><a:ext cx="1500000" cy="1000000"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/><a:pt x="1000" y="1000"/><a:pt x="0" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ff0000"/></a:gs><a:gs pos="50000"><a:srgbClr val="00ff00"><a:alpha val="50000"/></a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="0000ff"/></a:gs></a:gsLst><a:lin ang="0" scaled="1"/></a:gradFill><a:ln w="63500"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ffff00"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill></a:ln></p:spPr></p:sp>`
@@ -164,7 +222,7 @@ const customRadialGradientShape = `<p:sp><p:nvSpPr><p:cNvPr id="68" name="Custom
 const characterSpacedShapeId = 59
   const groupFillPlaceholderShape = placeholderShape.replace('id="3"', 'id="96"').replace('Inherited paragraph', 'Group fill placeholder').replace('idx="1"', 'idx="2"').replace('<p:spPr/>', '<p:spPr><a:grpFill/><a:ln><a:grpFill/></a:ln></p:spPr>')
   const groupFillGroupShape = '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="100" name="Group fill parent"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="8000000" y="1000000"/><a:ext cx="2600000" cy="1500000"/><a:chOff x="0" y="0"/><a:chExt cx="2600000" cy="1500000"/></a:xfrm><a:solidFill><a:srgbClr val="12ab34"/></a:solidFill></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="101" name="Grouped fill child"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="1500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:grpFill/><a:ln w="25400"><a:grpFill/></a:ln></p:spPr></p:sp></p:grpSp>'
-  const groupFillTextBody = '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:grpFill/></a:rPr><a:t>Group fill text</a:t></a:r><a:r><a:rPr><a:noFill/></a:rPr><a:t>No fill text</a:t></a:r><a:r><a:rPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"/></a:gs></a:gsLst></a:gradFill></a:rPr><a:t>Gradient text</a:t></a:r></a:p></p:txBody>'
+  const groupFillTextBody = '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:grpFill/><a:highlight><a:srgbClr val="ffff00"/></a:highlight></a:rPr><a:t>Group fill text</a:t></a:r><a:r><a:rPr><a:noFill/></a:rPr><a:t>No fill text</a:t></a:r><a:r><a:rPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"/></a:gs></a:gsLst></a:gradFill></a:rPr><a:t>Gradient text</a:t></a:r><a:r><a:rPr><a:pattFill prst="horz"><a:fgClr><a:srgbClr val="2563eb"/></a:fgClr><a:bgClr><a:srgbClr val="dbeafe"/></a:bgClr></a:pattFill><a:highlight><a:srgbClr val="ffff00"/></a:highlight></a:rPr><a:t>Highlighted patterned text</a:t></a:r></a:p></p:txBody>'
   const underlineFillRuns = '<a:r><a:rPr u="sng"><a:uFill><a:solidFill><a:srgbClr val="ff00ff"/></a:solidFill></a:uFill></a:rPr><a:t>Custom underline fill</a:t></a:r><a:r><a:rPr u="sng"><a:solidFill><a:srgbClr val="0b5394"/></a:solidFill><a:uFillTx/></a:rPr><a:t>Underline follows text</a:t></a:r><a:r><a:rPr u="sng"><a:uFill><a:noFill/></a:uFill></a:rPr><a:t>Transparent underline</a:t></a:r>'
   const underlineStrokeRuns = '<a:r><a:rPr u="sng" strike="sngStrike"><a:solidFill><a:srgbClr val="111111"/></a:solidFill><a:uLn w="25400"><a:solidFill><a:srgbClr val="dc2626"/></a:solidFill><a:prstDash val="dot"/></a:uLn></a:rPr><a:t>Custom underline stroke</a:t></a:r><a:r><a:rPr u="sng"><a:ln w="38100"><a:solidFill><a:srgbClr val="1d4ed8"/></a:solidFill></a:ln><a:uLnTx/></a:rPr><a:t>Underline stroke follows outline</a:t></a:r>'
   const wordsUnderlineRun = '<a:r><a:rPr u="words"/><a:t>Words and spaces</a:t></a:r>'
@@ -179,9 +237,15 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const tableCell = (text, attributes = '', color = 'ffffff') => `<a:tc ${attributes}><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="1800" b="1"/><a:t>${text}</a:t></a:r></a:p></a:txBody><a:tcPr marL="91440" marR="91440" marT="45720" marB="45720"><a:lnL w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnL><a:lnR w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnR><a:lnT w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnT><a:lnB w="12700"><a:solidFill><a:srgbClr val="334155"/></a:solidFill></a:lnB><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:tcPr></a:tc>`
   const autofitTableCell = tableCell('Table cell normal autofit shrinks overflowing text to stay inside this saved row. '.repeat(40), '', 'dbeafe').replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit/></a:bodyPr>')
   const columnTableCell = tableCell('This cell fills its first text column, then overflows into the left column with a gap.', '', 'fef3c7').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
-  const table = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="Basic table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="3000000" y="500000"/><a:ext cx="6000000" cy="4500000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="3000000"/></a:tblGrid><a:tr h="1500000">${tableCell('Merged header', 'gridSpan="2"', '1e40af')}${tableCell('', 'hMerge="1"')}</a:tr><a:tr h="1500000">${tableCell('Left cell')}${autofitTableCell}</a:tr><a:tr h="1500000">${columnTableCell}${tableCell('Next cell')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>` + customRadialGradientShape + focusGradientShape
+  const centeredTableCell = tableCell('Left cell').replace('<a:bodyPr/>', '<a:bodyPr anchorCtr="true"/>')
+  const table = `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="3" name="Basic table"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="3000000" y="500000"/><a:ext cx="6000000" cy="4500000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr/><a:tblGrid><a:gridCol w="3000000"/><a:gridCol w="3000000"/></a:tblGrid><a:tr h="1500000">${tableCell('Merged header', 'gridSpan="2"', '1e40af')}${tableCell('', 'hMerge="1"')}</a:tr><a:tr h="1500000">${centeredTableCell}${autofitTableCell}</a:tr><a:tr h="1500000">${columnTableCell}${tableCell('Next cell')}</a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>` + customRadialGradientShape + focusGradientShape
   const chartFrame = (id, name, relationship, x, y, width, height) => `<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${id}" name="${name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${width}" cy="${height}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="${relationship}"/></a:graphicData></a:graphic></p:graphicFrame>`
   const chartPart = `<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Quarterly sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:layout/><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>North</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="0ea5e9"/></a:solidFill></c:spPr><c:cat><c:strRef><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>12</c:v></c:pt><c:pt idx="1"><c:v>18</c:v></c:pt><c:pt idx="2"><c:v>26</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>South</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr><c:cat><c:strRef><c:strCache><c:ptCount val="3"/><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="1"><c:v>Q2</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>9</c:v></c:pt><c:pt idx="1"><c:v>15</c:v></c:pt><c:pt idx="2"><c:v>21</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart></c:plotArea></c:chart></c:chartSpace>`
+  const patternedChartPart = chartPart.replace('<a:solidFill><a:srgbClr val="0ea5e9"/></a:solidFill>', '<a:pattFill prst="horz"><a:fgClr><a:srgbClr val="0ea5e9"/></a:fgClr><a:bgClr><a:srgbClr val="dbeafe"/></a:bgClr></a:pattFill>')
+  assert(patternedChartPart !== chartPart, 'The chart pattern fixture must replace the first series fill.')
+  const outlinedChartPart = patternedChartPart.replace('</a:pattFill></c:spPr>', '</a:pattFill><a:ln w="25400"><a:prstDash val="dash"/><a:pattFill prst="vert"><a:fgClr><a:srgbClr val="1d4ed8"/></a:fgClr><a:bgClr><a:srgbClr val="dbeafe"/></a:bgClr></a:pattFill></a:ln></c:spPr>')
+  const pointPatternChartPart = outlinedChartPart.replace('<c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr>', '<c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr><c:dPt><c:idx val="1"/><c:spPr><a:pattFill prst="pct25"><a:fgClr><a:srgbClr val="f97316"/></a:fgClr><a:bgClr><a:srgbClr val="fed7aa"/></a:bgClr></a:pattFill><a:ln w="63500"><a:prstDash val="sysDashDot"/><a:pattFill prst="cross"><a:fgClr><a:srgbClr val="7c3aed"/></a:fgClr><a:bgClr><a:srgbClr val="ede9fe"/></a:bgClr></a:pattFill></a:ln></c:spPr></c:dPt>')
+  assert(pointPatternChartPart !== outlinedChartPart, 'The chart point pattern fixture must replace the indexed point fill and outline.')
   const tree = body => `<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="0" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${body}</p:spTree></p:cSld>`
   const silentWave = (durationSeconds = 0.5) => {
     const sampleRate = 8000, samples = sampleRate * durationSeconds
@@ -197,6 +261,8 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const characterColor = `<p:par><p:cTn id="93" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr><p:cBhvr><p:cTn id="94" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"><p:txEl><p:charRg st="16" end="23"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.color</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="000000"/></p:from><p:to><a:srgbClr val="ff0000"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
   const characterFontSize = `<p:par><p:cTn id="95" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim to="1.5" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="96" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="7"><p:txEl><p:charRg st="19" end="23"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.fontSize</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const letterFade = `<p:par><p:cTn id="97" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="lt"><p:tmAbs val="150"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="98" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="43"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
+  const letterBlinds = letterFade.replace('id="97"', 'id="17310"').replace('id="98"', 'id="17311"').replace('filter="fade"', 'filter="blinds(horizontal)"')
+  const wordBlinds = `<p:par><p:cTn id="17312" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="wd" backwards="1"><p:tmPct val="50000"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="blinds(vertical)"><p:cBhvr><p:cTn id="17313" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="172"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const zeroIntervalLetterFade = `<p:par><p:cTn id="17300" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="lt"><p:tmAbs val="0"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="17301" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="162"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const wordFade = `<p:par><p:cTn id="101" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="wd" backwards="1"><p:tmPct val="50000"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="102" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const objectBlinds = `<p:par><p:cTn id="105" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="blinds(horizontal)"><p:cBhvr><p:cTn id="106" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="46"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
@@ -209,15 +275,29 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const parentRepeatAfterEffect = effectGroup(305, 'afterEffect', 109, 'in', 'fade', 306, 100)
   const parentRepeatDurationNextStep = effectGroup(309, 'clickEffect', 106, 'out', 'fade', 310, 80)
   const parentSequentialStep = `<p:seq concurrent="0"><p:cTn id="311" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="109"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(312, 'clickEffect', 113, 'in', 'fade', 313, 600)}${effectGroup(314, 'clickEffect', 115, 'in', 'fade', 315, 200)}</p:childTnLst></p:cTn></p:seq>`
+  const directRepeatCount = effectGroup(40010, 'clickEffect', 127, 'in', 'fade', 40011, 200, '0', undefined, ' repeatCount="1500"')
+  const directRepeatDuration = effectGroup(40013, 'clickEffect', 129, 'in', 'fade', 40014, 200, '0', undefined, ' repeatDur="450" autoRev="1"')
   const parentReverseSpeedGroup = effectGroup(800, 'clickEffect', 113, 'in', 'fade', 801, 600, '0', undefined, '', 'hold', ' dur="600" spd="-200000"')
   const parentAutoReverseGroup = effectGroup(802, 'clickEffect', 115, 'in', 'fade', 803, 600, '0', undefined, '', 'hold', ' dur="600" autoRev="1"')
   const parentIndefiniteRepeat = effectGroup(807, 'clickEffect', 117, 'in', 'fade', 808, 180, '0', undefined, '', 'hold', ' dur="360" repeatDur="indefinite"')
   const childRepeatDuration = effectGroup(810, 'clickEffect', 119, 'in', 'fade', 811, 150, '0', undefined, ' repeatDur="450"')
   const triggeredSequence = (id, trigger, groups) => `<p:seq><p:cTn id="${id}" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="${trigger}"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${groups}</p:childTnLst></p:cTn></p:seq>`
+  const directAnimationRepeatSequences = `${triggeredSequence(40012, 126, directRepeatCount)}${triggeredSequence(40015, 128, directRepeatDuration)}`
   const timedNodeSequence = (id, timeNode, event, groups, delay = '0') => `<p:seq><p:cTn id="${id}" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="${event}" delay="${delay}"><p:tn val="${timeNode}"/></p:cond></p:stCondLst><p:childTnLst>${groups}</p:childTnLst></p:cTn></p:seq>`
-  const parentRepeatSequences = `<p:seq><p:cTn id="307" dur="indefinite" nodeType="interactiveSeq" restart="never"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="105"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatCount}</p:childTnLst></p:cTn></p:seq><p:seq concurrent="1"><p:cTn id="308" dur="indefinite" nodeType="interactiveSeq" restart="whenNotActive"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="107"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatDuration}${parentRepeatAfterEffect}${parentRepeatDurationNextStep}</p:childTnLst></p:cTn></p:seq>${parentSequentialStep}${triggeredSequence(804, 112, parentReverseSpeedGroup)}${triggeredSequence(805, 114, parentAutoReverseGroup)}${triggeredSequence(806, 116, parentIndefiniteRepeat)}${triggeredSequence(809, 118, childRepeatDuration)}`
-  const objectShapeElements = `${shape(49, 'Circle mask animation', 0, 6500000, '0ea5e9')}${shape(50, 'Diamond mask animation', 3000000, 6500000, '3b82f6')}${shape(51, 'Box mask animation', 6000000, 6500000, '2563eb')}${shape(52, 'Dissolve mask animation', 0, 3500000, '0891b2')}${shape(53, 'Wheel mask animation', 3000000, 3500000, '2563eb')}${shape(54, 'Wedge mask animation', 6000000, 3500000, '7c3aed')}${shape(55, 'Plus in mask animation', 0, 8500000, '0891b2')}${shape(56, 'Plus out mask animation', 6000000, 8500000, '7c3aed')}${shape(57, 'Random horizontal bars animation', 0, 10500000, '0284c7')}${shape(58, 'Random vertical bars animation', 6000000, 10500000, '7c3aed')}${shape(74, 'Media after-effect', 9000000, 7000000, '10b981')}${shape(9001, 'Stop audio trigger', 9000000, 9000000, '10b981')}${shape(9002, 'Media bookmark trigger', 3500000, 9000000, '10b981')}${shape(9003, 'Media bookmark start trigger', 6500000, 9000000, '10b981')}`
-  const shapeMaskClick = `${effectGroup(111, 'clickEffect', 49, 'in', 'circle(in)', 112, 400)}${effectGroup(113, 'clickEffect', 50, 'out', 'diamond(out)', 114, 400)}${effectGroup(115, 'clickEffect', 51, 'in', 'box(in)', 116, 400)}${effectGroup(117, 'clickEffect', 52, 'in', 'dissolve', 118, 400)}${effectGroup(119, 'clickEffect', 53, 'in', 'wheel(4)', 120, 400)}${effectGroup(121, 'clickEffect', 54, 'in', 'wedge', 122, 400)}${effectGroup(123, 'clickEffect', 55, 'in', 'plus(in)', 124, 400)}${effectGroup(125, 'clickEffect', 56, 'out', 'plus(out)', 126, 400)}${effectGroup(127, 'clickEffect', 57, 'in', 'randombar(horizontal)', 128, 400)}${effectGroup(129, 'clickEffect', 58, 'in', 'randombar(vertical)', 130, 400)}`
+  const parentRepeatSequences = `<p:seq><p:cTn id="307" dur="indefinite" nodeType="interactiveSeq" restart="never"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="105"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatCount}</p:childTnLst></p:cTn></p:seq><p:seq concurrent="1"><p:cTn id="308" dur="indefinite" nodeType="interactiveSeq" restart="whenNotActive"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="107"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${parentRepeatDuration}${parentRepeatAfterEffect}${parentRepeatDurationNextStep}</p:childTnLst></p:cTn></p:seq>${parentSequentialStep}${triggeredSequence(804, 112, parentReverseSpeedGroup)}${triggeredSequence(805, 114, parentAutoReverseGroup)}${triggeredSequence(806, 116, parentIndefiniteRepeat)}${triggeredSequence(809, 118, childRepeatDuration)}${directAnimationRepeatSequences}`
+  const objectShapeElements = `${shape(49, 'Circle mask animation', 0, 6500000, '0ea5e9')}${shape(50, 'Diamond mask animation', 3000000, 6500000, '3b82f6')}${shape(51, 'Box mask animation', 6000000, 6500000, '2563eb')}${shape(52, 'Dissolve mask animation', 0, 3500000, '0891b2')}${shape(53, 'Wheel mask animation', 3000000, 3500000, '2563eb')}${shape(54, 'Wedge mask animation', 6000000, 3500000, '7c3aed')}${shape(55, 'Plus in mask animation', 0, 8500000, '0891b2')}${shape(56, 'Plus out mask animation', 6000000, 8500000, '7c3aed')}${shape(57, 'Random horizontal bars animation', 0, 10500000, '0284c7')}${shape(58, 'Random vertical bars animation', 6000000, 10500000, '7c3aed')}${shape(74, 'Media after-effect', 9000000, 7000000, '10b981')}${shape(9001, 'Stop audio trigger', 9000000, 9000000, '10b981')}${shape(9002, 'Media bookmark trigger', 3500000, 9000000, '10b981')}${shape(9003, 'Media bookmark start trigger', 6500000, 9000000, '10b981')}${shape(9004, 'Media node end trigger', 9000000, 10500000, '10b981')}${shape(9005, 'Media node begin trigger', 6500000, 10500000, '10b981')}${shape(9006, 'Media node begin time-node', 3000000, 11200000, '059669')}${shape(9007, 'Media node end time-node', 6500000, 11200000, '047857')}${shape(9008, 'Media timed node end', 9000000, 11200000, '065f46')}${shape(9009, 'Media target onEnd', 10500000, 11200000, '047857')}${shape(9010, 'Parallel subtime A', 0, 0, '06b6d4')}${shape(9011, 'Parallel subtime B', 3000000, 0, '0891b2')}${shape(9012, 'Sequence subtime first', 6000000, 0, '0e7490')}${shape(9013, 'Sequence subtime second', 9000000, 0, '155e75')}${shape(9014, 'Interactive subtime parallel target', 0, 3000000, '14b8a6')}${shape(9015, 'Exclusive subtime target', 3000000, 3000000, '0f766e')}${shape(9016, 'Second exclusive subtime target', 6000000, 3000000, '0d9488')}`
+  const subTimeClickAudio = '<p:audio><p:cMediaNode vol="40000" mute="0"><p:cTn id="19418" dur="250" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cMediaNode></p:audio>'
+  const subTimeClickVideo = '<p:video><p:cMediaNode vol="30000" mute="0"><p:cTn id="19419" dur="250" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cMediaNode></p:video>'
+  const subTimeClickCommand = '<p:cmd type="call" cmd="pause"><p:cBhvr><p:cTn id="19420" dur="0" masterRel="sameClick"><p:stCondLst><p:cond delay="350"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr></p:cmd>'
+  const subTimeClickEffect = '<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="19421" dur="250" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="49"/></p:tgtEl></p:cBhvr></p:animEffect>'
+  const subTimeAnimationEffect = (id, target, duration) => `<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="${id}" dur="${duration}"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl></p:cBhvr></p:animEffect>`
+  const subTimeClickParallel = `<p:par><p:cTn id="19422" dur="300" spd="500000" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${subTimeAnimationEffect(19423, 9010, 300)}${subTimeAnimationEffect(19424, 9011, 300)}</p:childTnLst></p:cTn></p:par>`
+  const subTimeClickSequence = `<p:seq><p:cTn id="19425" dur="650" spd="110000" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${subTimeAnimationEffect(19426, 9012, 350)}${subTimeAnimationEffect(19427, 9013, 300)}</p:childTnLst></p:cTn></p:seq>`
+  const subTimeClickExclusive = `<p:excl><p:cTn id="19428" dur="indefinite" masterRel="sameClick"><p:stCondLst><p:cond delay="100"/></p:stCondLst><p:childTnLst>${subTimeAnimationEffect(19429, 9015, 300)}</p:childTnLst></p:cTn></p:excl>`
+  const interactiveSubTimeParallel = `<p:par><p:cTn id="19430" dur="indefinite" masterRel="sameClick"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${subTimeAnimationEffect(19431, 9014, 300)}</p:childTnLst></p:cTn></p:par>`
+  const subTimeClickExclusiveSecond = `<p:excl><p:cTn id="19432" dur="indefinite" masterRel="sameClick"><p:stCondLst><p:cond delay="500"/></p:stCondLst><p:childTnLst>${subTimeAnimationEffect(19433, 9016, 200)}</p:childTnLst></p:cTn></p:excl>`
+  const subTimeClickEntries = `${subTimeClickAudio}${subTimeClickVideo}${subTimeClickCommand}${subTimeClickEffect}${subTimeClickParallel}${subTimeClickSequence}${subTimeClickExclusive}${subTimeClickExclusiveSecond}`
+  const shapeMaskClick = `${effectGroup(111, 'clickEffect', 49, 'in', 'circle(in)', 112, 400).replace('</p:childTnLst></p:cTn></p:par>', `</p:childTnLst><p:subTnLst>${subTimeClickEntries}</p:subTnLst></p:cTn></p:par>`)}${effectGroup(113, 'clickEffect', 50, 'out', 'diamond(out)', 114, 400)}${effectGroup(115, 'clickEffect', 51, 'in', 'box(in)', 116, 400)}${effectGroup(117, 'clickEffect', 52, 'in', 'dissolve', 118, 400)}${effectGroup(119, 'clickEffect', 53, 'in', 'wheel(4)', 120, 400)}${effectGroup(121, 'clickEffect', 54, 'in', 'wedge', 122, 400)}${effectGroup(123, 'clickEffect', 55, 'in', 'plus(in)', 124, 400)}${effectGroup(125, 'clickEffect', 56, 'out', 'plus(out)', 126, 400)}${effectGroup(127, 'clickEffect', 57, 'in', 'randombar(horizontal)', 128, 400)}${effectGroup(129, 'clickEffect', 58, 'in', 'randombar(vertical)', 130, 400)}`
   const objectStripsElements = ['downLeft', 'upLeft', 'downRight', 'upRight'].map((direction, index) => shape(65 + index, `Strips ${direction} animation`, index * 3000000, 4200000, 'f97316')).join('')
   const objectStripsClick = ['downLeft', 'upLeft', 'downRight', 'upRight'].map((direction, index) => effectGroup(131 + index * 2, 'clickEffect', 65 + index, 'in', `strips(${direction})`, 132 + index * 2, 400)).join('')
   const barnDirections = ['inHorizontal', 'outHorizontal', 'inVertical', 'outVertical']
@@ -237,20 +317,27 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const stopAudioClick = `<p:par><p:cTn id="19029" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:cmd type="evt" cmd="onstopaudio"><p:cBhvr><p:cTn id="19030" dur="0"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:sldTgt/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par>`
   const crossSlidePlaybackClick = `<p:par><p:cTn id="167" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:audio><p:cMediaNode numSld="2" vol="100000" mute="0"><p:cTn id="168" dur="indefinite"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="5"/></p:tgtEl></p:cMediaNode></p:audio></p:childTnLst></p:cTn></p:par>`
   const stopAudioTriggered = `<p:seq><p:cTn id="19031" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onStopAudio" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(19032, 'clickEffect', 9001, 'in', 'fade', 19033, 100)}</p:childTnLst></p:cTn></p:seq>`
-  const mediaBookmarkTriggered = `<p:seq><p:cTn id="19034" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMediaBookmark" delay="0"><p:tgtEl><p14:bmkTgt spid="3" bmkName="chapter-one"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(19035, 'clickEffect', 9002, 'in', 'fade', 19036, 100)}</p:childTnLst></p:cTn></p:seq>`
+  const interactiveBookmarkGroup = effectGroup(19035, 'clickEffect', 9002, 'in', 'fade', 19036, 100).replace('</p:childTnLst></p:cTn></p:par>', `</p:childTnLst><p:subTnLst>${interactiveSubTimeParallel}</p:subTnLst></p:cTn></p:par>`)
+  const mediaBookmarkTriggered = `<p:seq><p:cTn id="19034" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMediaBookmark" delay="0"><p:tgtEl><p14:bmkTgt spid="3" bmkName="chapter-one"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${interactiveBookmarkGroup}</p:childTnLst></p:cTn></p:seq>`
   const mediaBookmarkStartTriggered = `<p:seq><p:cTn id="19037" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMediaBookmark" delay="0"><p:tgtEl><p14:bmkTgt spid="5" bmkName="chapter-start"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(19038, 'clickEffect', 9003, 'in', 'fade', 19039, 100)}</p:childTnLst></p:cTn></p:seq>`
-  const shapeMaskTiming = `<p:timing><p:tnLst><p:par><p:cTn id="120" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq><p:cTn id="121" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${automaticMediaPlayback}${mediaAfterEffect}${shapeMaskClick}${objectStripsClick}${objectBarnClick}${objectCharacterWipe}${playFromClick}${togglePauseClick}${pauseClick}${stopClick}${stopAudioClick}${crossSlidePlaybackClick}${stopAudioTriggered}${mediaBookmarkTriggered}${mediaBookmarkStartTriggered}</p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+  const mediaNodeEndTriggered = timedNodeSequence(19400, 153, 'onEnd', effectGroup(19401, 'clickEffect', 9004, 'in', 'fade', 19402, 100))
+  const mediaNodeBeginTriggered = timedNodeSequence(19403, 153, 'onBegin', effectGroup(19404, 'clickEffect', 9005, 'in', 'fade', 19405, 100), '600')
+  const mediaNodeBeginTimeNodeTriggered = timedNodeSequence(19406, 153, 'begin', effectGroup(19407, 'clickEffect', 9006, 'in', 'fade', 19408, 100))
+  const mediaNodeEndTimeNodeTriggered = timedNodeSequence(19409, 153, 'end', effectGroup(19410, 'clickEffect', 9007, 'in', 'fade', 19411, 100))
+  const finiteMediaNodeEndTriggered = timedNodeSequence(19412, 156, 'end', effectGroup(19413, 'clickEffect', 9008, 'in', 'fade', 19414, 100))
+  const finiteMediaTargetOnEndTriggered = timedNodeSequence(19415, 156, 'onEnd', effectGroup(19416, 'clickEffect', 9009, 'in', 'fade', 19417, 100))
+  const shapeMaskTiming = `<p:timing><p:tnLst><p:par><p:cTn id="120" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq><p:cTn id="121" dur="indefinite" nodeType="mainSeq"><p:childTnLst>${automaticMediaPlayback}${mediaAfterEffect}${shapeMaskClick}${objectStripsClick}${objectBarnClick}${objectCharacterWipe}${playFromClick}${togglePauseClick}${pauseClick}${stopClick}${stopAudioClick}${crossSlidePlaybackClick}${stopAudioTriggered}${mediaBookmarkTriggered}${mediaBookmarkStartTriggered}${mediaNodeEndTriggered}${mediaNodeBeginTriggered}${mediaNodeBeginTimeNodeTriggered}${mediaNodeEndTimeNodeTriggered}${finiteMediaNodeEndTriggered}${finiteMediaTargetOnEndTriggered}</p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
   const colorEffect = (id, target, property, from, to, paragraphRange = '', colorSpace = 'rgb', direction = 'cw') => `<p:par><p:cTn id="${id}" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr clrSpc="${colorSpace}" dir="${direction}"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}">${paragraphRange ? `<p:txEl><p:pRg st="${paragraphRange.split(',')[0]}" end="${paragraphRange.split(',')[1]}"/></p:txEl>` : ''}</p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="${from}"/></p:from><p:to><a:srgbClr val="${to}"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
   const scaleEffect = `<p:par><p:cTn id="15" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr accumulate="always"><p:cTn id="16" dur="200" fill="remove" repeatCount="1500" repeatDur="1000" autoRev="1"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cBhvr><p:by x="150000" y="150000"/></p:animScale></p:childTnLst></p:cTn></p:par>`
   const motionEffect = `<p:par><p:cTn id="31" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animMotion origin="layout" path="M 0 0 L 0.001 0 M 0.2 0 L 0.25 0 E"><p:cBhvr><p:cTn id="32" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="30"/></p:tgtEl></p:cBhvr></p:animMotion></p:childTnLst></p:cTn></p:par>`
   const curveMotionEffect = `<p:par><p:cTn id="33" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animMotion origin="layout" path="M 0 0 C 0.1 0 0.15 0.2 0.25 0.2 c 0.1 0 0.15 -0.2 0.25 -0.2 Z E"><p:cBhvr><p:cTn id="34" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="29"/></p:tgtEl></p:cBhvr></p:animMotion></p:childTnLst></p:cTn></p:par>`
-  const rotationEffect = `<p:par><p:cTn id="75" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animRot by="5400000"><p:cBhvr><p:cTn id="76" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot></p:childTnLst></p:cTn></p:par>`
+  const rotationEffect = `<p:par><p:cTn id="75" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animRot by="5400000"><p:cBhvr><p:cTn id="76" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot><p:anim calcmode="lin" valueType="num"><p:cBhvr additive="sum"><p:cTn id="76001" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>style.rotation</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0" fmla="#ppt_r+4500000*sin(pi*$)"><p:val><p:fltVal val="0"/></p:val></p:tav><p:tav tm="100000"><p:val><p:fltVal val="-2700000"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const triggeredRotation = `<p:par><p:cTn id="73" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animRot by="3000000"><p:cBhvr><p:cTn id="74" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="9"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot></p:childTnLst></p:cTn></p:par>`
   const shadowColorEffect = colorEffect(87, 3, 'shadow.color', '000000', 'ff0000').replace('<a:srgbClr val="000000"/>', '<a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr>').replace('<a:srgbClr val="ff0000"/>', '<a:srgbClr val="ff0000"><a:alpha val="50000"/></a:srgbClr>')
   const characterRangeShadowColorEffect = colorEffect(13006, 132, 'shadow.color', '000000', 'ff0000').replace('<p:spTgt spid="132"></p:spTgt>', '<p:spTgt spid="132"><p:txEl><p:charRg st="0" end="10"/></p:txEl></p:spTgt>')
   const triggeredColors = `${colorEffect(81, 3, 'fillcolor', '2563eb', 'ff0000')}${colorEffect(83, 42, 'stroke.color', '0000ff', 'ff0000', '', 'hsl', 'cw')}${colorEffect(85, 7, 'style.color', '000000', 'ff00ff', '0,0')}${shadowColorEffect}${characterRangeShadowColorEffect}`
   const opacityEffect = (id, target, property, from, to) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="${from}" to="${to}" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
-  const opacityFormulaAnimation = (id, target, property, from, to) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0" fmla="#${property}+0.2*sin(pi*$)"><p:val><p:fltVal val="${from}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:fltVal val="${to}"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  const opacityFormulaAnimation = (id, target, property, from, to) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0" fmla="#${property}+rand(0.01)+0.2*sin(pi*$)"><p:val><p:fltVal val="${from}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:fltVal val="${to}"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const textRangeOpacityEffect = (id, property) => opacityEffect(id, 132, property, 1, 0.25).replace('<p:spTgt spid="132"/>', '<p:spTgt spid="132"><p:txEl><p:charRg st="0" end="10"/></p:txEl></p:spTgt>')
   const textRangeOpacityEffects = `${textRangeOpacityEffect(13000, 'fill.opacity')}${textRangeOpacityEffect(13002, 'stroke.opacity')}${textRangeOpacityEffect(13004, 'shadow.opacity')}`
   const textRangeFormulaEffects = [['fill.opacity', 132, 10, 17, 0.2, 0.4], ['stroke.opacity', 132, 10, 17, 0.3, 0.5], ['shadow.opacity', 132, 10, 17, 0.2, 0.4], ['style.opacity', 150, 0, 3, 0.2, 0.4]]
@@ -279,6 +366,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const textOutlineAnimation = `<p:par><p:cTn id="12018" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="false" to="true" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12019" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl><p:attrNameLst><p:attrName>style.textEffectOutline</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const textOutlineRangeAnimation = `<p:par><p:cTn id="19880" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="true" to="false" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19881" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="137"><p:txEl><p:charRg st="0" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.textEffectOutline</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const visibilityAnimation = `<p:anim from="visible" to="hidden" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12025" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="130"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr></p:anim>`
+  const nestedVisibilityAnimation = (animationId, targetId, duration = 300) => visibilityAnimation.replace('id="12025"', `id="${animationId}"`).replace('spid="130"', `spid="${targetId}"`).replace('dur="300"', `dur="${duration}"`)
   const visibilityKeyframes = `<p:anim calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="12027" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="131"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:strVal val="hidden"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="visible"/></p:val></p:tav></p:tavLst></p:anim>`
   const grayscaleDirect = `<p:par><p:cTn id="19000" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="false" to="true" calcmode="discrete" valueType="str"><p:cBhvr><p:cTn id="19001" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="300"/></p:tgtEl><p:attrNameLst><p:attrName>imageData.grayscale</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const unsupportedChromakeyColorAnimation = `<p:par><p:cTn id="19024" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr clrSpc="rgb"><p:cBhvr><p:cTn id="19025" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="300"/></p:tgtEl><p:attrNameLst><p:attrName>imageData.chromakey</p:attrName></p:attrNameLst></p:cBhvr><p:to><a:srgbClr val="ffffff"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
@@ -335,11 +423,19 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const imageGamma = `<p:par><p:cTn id="19021" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="19022" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="308"/></p:tgtEl><p:attrNameLst><p:attrName>imageData.gamma</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="0.5"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
   const innerShadowFixture = '<a:innerShdw blurRad="63500" dist="127000" dir="2700000"><a:srgbClr val="ffff00"><a:alpha val="75000"/></a:srgbClr></a:innerShdw>'
   const pictureGlowDag = `<a:effectDag type="sib">${innerShadowFixture}<a:glow rad="100000"><a:srgbClr val="ff00ff"/></a:glow><a:glow rad="50000"><a:srgbClr val="00ffff"/></a:glow></a:effectDag>`
-  const grayscalePictures = `${picture(300, 'Grayscale direct', 9000000).replace('</p:spPr>', `${pictureGlowDag}</p:spPr>`)}${picture(301, 'Grayscale keyframes', 9900000)}${picture(302, 'Grayscale p:set', 10800000)}${picture(303, 'Crop direct', 1000000)}${picture(304, 'Crop keyframes', 2000000)}${picture(305, 'Crop p:set', 3000000)}${picture(306, 'Image gain', 4000000)}${picture(307, 'Image blacklevel', 5000000)}${picture(308, 'Image gamma', 6000000)}`
+  const grayscalePictures = `${picture(300, 'Grayscale direct', 9000000).replace('</p:spPr>', `${pictureGlowDag}</p:spPr>`)}${picture(301, 'Grayscale keyframes', 9900000)}${picture(302, 'Grayscale p:set', 10800000)}${picture(303, 'Crop direct', 1000000)}${picture(304, 'Crop keyframes', 2000000)}${picture(305, 'Crop p:set', 3000000)}${picture(306, 'Image gain', 4000000)}${picture(307, 'Image blacklevel', 5000000)}${picture(308, 'Image gamma', 6000000)}${picture(309, 'Static grayscale', 7000000).replace('<a:blip r:embed="rIdBullet"/>', '<a:blip r:embed="rIdBullet"><a:grayscl/></a:blip>')}${picture(310, 'Scale accumulation', 8000000)}${picture(311, 'Motion accumulation', 11000000)}${picture(312, 'Scale to only', 12000000)}`
+  const scaleAccumulationAnimation = `<p:par><p:cTn id="19040" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr accumulate="always"><p:cTn id="19041" dur="100" repeatCount="3000" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="310"/></p:tgtEl></p:cBhvr><p:by x="150000" y="150000"/></p:animScale></p:childTnLst></p:cTn></p:par>`
+  const scaleAccumulationTriggered = `<p:seq><p:cTn id="19042" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="310"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${scaleAccumulationAnimation}</p:childTnLst></p:cTn></p:seq>`
+  const scaleToOnlyAnimation = `<p:par><p:cTn id="19046" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr><p:cTn id="19047" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="312"/></p:tgtEl></p:cBhvr><p:to x="150000" y="150000"/></p:animScale><p:anim by="2" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="19053" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="312"/></p:tgtEl><p:attrNameLst><p:attrName>ScaleX</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
+  const scaleAxisAnimation = `<p:par><p:cTn id="19049" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="1" to="2" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="19050" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl><p:attrNameLst><p:attrName>ScaleX</p:attrName></p:attrNameLst></p:cBhvr></p:anim><p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="19051" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="2"/></p:tgtEl><p:attrNameLst><p:attrName>ScaleY</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0" fmla="#ScaleY+$"><p:val><p:fltVal val="1"/></p:val></p:tav><p:tav tm="100000" fmla="#ScaleY+$"><p:val><p:fltVal val="1"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  const scaleAxisTriggered = `<p:seq><p:cTn id="19052" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${scaleAxisAnimation}</p:childTnLst></p:cTn></p:seq>`
+  const scaleToOnlyTriggered = `<p:seq><p:cTn id="19048" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="312"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${scaleToOnlyAnimation}</p:childTnLst></p:cTn></p:seq>${scaleAxisTriggered}`
+  const motionAccumulationAnimation = `<p:par><p:cTn id="19043" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animMotion origin="parent"><p:cBhvr accumulate="always"><p:cTn id="19044" dur="100" repeatCount="3000" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="311"/></p:tgtEl></p:cBhvr><p:by x="1000" y="0"/></p:animMotion></p:childTnLst></p:cTn></p:par>`
+  const motionAccumulationTriggered = `<p:seq><p:cTn id="19045" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="311"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${motionAccumulationAnimation}</p:childTnLst></p:cTn></p:seq>`
   const grayscaleTriggered = `<p:seq><p:cTn id="19006" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="300"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${grayscaleDirect}${grayscaleKeyframes}${setGrayscale}${unsupportedChromakeyColorAnimation}</p:childTnLst></p:cTn></p:seq>`
   const cropTriggered = `<p:seq><p:cTn id="19016" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="300"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${cropDirect}${cropKeyframes}${cropSet}</p:childTnLst></p:cTn></p:seq>`
   const imageToneTriggered = `<p:seq><p:cTn id="19023" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="300"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${imageGain}${imageBlacklevel}${imageGamma}</p:childTnLst></p:cTn></p:seq>`
-  const grayscaleTiming = `<p:timing><p:tnLst><p:par><p:cTn id="19007" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="19008" dur="indefinite" nodeType="mainSeq"><p:childTnLst/></p:cTn></p:seq>${grayscaleTriggered}${cropTriggered}${imageToneTriggered}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+  const grayscaleTiming = `<p:timing><p:tnLst><p:par><p:cTn id="19007" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="19008" dur="indefinite" nodeType="mainSeq"><p:childTnLst/></p:cTn></p:seq>${grayscaleTriggered}${cropTriggered}${imageToneTriggered}${scaleAccumulationTriggered}${motionAccumulationTriggered}${scaleToOnlyTriggered}</p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
   const strokeWeightAnimation = (id, target, from, to) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim from="${from}" to="${to}" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.weight</p:attrName></p:attrNameLst></p:cBhvr></p:anim></p:childTnLst></p:cTn></p:par>`
   const strokeWeightFormulaAnimation = (id, target, value) => `<p:par><p:cTn id="${id}" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.weight</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0" fmla="#stroke.weight+508000*sin(pi*$)"><p:val><p:fltVal val="${value}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:fltVal val="${value}"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const strokeWeightSet = `<p:par><p:cTn id="12130" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="12131" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="136"/></p:tgtEl><p:attrNameLst><p:attrName>stroke.weight</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:fltVal val="3048000"/></p:to></p:set></p:childTnLst></p:cTn></p:par>`
@@ -384,10 +480,12 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const letterWipeAndSlide = letterWipe.replace('</p:animEffect></p:childTnLst>', `</p:animEffect>${letterSlide}${letterScale}${letterRotation}${letterVisibility}</p:childTnLst>`)
   const timingWithLetterWipe = timingWithZeroInterval.replace(letterFade, letterWipeAndSlide)
   assert(timingWithLetterWipe !== timing && letterWipeAndSlide.includes('filter="slide(fromLeft)"') && letterWipeAndSlide.includes('<p:attrName>style.visibility</p:attrName>'), 'The by-letter wipe, slide, and visibility fixtures must be included in slide timing.')
+  const timingWithTextBlinds = timingWithLetterWipe.replace(letterWipeAndSlide, `${letterWipeAndSlide}${letterBlinds}`).replace(objectBlinds, `${objectBlinds}${wordBlinds}`)
+  assert(timingWithTextBlinds !== timingWithLetterWipe, 'The by-letter and by-word blinds fixtures must be included in slide timing.')
   const wordStrips = `<p:animEffect transition="in" filter="strips(downLeft)"><p:cBhvr><p:cTn id="29103" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr></p:animEffect>`
   const wordMotion = `<p:animMotion origin="parent"><p:cBhvr><p:cTn id="29106" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="45"/></p:tgtEl></p:cBhvr><p:by x="0" y="10000"/></p:animMotion>`
   const wordFadeWithStrips = wordFade.replace('<p:animEffect transition="in" filter="fade">', `${wordStrips}<p:animEffect transition="in" filter="fade">`).replace('</p:animEffect></p:childTnLst></p:cTn></p:par>', `</p:animEffect>${wordMotion}</p:childTnLst></p:cTn></p:par>`)
-  const timingWithWordStrips = timingWithLetterWipe.replace(wordFade, wordFadeWithStrips)
+  const timingWithWordStrips = timingWithTextBlinds.replace(wordFade, wordFadeWithStrips)
   assert(timingWithWordStrips !== timingWithLetterWipe, 'The by-word strips fixture must be included in slide timing.')
   const timingWithOnOff = timingWithWordStrips.replace(onOffTimingClose, `${onOffTriggered}${onOffTimingClose}`)
   assert(timingWithOnOff !== timing, 'The appearance toggle trigger must be included in slide timing.')
@@ -422,9 +520,10 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const wipeShapes = ['right', 'left', 'up', 'down'].map((direction, index) => shape(20 + index, `Wipe ${direction}`, index * 3000000, 4000000, '38bdf8')).join('')
   const characterSlideShape = plainTextShape(160, 'Character slide animation', 9000000, 5900000, 'RESTMOVE')
   const zeroIntervalTextShape = plainTextShape(162, 'Zero-interval letters', 9000000, 5700000, 'SYNC')
+  const wordBlindsShape = plainTextShape(172, 'By-word blinds', 9000000, 6000000, 'FIRST SECOND')
   const animatedShapes = `${shape(2, 'Click fade', 0, 0, 'ef4444')}${shadowedWithPrevious}${shape(4, 'Exit after previous', 6000000, 0, 'f59e0b')}${shape(5, 'Second click', 9000000, 0, '7c3aed')}${shape(6, 'Automatic fade', 0, 3000000, '0891b2')}${textShape(7, 'Paragraph build', 3000000, 3000000)}${plainTextShape(43, 'By letter', 0, 5700000, 'WORD')}${plainTextShape(45, 'By word', 3000000, 5700000, 'ONE TWO', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${shape(44, 'After letters', 6000000, 5700000, '14b8a6')}${shape(46, 'Blinds animation', 9000000, 4000000, '64748b')}${shape(47, 'Checker animation', 3000000, 4000000, '0ea5e9')}${shape(8, 'Scale emphasis', 8000000, 3000000, 'd946ef')}${shape(30, 'Motion path', 1000000, 3000000, '0f766e')}${shape(29, 'Curved motion path', 1000000, 3000000, 'fb923c')}${wipeShapes}${shape(24, 'Wipe exit', 8000000, 0, 'fb7185')}${shape(60, 'Slide entrance and exit', 9300000, 2500000, '22c55e')}${groupedShape}${customGeometryShapeWithGuides}${customGeometryTextShape}${invalidCustomGeometryTextShape}${customGradientShape}${elementIterationGroup}${shape(90, 'Next event target', 9000000, 5500000, '0891b2')}${shape(91, 'Previous event target', 10500000, 5500000, '9333ea')}${shape(97, 'Rotated fixed motion path', 4500000, 3000000, '0ea5e9', 500000, 500000)}${shape(98, 'Fast speed trigger', 8000000, 5200000, '0ea5e9')}${shape(99, 'Fast speed fade', 8500000, 5200000, 'f97316')}${shape(100, 'Reverse speed trigger', 6000000, 5200000, '14b8a6')}${shape(101, 'Reverse speed scale', 6500000, 5200000, 'a855f7')}${shape(102, 'Parent eased fade', 7000000, 5200000, 'facc15')}${shape(103, 'Parent timing after-effect', 7500000, 5200000, '22c55e')}${shape(104, 'Parent speed delayed', 8000000, 5200000, 'fb923c')}${shape(122, 'Formula fixed motion path', 5500000, 3500000, '0d9488')}${shape(123, 'Dynamic formula motion path', 6000000, 3500000, '0d9488')}${parentMotionGroup}${opacityFormulaShape}`
   const parentRepeatShapes = `${shape(105, 'Parent repeat count trigger', 1000000, 5000000, '0ea5e9')}${shape(106, 'Parent repeat count target', 2000000, 5000000, 'f97316')}${shape(107, 'Parent repeat duration trigger', 3000000, 5000000, '14b8a6')}${shape(108, 'Parent repeat duration target', 4000000, 5000000, 'a855f7')}${shape(109, 'Parent repeat after-effect', 5000000, 5000000, '22c55e')}`
-  const parentTimingShapes = `${shape(112, 'Parent reverse speed trigger', 6000000, 5000000, '0ea5e9')}${shape(113, 'Parent reverse speed fade', 7000000, 5000000, 'f97316')}${shape(114, 'Parent auto-reverse trigger', 8000000, 5000000, '14b8a6')}${shape(115, 'Parent auto-reverse fade', 9000000, 5000000, 'a855f7')}${shape(116, 'Parent indefinite repeat trigger', 10000000, 5000000, '14b8a6')}${shape(117, 'Parent indefinite repeat fade', 10500000, 5000000, 'a855f7')}${shape(118, 'Child repeat duration trigger', 2000000, 6200000, '14b8a6')}${shape(119, 'Child repeat duration fade', 4500000, 6200000, 'a855f7')}`
+  const parentTimingShapes = `${shape(112, 'Parent reverse speed trigger', 6000000, 5000000, '0ea5e9')}${shape(113, 'Parent reverse speed fade', 7000000, 5000000, 'f97316')}${shape(114, 'Parent auto-reverse trigger', 8000000, 5000000, '14b8a6')}${shape(115, 'Parent auto-reverse fade', 9000000, 5000000, 'a855f7')}${shape(116, 'Parent indefinite repeat trigger', 10000000, 5000000, '14b8a6')}${shape(117, 'Parent indefinite repeat fade', 10500000, 5000000, 'a855f7')}${shape(118, 'Child repeat duration trigger', 2000000, 6200000, '14b8a6')}${shape(119, 'Child repeat duration fade', 4500000, 6200000, 'a855f7')}${shape(126, 'Action repeat count trigger', 6500000, 6200000, '0ea5e9')}${shape(127, 'Action repeat count target', 7500000, 6200000, 'f97316')}${shape(128, 'Action repeat duration trigger', 9000000, 6200000, '14b8a6')}${shape(129, 'Action repeat duration target', 10000000, 6200000, 'a855f7')}`
   const normalAutofitShape = plainTextShape(120, 'Normal autofit', 0, 5900000, 'Autofit sample')
     .replace('<a:bodyPr/>', '<a:bodyPr><a:normAutofit fontScale="80%" lnSpcReduction="25%"/></a:bodyPr>')
     .replace('sz="1800"', 'sz="2000"')
@@ -447,27 +546,45 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const patternFillShape = (id, name, x, preset, foreground, background, geometry = 'rect') => shape(id, name, x, 6500000, background, 1200000, 600000)
     .replace('<a:prstGeom prst="rect">', `<a:prstGeom prst="${geometry}">`)
     .replace(`<a:solidFill><a:srgbClr val="${background}"/></a:solidFill>`, `<a:pattFill prst="${preset}"><a:fgClr><a:srgbClr val="${foreground}"/></a:fgClr><a:bgClr><a:srgbClr val="${background}"/></a:bgClr></a:pattFill>`)
-  const patternFillText = plainTextShape(19999, 'Pattern-filled text', 5000000, 6500000, 'Pattern text', '<a:pattFill prst="horz"><a:fgClr><a:srgbClr val="dc2626"/></a:fgClr><a:bgClr><a:srgbClr val="fff7ed"/></a:bgClr></a:pattFill>')
-  const patternFillShapes = `${patternFillShape(13001, 'Horizontal pattern fill', 100000, 'horz', 'dc2626', 'fff7ed')}${patternFillShape(13002, 'Percent pattern fill', 1500000, 'pct25', '1d4ed8', 'eff6ff')}${patternFillShape(13003, 'SVG pattern fill fallback', 2900000, 'cross', '15803d', 'f0fdf4', 'triangle')}${patternFillText}`
+  const patternOutlineShape = shape(13005, 'Pattern outline fill', 5600000, 6500000, 'fff7ed', 1200000, 600000)
+    .replace('</p:spPr>', '<a:ln w="63500"><a:pattFill prst="vert"><a:fgClr><a:srgbClr val="7c3aed"/></a:fgClr><a:bgClr><a:srgbClr val="ede9fe"/></a:bgClr></a:pattFill></a:ln></p:spPr>')
+  const patternOutlineConnector = connector(13006, 'Pattern outline connector', 'straightConnector1', 700000, 6200000, 1200000, 300000)
+    .replace('<a:solidFill><a:srgbClr val="1d4ed8"/></a:solidFill>', '<a:pattFill prst="horz"><a:fgClr><a:srgbClr val="1d4ed8"/></a:fgClr><a:bgClr><a:srgbClr val="dbeafe"/></a:bgClr></a:pattFill>')
+    .replace('</a:pattFill></a:ln>', '</a:pattFill><a:tailEnd type="triangle" w="med" len="med"/></a:ln>')
+  const patternFillModeShape = shape(13004, 'Pattern fill path mode', 4200000, 6500000, 'f0fdf4', 1200000, 600000)
+    .replace('<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>', '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="1000" b="1000"/><a:pathLst><a:path w="1000" h="1000" fill="lighten"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/></a:lnTo><a:lnTo><a:pt x="500" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>')
+    .replace('<a:solidFill><a:srgbClr val="f0fdf4"/></a:solidFill>', '<a:pattFill prst="cross"><a:fgClr><a:srgbClr val="15803d"/></a:fgClr><a:bgClr><a:srgbClr val="f0fdf4"/></a:bgClr></a:pattFill>')
+  const patternFillText = plainTextShape(19999, 'Pattern-filled text', 5000000, 6500000, 'Pattern\ttext', '<a:pattFill prst="horz"><a:fgClr><a:srgbClr val="dc2626"/></a:fgClr><a:bgClr><a:srgbClr val="fff7ed"/></a:bgClr></a:pattFill>')
+    .replace('<a:p>', '<a:p><a:pPr><a:tabLst><a:tab pos="914400" algn="l"/><a:tab pos="1828800" algn="l"/></a:tabLst></a:pPr>')
+    .replace('</a:p></p:txBody>', '</a:p><a:p><a:pPr><a:tabLst><a:tab pos="914400" algn="r"/></a:tabLst></a:pPr><a:r><a:rPr sz="1800"/><a:t>Fallback\ttext</a:t></a:r></a:p></p:txBody>')
+    .replace('</a:p></p:txBody>', '</a:p><a:p><a:pPr defTabSz="457200"/><a:r><a:rPr sz="1800"/><a:t>A\tCustom</a:t></a:r></a:p><a:p><a:r><a:rPr sz="1800"/><a:t>B\tOffice default</a:t></a:r></a:p></p:txBody>')
+  const patternFillShapes = `${patternFillShape(13001, 'Horizontal pattern fill', 100000, 'horz', 'dc2626', 'fff7ed')}${patternFillShape(13002, 'Percent pattern fill', 1500000, 'pct25', '1d4ed8', 'eff6ff')}${patternFillShape(13003, 'SVG pattern fill', 2900000, 'cross', '15803d', 'f0fdf4', 'triangle')}${patternFillModeShape}${patternFillText}${patternOutlineShape}${patternOutlineConnector}`
   const effectDagShape = (id, name, x, effects) => shape(id, name, x, 6200000, 'e2e8f0', 2400000, 500000).replace('</p:spPr>', `${effects}</p:spPr>`)
   const dagShadow = '<a:outerShdw blurRad="127000" dist="76200" dir="2700000"><a:srgbClr val="123456"><a:alpha val="60000"/></a:srgbClr></a:outerShdw>'
   const dagShadowSecond = '<a:outerShdw blurRad="63500" dist="127000" dir="0"><a:srgbClr val="00ff00"/></a:outerShdw>'
+  const dagTransformedShadow = '<a:outerShdw sx="125000" sy="80000" kx="2700000" ky="5400000" algn="ctr" rotWithShape="0" blurRad="127000" dist="76200" dir="2700000"><a:srgbClr val="123456"/></a:outerShdw>'
   const dagGlowSecond = '<a:glow rad="50000"><a:srgbClr val="0000ff"/></a:glow>'
-  const effectDagShapes = `${effectDagShape(7100, 'Sibling effect DAG', 300000, `<a:effectDag type="sib">${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${effectDagShape(7101, 'Tree effect DAG', 3700000, `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${effectDagShape(7102, 'Nested effect DAG', 7100000, `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}`
+  const effectDagShapes = `${effectDagShape(7100, 'Sibling effect DAG', 300000, `<a:effectDag type="sib">${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${effectDagShape(7101, 'Tree effect DAG', 3700000, `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${effectDagShape(7102, 'Nested effect DAG', 7100000, `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}${effectDagShape(7103, 'Transformed outer shadow', 40000000, `<a:effectDag type="sib">${dagTransformedShadow}</a:effectDag>`)}`
   const effectDagTextShapes = `${plainTextShape(7110, 'Sibling text effect DAG', 300000, 5200000, 'Sibling text', `<a:effectDag>${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${plainTextShape(7111, 'Tree text effect DAG', 3700000, 5200000, 'Tree text', `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${plainTextShape(7112, 'Nested text effect DAG', 7100000, 5200000, 'Nested text', `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}${plainTextShape(7113, 'Single text tree effect DAG', 9500000, 5200000, 'Single tree effect', `<a:effectDag type="tree">${dagShadow}</a:effectDag>`)}`
-  const animatedSlide = `${animatedShapes}${connectorShapes}${parentRepeatShapes}${parentTimingShapes}${normalAutofitShape}${autofitReferenceShape}${lineShape(42, 'Stroke color', 500000, 6000000, '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="diamond" w="sm" len="sm"/>')}${plainTextShape(59, 'Paragraph wipe target', 9000000, 5500000, 'Paragraph wipe target', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${textRangeOpacityShape}`
+  const animatedSlide = `${animatedShapes}${shadowedEllipse}${connectorShapes}${parentRepeatShapes}${parentTimingShapes}${normalAutofitShape}${autofitReferenceShape}${lineShape(42, 'Stroke color', 500000, 6000000, '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="diamond" w="sm" len="sm"/>')}${plainTextShape(59, 'Paragraph wipe target', 9000000, 5500000, 'Paragraph wipe target', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${textRangeOpacityShape}`
   const animatedSlideWithZeroInterval = `${animatedSlide}${zeroIntervalTextShape}`
   const insetEffectFixtures = [
     shape(7114, 'Shape inner effect list', 300000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
     shape(7115, 'Shape inner effect DAG', 2700000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectDag type="sib">${dagShadow}${innerShadowFixture}</a:effectDag></p:spPr>`),
-    shape(7116, 'Unsupported polygon inner shadow', 5100000, 6100000, 'e2e8f0', 2200000, 500000).replace('<a:prstGeom prst="rect">', '<a:prstGeom prst="triangle">').replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
+    shape(7116, 'Triangle inner shadow', 5100000, 6100000, 'e2e8f0', 2200000, 500000).replace('<a:prstGeom prst="rect">', '<a:prstGeom prst="triangle">').replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
+    shape(7119, 'Custom geometry inner shadow', 300000, 6800000, 'e2e8f0', 2200000, 500000).replace('<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>', '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="0" b="0"/><a:pathLst><a:path w="1000" h="1000"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="1000" y="0"/></a:lnTo><a:lnTo><a:pt x="500" y="1000"/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>').replace('</p:spPr>', `<a:effectDag type="sib">${innerShadowFixture}</a:effectDag></p:spPr>`),
+    shape(7120, 'Unsupported preset inner shadow', 2700000, 6800000, 'e2e8f0', 2200000, 500000).replace('<a:prstGeom prst="rect">', '<a:prstGeom prst="flowChartDelay">').replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
     plainTextShape(7117, 'Direct text inner shadow', 7500000, 6100000, 'Text inner shadow', `<a:effectLst>${innerShadowFixture}</a:effectLst>`),
     plainTextShape(7118, 'DAG text inner shadow', 9900000, 6100000, 'Text inner shadow', `<a:effectDag>${innerShadowFixture}</a:effectDag>`)
   ].join('')
-  const animatedSlideWithTextShadow = `${animatedSlideWithZeroInterval}${characterSlideShape}${textShadowShapes}${appearanceToggleShape}${textOutlineRangeShape}`
+  const animatedSlideWithTextShadow = `${animatedSlideWithZeroInterval}${characterSlideShape}${wordBlindsShape}${textShadowShapes}${appearanceToggleShape}${textOutlineRangeShape}`
   const animatedSlideWithRelativeMotion = `${animatedSlideWithTextShadow}${shape(92, 'Relative position motion', 4500000, 3000000, 'ea580c')}${shape(93, 'From/to motion', 5500000, 3000000, 'c026d3')}${shape(94, 'From/by motion', 6500000, 3000000, 'ca8a04')}${shape(95, 'To-only motion', 7500000, 3000000, '2563eb')}${shape(96, 'Fixed motion path', 4500000, 4000000, '0d9488')}`.replace('<a:ln w="25400">', '<a:ln w="25400"><a:prstDash val="dash"/>')
     zip.file('ppt/slides/slide1.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${tree(`${animatedSlideWithRelativeMotion}${pictureBulletFixture}`)}<p:transition spd="med"><p:zoom dir="in"/></p:transition>${timingWithRelativeMotion}</p:sld>`)
   const lineChartPart = chartPart.replace('<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>', '<c:lineChart><c:grouping val="standard"/>').replaceAll('barChart', 'lineChart')
+  const smoothLineChartPart = lineChartPart
+    .replace('</c:lineChart>', '<c:smooth val="1"/></c:lineChart>')
+    .replace('</c:ser>', '<c:smooth val="0"/></c:ser>')
+  const lineWidthChartPart = lineChartPart.replace('<c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill></c:spPr>', '<c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill><a:ln w="38100" cap="sq"><a:solidFill><a:srgbClr val="f97316"/></a:solidFill><a:prstDash val="dash"/></a:ln></c:spPr>')
   const bracketShapeFixtures = [
     ['leftBracket', undefined, 2_600_000, 800_000],
     ['rightBracket', undefined, 2_600_000, 800_000],
@@ -522,10 +639,17 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const stackedAreaChartPart = areaChartPart.replace('<c:grouping val="standard"/>', '<c:grouping val="stacked"/>')
   const percentStackedAreaChartPart = areaChartPart.replace('<c:grouping val="standard"/>', '<c:grouping val="percentStacked"/>')
   const pieChartPart = chartPart.replace('<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>', '<c:pieChart>').replace('<c:axId val="1"/><c:axId val="2"/>', '').replaceAll('barChart', 'pieChart')
+  const pieChartPointOutlinePart = pieChartPart.replace('</c:val></c:ser>', '</c:val><c:dPt><c:idx val="1"/><c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill><a:ln w="31750" cap="rnd"><a:solidFill><a:srgbClr val="1d4ed8"/></a:solidFill><a:prstDash val="dot"/></a:ln></c:spPr></c:dPt></c:ser>')
   const doughnutChartPart = pieChartPart.replaceAll('pieChart', 'doughnutChart').replace('</c:doughnutChart>', '<c:firstSliceAng val="90"/><c:holeSize val="40"/></c:doughnutChart>')
   const scatterCache = values => `<c:numRef><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${values.length}"/>${values.map((value, index) => `<c:pt idx="${index}"><c:v>${value}</c:v></c:pt>`).join('')}</c:numCache></c:numRef>`
-  const scatterSeries = (index, name, color, x, y, noLine = false) => `<c:ser><c:idx val="${index}"/><c:order val="${index}"/><c:tx><c:v>${name}</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${noLine ? '<a:ln><a:noFill/></a:ln>' : ''}</c:spPr>${index === 1 ? '<c:dPt><c:idx val="1"/><c:marker><c:symbol val="triangle"/><c:size val="10"/></c:marker></c:dPt>' : ''}<c:marker><c:symbol val="${index === 0 ? 'diamond' : 'square'}"/><c:size val="7"/></c:marker><c:xVal>${scatterCache(x)}</c:xVal><c:yVal>${scatterCache(y)}</c:yVal></c:ser>`
+  const scatterSeries = (index, name, color, x, y, noLine = false) => `<c:ser><c:idx val="${index}"/><c:order val="${index}"/><c:tx><c:v>${name}</c:v></c:tx><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill>${noLine ? '<a:ln><a:noFill/></a:ln>' : ''}</c:spPr>${index === 1 ? '<c:dPt><c:idx val="1"/><c:marker><c:symbol val="triangle"/><c:size val="10"/></c:marker><c:spPr><a:solidFill><a:srgbClr val="f97316"/></a:solidFill><a:ln w="31750"><a:prstDash val="dashDot"/><a:pattFill prst="cross"><a:fgClr><a:srgbClr val="7c3aed"/></a:fgClr><a:bgClr><a:srgbClr val="ede9fe"/></a:bgClr></a:pattFill></a:ln></c:spPr></c:dPt>' : ''}<c:marker><c:symbol val="${index === 0 ? 'diamond' : 'square'}"/><c:size val="7"/></c:marker><c:xVal>${scatterCache(x)}</c:xVal><c:yVal>${scatterCache(y)}</c:yVal></c:ser>`
   const scatterChartPart = `<?xml version="1.0"?><c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Measured values</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:layout/><c:scatterChart>${scatterSeries(0, 'Sensor A', '0ea5e9', [1, 3, 5], [10, 20, 15])}${scatterSeries(1, 'Sensor B', 'f97316', [2, 4, 6], [15, 25, 5], true)}<c:axId val="700"/><c:axId val="701"/></c:scatterChart><c:valAx><c:axId val="700"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/><c:max val="6"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:majorGridlines/><c:numFmt formatCode="0" sourceLinked="0"/><c:majorUnit val="2"/><c:majorTickMark val="out"/><c:tickLblPos val="nextTo"/><c:crossAx val="701"/><c:crosses val="autoZero"/></c:valAx><c:valAx><c:axId val="701"/><c:scaling><c:orientation val="minMax"/><c:min val="0"/><c:max val="30"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="0" sourceLinked="0"/><c:majorUnit val="10"/><c:majorTickMark val="out"/><c:tickLblPos val="nextTo"/><c:crossAx val="700"/><c:crosses val="autoZero"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/></c:legend></c:chart></c:chartSpace>`
+  const smoothScatterChartPart = scatterChartPart
+    .replace('<c:scatterChart>', '<c:scatterChart><c:scatterStyle val="smoothMarker"/>')
+    .replace(
+      scatterSeries(1, 'Sensor B', 'f97316', [2, 4, 6], [15, 25, 5], true),
+      scatterSeries(1, 'Sensor B', 'f97316', [2, 4, 6], [15, 25, 5]).replace('</c:ser>', '<c:smooth val="0"/></c:ser>'),
+    )
   const logScatterChartPart = scatterChartPart
     .replace(scatterSeries(0, 'Sensor A', '0ea5e9', [1, 3, 5], [10, 20, 15]), scatterSeries(0, 'Sensor A', '0ea5e9', [1, 10, 100], [1, 10, 100]))
     .replace(scatterSeries(1, 'Sensor B', 'f97316', [2, 4, 6], [15, 25, 5], true), scatterSeries(1, 'Sensor B', 'f97316', [0, 2, 100], [10, -1, 100], true))
@@ -593,21 +717,43 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
       ? seriesXml.replace('</c:pieChart>', `${labels}</c:pieChart>`)
       : seriesXml.replace('<c:axId val="1"/>', `${labels}<c:axId val="1"/>`)
   }
-  const pieWithPercentLabels = withValueLabels(pieChartPart, 'pieChart')
-    .replace('<c:dLbls><c:showVal val="1"/></c:dLbls>', '<c:dLbls><c:showVal val="0"/><c:showPercent val="1"/></c:dLbls>')
-    .replace('</c:val></c:ser>', '</c:val><c:dLbls><c:showCatName val="1"/><c:dLbl><c:idx val="1"/><c:showPercent val="0"/><c:showVal val="1"/><c:separator> / </c:separator></c:dLbl></c:dLbls></c:ser>')
+  const pieWithPercentLabels = withValueLabels(pieChartPointOutlinePart, 'pieChart', false, false, '[Red][&lt;=0.25]0.0%;[Blue][&gt;0.25]0.0%')
+    .replace('<c:showVal val="1"/></c:dLbls>', '<c:showVal val="0"/><c:showPercent val="1"/><c:dLblPos val="outEnd"/><c:showLeaderLines/></c:dLbls>')
+    .replace('</c:dPt></c:ser>', '</c:dPt><c:dLbls><c:showCatName val="1"/><c:dLbl><c:idx val="1"/><c:showLeaderLines val="0"/><c:numFmt formatCode="[Blue]0" sourceLinked="0"/><c:showPercent val="0"/><c:showVal val="1"/><c:separator> / </c:separator></c:dLbl></c:dLbls></c:ser>')
   zip.file('ppt/slides/slide2.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${tree(`${shape(2, 'Second slide', 0, 0, '16a34a')}${table}${gradientShape}${luminanceShape}${groupedShape}${chartFrame(12, 'Quarterly sales chart', 'rIdChart1', 7500000, 4000000, 4300000, 2600000)}${chartFrame(13, 'Quarterly trend chart', 'rIdChart2', 7500000, 100000, 4300000, 2500000)}${chartFrame(14, 'Quarterly share chart', 'rIdChart3', 7500000, 2700000, 4300000, 2500000)}${chartFrame(15, 'Horizontal axis tick chart', 'rIdChart4', 15000000, 8000000, 4300000, 2600000)}${chartFrame(16, 'Category axis deleted chart', 'rIdChart5', 15000000, 11000000, 4300000, 2600000)}${chartFrame(17, 'Value axis deleted chart', 'rIdChart6', 15000000, 14000000, 4300000, 2600000)}`)}<p:transition spd="med"><p:cover dir="ru"/></p:transition></p:sld>`)
   zip.file('ppt/slides/_rels/slide2.xml.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/><Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/><Relationship Id="rIdChart3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart3.xml"/><Relationship Id="rIdChart4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart4.xml"/><Relationship Id="rIdChart5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart5.xml"/><Relationship Id="rIdChart6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart6.xml"/></Relationships>`)
-  zip.file('ppt/charts/chart1.xml', withLegend(withValueAxis(withPointLabelPosition(withLabelPosition(withValueLabels(chartPart, 'barChart', true, false, '#,##0.0'), 'outEnd'), 1, 'ctr'), { min: 0, max: 30, majorUnit: 10, numberFormat: '#,##0.0', categoryCrosses: 'max', valueCrosses: 'max', categoryTickMark: 'none', valueTickMark: 'out', categoryTickLabelPosition: 'high', valueTickLabelPosition: 'low' }), 'b').replace('</c:legend>', '<c:legendEntry><c:idx val="0"/><c:delete val="1"/></c:legendEntry></c:legend>'))
+  zip.file('ppt/charts/chart1.xml', withLegend(withValueAxis(withPointLabelPosition(withLabelPosition(withValueLabels(pointPatternChartPart, 'barChart', true, false, '#,##0.0'), 'outEnd'), 1, 'ctr'), { min: 0, max: 30, majorUnit: 10, numberFormat: '#,##0.0', categoryCrosses: 'max', valueCrosses: 'max', categoryTickMark: 'none', valueTickMark: 'out', categoryTickLabelPosition: 'high', valueTickLabelPosition: 'low' }), 'b').replace('</c:legend>', '<c:legendEntry><c:idx val="0"/><c:delete val="1"/></c:legendEntry></c:legend>'))
   zip.file('ppt/charts/chart2.xml', withLegend(withValueAxis(withSeriesPointLabelPosition(withLabelPosition(withValueLabels(lineChartPart, 'lineChart', false, true, '0.0%').replace('<c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:showVal val="1"/>', '<c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:showVal val="1"/><c:showSerName val="1"/><c:separator> | </c:separator>'), 'b'), 2, 'r'), { min: 10, max: 30, majorUnit: 5, numberFormat: '0.0', reverse: true, categoryPosition: 't', valuePosition: 'r', categoryCrossAt: 2, valueCrossAt: 15, categoryTickMark: 'cross', valueTickMark: 'in' }), 'l'))
   zip.file('ppt/charts/chart3.xml', withLegend(pieWithPercentLabels, 'r').replace('</c:legend>', '<c:legendEntry><c:idx val="1"/><c:delete val="1"/></c:legendEntry></c:legend>'))
+  const slide2WithSmoothLineChart = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', slide2WithSmoothLineChart.replace('</p:spTree>', `${chartFrame(9080, 'Smoothed line chart', 'rIdChart80', 15000000, 17000000, 4300000, 2600000)}</p:spTree>`))
+  const slide2WithSmoothLineRels = await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string')
+  zip.file('ppt/slides/_rels/slide2.xml.rels', slide2WithSmoothLineRels.replace('</Relationships>', '<Relationship Id="rIdChart80" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart80.xml"/></Relationships>'))
+  zip.file('ppt/charts/chart80.xml', smoothLineChartPart)
+  const contentTypesWithSmoothLine = await zip.file('[Content_Types].xml').async('string')
+  zip.file('[Content_Types].xml', contentTypesWithSmoothLine.replace('</Types>', '<Override PartName="/ppt/charts/chart80.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>'))
+  zip.file('ppt/charts/chart34.xml', lineWidthChartPart)
+  const slide2WithLineWidthChart = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', slide2WithLineWidthChart.replace('</p:spTree>', `${chartFrame(34, 'Line width chart', 'rIdChart34', 1000000, 500000, 4300000, 2600000)}</p:spTree>`))
+  const slide2Relationships = await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string')
+  zip.file('ppt/slides/_rels/slide2.xml.rels', slide2Relationships.replace('</Relationships>', '<Relationship Id="rIdChart34" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart34.xml"/></Relationships>'))
+  const slide2TransitionXml = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', slide2TransitionXml.replace('<p:transition spd="med"><p:cover dir="ru"/>', '<p:transition spd="turbo"><p:cover dir="ru"/>'))
   const horizontalBarChartPart = chartPart.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')
   const numericCategoryChartPart = chartPart.replace(/<c:cat>[\s\S]*?<\/c:cat>/g, '<c:cat><c:numRef><c:f>Data!$A$2:$A$4</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="3"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt></c:numCache></c:numRef></c:cat>')
-  const horizontalNumericCategoryChartPart = numericCategoryChartPart.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>')
+  const horizontalNumericCategoryChartPart = numericCategoryChartPart.replace('<c:barDir val="col"/>', '<c:barDir val="bar"/>').replace('<c:f>Data!$A$2:$A$4</c:f>', "<c:f>'Sheet1'!$A$2:$A$4</c:f>")
   zip.file('ppt/charts/chart4.xml', withValueAxis(horizontalNumericCategoryChartPart, { min: 0, max: 30, majorUnit: 10, numberFormat: '0', categoryNumberFormat: '&quot;USD &quot;0.00E+00', categoryPosition: 'r', valuePosition: 't', categoryCrosses: 'max', valueCrosses: 'min', categoryTickMark: 'out', valueTickMark: 'in', categoryTickLabelPosition: 'low', valueTickLabelPosition: 'none', majorGridlines: false }))
+  const chart4CachedFormats = await zip.file('ppt/charts/chart4.xml').async('string')
+  zip.file('ppt/charts/chart4.xml', chart4CachedFormats
+    .replace('formatCode="&quot;USD &quot;0.00E+00" sourceLinked="0"', 'formatCode="&quot;USD &quot;0.00E+00" sourceLinked="1"'))
+  const chart4WithWorkbook = await zip.file('ppt/charts/chart4.xml').async('string')
+  zip.file('ppt/charts/chart4.xml', chart4WithWorkbook.replace('</c:chartSpace>', '<c:externalData xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdEmbeddedWorkbook"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>'))
+  zip.file('ppt/charts/_rels/chart4.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdEmbeddedWorkbook" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/chart1.xlsx"/></Relationships>')
   zip.file('ppt/charts/chart5.xml', withValueAxis(horizontalBarChartPart, { min: 0, max: 30, majorUnit: 10, numberFormat: '0', categoryPosition: 'r', valuePosition: 't', categoryCrosses: 'max', valueCrosses: 'min', categoryTickMark: 'out', valueTickMark: 'out', categoryDeleted: true }))
   zip.file('ppt/charts/chart6.xml', withLegend(withValueAxis(horizontalBarChartPart, { min: 0, max: 30, majorUnit: 10, numberFormat: '0', categoryPosition: 'r', valuePosition: 't', categoryCrosses: 'max', valueCrosses: 'min', categoryTickMark: 'out', valueTickMark: 'out', valueDeleted: true }), 'r').replace('</c:legend>', '<c:layout><c:manualLayout><c:xMode val="edge"/><c:x val="0.72"/><c:yMode val="factor"/><c:y val="0"/><c:wMode val="edge"/><c:w val="0.95"/><c:hMode val="factor"/><c:h val="0.5"/></c:manualLayout></c:layout><c:overlay val="1"/></c:legend>'))
   zip.file('ppt/charts/chart7.xml', doughnutChartPart)
+  const chart1Xml = await zip.file('ppt/charts/chart1.xml').async('string')
+  zip.file('ppt/charts/chart1.xml', chart1Xml.replace(/(<c:valAx>[\s\S]*?<c:numFmt formatCode=")#,##0\.0(" sourceLinked="0"\/>)/, '$1[Color1][&lt;=10]#,##0.0;[Color2][&gt;10]#,##0.0$2'))
   const chart1GroupLabelTextProperties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1200" b="1" u="sng"><a:solidFill><a:srgbClr val="1e40af"/></a:solidFill><a:uFill><a:solidFill><a:srgbClr val="00aaff"/></a:solidFill></a:uFill><a:uLn w="12700"/><a:latin typeface="Arial"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
   const chart1SeriesLabelTextProperties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr sz="1000" b="0"><a:solidFill><a:srgbClr val="15803d"/></a:solidFill><a:latin typeface="Verdana"/></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
   const chart1PointLabelTextProperties = '<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr baseline="30000" i="1" spc="200" u="none" strike="sngStrike"><a:solidFill><a:srgbClr val="d21f3c"/></a:solidFill></a:defRPr></a:pPr><a:endParaRPr lang="en-US"/></a:p></c:txPr>'
@@ -623,6 +769,58 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     .replace('<c:dLblPos val="outEnd"/><c:txPr>', '<c:dLblPos val="outEnd"/><c:showLegendKey val="0"/><c:txPr>')
     .replace('<c:dLblPos val="outEnd"/><c:txPr>', '<c:dLblPos val="outEnd"/><c:showLegendKey val="1"/><c:txPr>')
     .replace('<c:dLblPos val="ctr"/>', '<c:dLblPos val="ctr"/><c:showLegendKey val="1"/>'))
+  const embeddedWorkbook = new JSZip()
+  const indexedPalette = Array(64).fill('FF000000')
+  indexedPalette[8] = 'FF123456'
+  indexedPalette[9] = 'FF654321'
+  embeddedWorkbook.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>')
+  embeddedWorkbook.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdOfficeDocument" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+  embeddedWorkbook.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rIdSheet"/></sheets><definedNames><definedName name="CategoryValues">CategoryValuesBase</definedName><definedName name="CategoryValuesBase">\'Sheet1\'!$A$2:$A$4</definedName><definedName name="SeriesNorth">SeriesNorthBase</definedName><definedName name="SeriesNorthBase">\'Sheet1\'!$B$2:$B$4</definedName><definedName name="SeriesSouth" localSheetId="0">SeriesSouthBase</definedName><definedName name="SeriesSouthBase" localSheetId="0">$C$2:$C$4</definedName><definedName name="QuarterLabels">\'Sheet1\'!$B$2:$B$4</definedName><definedName name="QuarterLabels" localSheetId="0">QuarterLabelsBase</definedName><definedName name="QuarterLabelsBase" localSheetId="0">$D$2:$D$4</definedName></definedNames></workbook>')
+  embeddedWorkbook.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdSheet" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdSharedStrings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>')
+  embeddedWorkbook.file('xl/sharedStrings.xml', '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="3" uniqueCount="3"><si><t>Q1</t></si><si><t>Q2</t></si><si><t>Q3</t></si></sst>')
+  embeddedWorkbook.file('xl/styles.xml', `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><colors><indexedColors>${indexedPalette.map(rgb => `<rgbColor rgb="${rgb}"/>`).join('')}</indexedColors></colors></styleSheet>`)
+  const embeddedTypes = await embeddedWorkbook.file('[Content_Types].xml').async('string')
+  embeddedWorkbook.file('[Content_Types].xml', embeddedTypes.replace('<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>', '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'))
+  const embeddedStyles = await embeddedWorkbook.file('xl/styles.xml').async('string')
+  embeddedWorkbook.file('xl/styles.xml', embeddedStyles.replace('<colors>', '<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;USD &quot;0.00E+00"/></numFmts><fonts count="1"><font/></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><colors>'))
+  embeddedWorkbook.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="2"><c r="A2" s="1"><v>1</v></c><c r="B2"><v>12</v></c><c r="C2"><v>9</v></c><c r="D2" t="s"><v>0</v></c></row><row r="3"><c r="A3" s="1"><v>2</v></c><c r="B3"><v>18</v></c><c r="C3"><v>15</v></c><c r="D3" t="s"><v>1</v></c></row><row r="4"><c r="A4" s="1"><v>3</v></c><c r="B4"><v>26</v></c><c r="C4"><v>21</v></c><c r="D4" t="s"><v>2</v></c></row></sheetData></worksheet>')
+  zip.file('ppt/charts/_rels/chart1.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdEmbeddedWorkbook" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/chart1.xlsx"/></Relationships>')
+  zip.file('ppt/embeddings/chart1.xlsx', await embeddedWorkbook.generateAsync({ type: 'uint8array' }))
+  const chart1WithWorkbook = await zip.file('ppt/charts/chart1.xml').async('string')
+  zip.file('ppt/charts/chart1.xml', chart1WithWorkbook.replace('</c:chartSpace>', '<c:externalData xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdEmbeddedWorkbook"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>'))
+  const chart4WithWorkbookValues = await zip.file('ppt/charts/chart4.xml').async('string')
+  let chart4SeriesIndex = 0
+  zip.file('ppt/charts/chart4.xml', chart4WithWorkbookValues.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, series => {
+    const valueName = chart4SeriesIndex++ === 0 ? 'SeriesNorth' : "'Sheet1'!SeriesSouth"
+    return series
+      .replace(/<c:cat>[\s\S]*?<\/c:cat>/, "<c:cat><c:numRef><c:f>'Sheet1'!CategoryValues</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val=\"0\"/></c:numCache></c:numRef></c:cat>")
+      .replace(/<c:val>[\s\S]*?<\/c:val>/, `<c:val><c:numRef><c:f>${valueName}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:val>`)
+  }))
+  const chart6WithWorkbookCategories = await zip.file('ppt/charts/chart6.xml').async('string')
+  const chart6WithoutCategoryCaches = chart6WithWorkbookCategories.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, series =>
+    series.replace(/<c:cat>[\s\S]*?<\/c:cat>/, "<c:cat><c:strRef><c:f>'Sheet1'!QuarterLabels</c:f><c:strCache><c:ptCount val=\"0\"/></c:strCache></c:strRef></c:cat>")
+  )
+  zip.file('ppt/charts/chart6.xml', chart6WithoutCategoryCaches.replace('</c:chartSpace>', '<c:externalData xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdEmbeddedWorkbook"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>'))
+  zip.file('ppt/charts/_rels/chart6.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdEmbeddedWorkbook" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/chart1.xlsx"/></Relationships>')
+  let externalGuardSeriesIndex = 0
+  const externalWorkbookGuardChart = chartPart.replace(/<c:ser>[\s\S]*?<\/c:ser>/g, series =>
+    externalGuardSeriesIndex++ === 1
+      ? series.replace(/<c:val>[\s\S]*?<\/c:val>/, "<c:val><c:numRef><c:f>'[External.xlsx]Sheet1'!$B$2:$B$4</c:f></c:numRef></c:val>")
+      : series
+  )
+  zip.file('ppt/charts/chart32.xml', externalWorkbookGuardChart.replace('</c:chartSpace>', '<c:externalData xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdEmbeddedWorkbook"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>'))
+  zip.file('ppt/charts/_rels/chart32.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdEmbeddedWorkbook" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/chart1.xlsx"/></Relationships>')
+  zip.file('ppt/embeddings/oversized-chart.xlsx', new Uint8Array(32 * 1024 * 1024 + 1), { compression: 'DEFLATE' })
+  zip.file('ppt/charts/chart33.xml', chartPart.replace('</c:chartSpace>', '<c:externalData xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdOversizedWorkbook"><c:autoUpdate val="0"/></c:externalData></c:chartSpace>'))
+  zip.file('ppt/charts/_rels/chart33.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdOversizedWorkbook" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/oversized-chart.xlsx"/></Relationships>')
+  const externalGuardSlideXml = await zip.file('ppt/slides/slide2.xml').async('string')
+  zip.file('ppt/slides/slide2.xml', externalGuardSlideXml.replace('</p:spTree>', `${chartFrame(32, 'External workbook guard chart', 'rIdChart32', 15000000, 17000000, 4300000, 2600000)}${chartFrame(33, 'Oversized workbook guard chart', 'rIdChart33', 15000000, 20000000, 4300000, 2600000)}</p:spTree>`))
+  const externalGuardSlideRels = await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string')
+  zip.file('ppt/slides/_rels/slide2.xml.rels', externalGuardSlideRels.replace('</Relationships>', '<Relationship Id="rIdChart32" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart32.xml"/><Relationship Id="rIdChart33" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart33.xml"/></Relationships>'))
+  const externalGuardContentTypes = await zip.file('[Content_Types].xml').async('string')
+  zip.file('[Content_Types].xml', externalGuardContentTypes.replace('</Types>', '<Override PartName="/ppt/charts/chart32.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/ppt/charts/chart33.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>'))
+  const chartContentTypes = await zip.file('[Content_Types].xml').async('string')
+  zip.file('[Content_Types].xml', chartContentTypes.replace('</Types>', '<Default Extension="xlsx" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"/></Types>'))
   const chart4WithMinorTicks = await zip.file('ppt/charts/chart4.xml').async('string')
   zip.file('ppt/charts/chart4.xml', chart4WithMinorTicks
     .replace('<c:majorTickMark val="out"/><c:tickLblPos val="low"/>', '<c:majorTickMark val="out"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/>')
@@ -663,7 +861,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   zip.file('ppt/slides/slide2.xml', slide2WithScatter.replace('</p:spTree>', `${chartFrame(1000, 'XY scatter chart', 'rIdChart15', 10000000, 21000000, 4300000, 2600000)}</p:spTree>`))
   const slide2WithScatterRels = await zip.file('ppt/slides/_rels/slide2.xml.rels').async('string')
   zip.file('ppt/slides/_rels/slide2.xml.rels', slide2WithScatterRels.replace('</Relationships>', '<Relationship Id="rIdChart15" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart15.xml"/></Relationships>'))
-  zip.file('ppt/charts/chart15.xml', scatterChartPart)
+  zip.file('ppt/charts/chart15.xml', smoothScatterChartPart)
   const typesWithScatter = await zip.file('[Content_Types].xml').async('string')
   zip.file('[Content_Types].xml', typesWithScatter.replace('</Types>', '<Override PartName="/ppt/charts/chart15.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>'))
   const slide2WithBubbles = await zip.file('ppt/slides/slide2.xml').async('string')
@@ -849,24 +1047,28 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   zip.file('ppt/slides/slide52.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Conveyor right', 4200000, 2200000, 'f59e0b', 3400000, 1700000))}<mc:AlternateContent><mc:Choice Requires="p159"><p:transition spd="med" p14:dur="1000ms"><p159:morph option="byObject"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
   zip.file('ppt/slides/slide53.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Conveyor right', 6000000, 800000, '8b5cf6', 2400000, 2000000))}<mc:AlternateContent><mc:Choice Requires="p159"><p:transition spd="med" p14:dur="650ms"><p159:morph option="byWord"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
   const morphTextShape = (id, name, x, y, text) => plainTextShape(id, name, x, y, text).replace('cx="2600000" cy="800000"', 'cx="8000000" cy="1400000"')
+  const morphTransformedTextShape = (id, name, x, y, text, transform) => morphTextShape(id, name, x, y, text).replace('cx="8000000" cy="1400000"', 'cx="4000000" cy="1400000"').replace('<a:xfrm>', `<a:xfrm ${transform}>`)
   const slide52WithMorphText = await zip.file('ppt/slides/slide52.xml').async('string')
-  zip.file('ppt/slides/slide52.xml', slide52WithMorphText.replace('</p:spTree>', `${morphTextShape(3, 'Morph Words', 400000, 3800000, 'The quick brown fox')}${morphTextShape(4, 'Morph Characters', 400000, 2000000, 'LISTEN')}</p:spTree>`))
+  zip.file('ppt/slides/slide52.xml', slide52WithMorphText.replace('</p:spTree>', `${morphTextShape(3, 'Morph Words', 400000, 3800000, 'The quick brown fox')}${morphTextShape(4, 'Morph Characters', 400000, 2000000, 'LISTEN')}${morphTransformedTextShape(5, 'Morph Rotated Words', 500000, 2000000, 'rotate these words', 'rot="5400000"')}${morphTransformedTextShape(6, 'Morph Flipped Words', 500000, 3700000, 'flip left right', 'flipH="1"')}</p:spTree>`))
   const slide53WithMorphText = await zip.file('ppt/slides/slide53.xml').async('string')
-  zip.file('ppt/slides/slide53.xml', slide53WithMorphText.replace('</p:spTree>', `${morphTextShape(3, 'Morph Words', 4000000, 4200000, 'fox quick The jumps')}${morphTextShape(4, 'Morph Characters', 4500000, 2000000, 'LISTEN')}</p:spTree>`))
+  zip.file('ppt/slides/slide53.xml', slide53WithMorphText.replace('</p:spTree>', `${morphTextShape(3, 'Morph Words', 4000000, 4200000, 'fox quick The jumps')}${morphTextShape(4, 'Morph Characters', 4500000, 2000000, 'LISTEN')}${morphTransformedTextShape(5, 'Morph Rotated Words', 4500000, 2000000, 'words rotate', 'rot="2700000"')}${morphTransformedTextShape(6, 'Morph Flipped Words', 4500000, 3700000, 'right flip', 'flipV="1"')}</p:spTree>`))
   const presetNames = ['fallOver', 'drape', 'curtains', 'wind', 'prestige', 'fracture', 'crush', 'peelOff', 'pageCurlDouble', 'pageCurlSingle', 'airplane', 'origami']
   presetNames.forEach((presetName, index) => {
     const attributes = presetName === 'fallOver' ? 'invY="1"' : presetName === 'peelOff' ? 'invX="1"' : ''
     zip.file(`ppt/slides/slide${54 + index}.xml`, `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, `Preset ${presetName}`, 0, 0, '0ea5e9'))}<mc:AlternateContent><mc:Choice Requires="p15"><p:transition spd="med" p14:dur="850ms"><p15:prstTrans prst="${presetName}" ${attributes}/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
   })
   zip.file('ppt/slides/slide66.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(shape(2, 'Preset invalid fallback', 0, 0, 'f97316'))}<mc:AlternateContent><mc:Choice Requires="p15"><p:transition spd="med" p14:dur="850ms"><p15:prstTrans prst="notARealPreset"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent></p:sld>`)
-  const visibilityTiming = `<p:timing><p:tnLst><p:par><p:cTn id="12028" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="12029" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="12030" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${visibilityAnimation}${visibilityKeyframes}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
+  const nestedConditionalSequence = `<p:seq concurrent="0" nextAc="none" prevAc="none"><p:cTn id="12042" dur="indefinite" masterRel="sameClick" afterEffect="0"><p:childTnLst><p:par><p:cTn id="12043" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12050, 132)}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12044" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12051, 133)}${nestedVisibilityAnimation(12052, 134, 1200)}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12045" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${nestedVisibilityAnimation(12053, 135)}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst></p:seq>`
+  const visibilityTiming = `<p:timing><p:tnLst><p:par><p:cTn id="12028" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek" prevAc="skipTimed"><p:cTn id="12029" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="12030" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${visibilityAnimation}${visibilityKeyframes}</p:childTnLst></p:cTn></p:par><p:par><p:cTn id="12031" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst/><p:subTnLst>${nestedConditionalSequence}</p:subTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>`
   const visibilitySlide = await zip.file('ppt/slides/slide66.xml').async('string')
   zip.file('ppt/slides/slide66.xml', visibilitySlide
-    .replace('</p:spTree>', `${shape(130, 'Visibility from-to', 0, 5000000, 'c084fc', 100000, 100000)}${shape(131, 'Visibility keyframes', 200000, 5000000, 'c084fc', 100000, 100000)}</p:spTree>`)
+    .replace('</p:spTree>', `${shape(130, 'Visibility from-to', 0, 5000000, 'c084fc', 100000, 100000)}${shape(131, 'Visibility keyframes', 200000, 5000000, 'c084fc', 100000, 100000)}${shape(132, 'Nested sequence first', 400000, 5000000, '22c55e', 100000, 100000)}${shape(133, 'Nested sequence second', 600000, 5000000, '0ea5e9', 100000, 100000)}${shape(134, 'Nested sequence long', 800000, 5000000, 'f97316', 100000, 100000)}${shape(135, 'Nested sequence third', 1000000, 5000000, '8b5cf6', 100000, 100000)}</p:spTree>`)
     .replace('</p:sld>', `${visibilityTiming}</p:sld>`))
   const textScale = `<p:animScale><p:cBhvr><p:cTn id="671" dur="800" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="0" end="2"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr><p:by x="160000" y="125000"/></p:animScale>`
   const textRotation = `<p:animRot by="1800000"><p:cBhvr><p:cTn id="672" dur="800" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot><p:animMotion origin="layout" path="M 0 0 L 0.12 0.05 E" pathEditMode="relative"><p:cBhvr><p:cTn id="676" dur="800" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="0" end="1"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>ppt_x</p:attrName><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr></p:animMotion>`
   const nestedPresetScale = `<p:par><p:cTn id="681" dur="indefinite" nodeType="withEffect" presetClass="emph" presetID="6" presetSubtype="0"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr><p:cTn id="682" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="2" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr><p:by x="130000" y="130000"/></p:animScale></p:childTnLst></p:cTn></p:par>`
+  const presetZoomEntrance = `<p:par><p:cTn id="91001" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="23" presetSubtype="0"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="vendorZoomFallback"><p:cBhvr><p:cTn id="91002" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="91005"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
+  const presetZoomExit = `<p:par><p:cTn id="91003" dur="indefinite" nodeType="withEffect" presetClass="exit" presetID="23" presetSubtype="32"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="out" filter="vendorZoomFallback"><p:cBhvr><p:cTn id="91004" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="91006"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const characterBlinds = `<p:par><p:cTn id="683" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="blinds(horizontal)"><p:cBhvr><p:cTn id="684" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const paragraphBlinds = `<p:par><p:cTn id="685" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="blinds(vertical)"><p:cBhvr><p:cTn id="686" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="687"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const paragraphChecker = `<p:par><p:cTn id="689" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="checkerboard(across)"><p:cBhvr><p:cTn id="690" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="688"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
@@ -880,16 +1082,78 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const paragraphWheel = `<p:par><p:cTn id="709" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="wheel(4)"><p:cBhvr><p:cTn id="710" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="695"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const characterWedge = `<p:par><p:cTn id="711" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="wedge"><p:cBhvr><p:cTn id="712" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="696"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const paragraphShapeMask = `<p:par><p:cTn id="713" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="diamond(in)"><p:cBhvr><p:cTn id="714" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="697"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
-  zip.file('ppt/slides/slide67.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld>${tree(plainTextShape(670, 'Character transform target', 2500000, 1800000, 'PPTX') + plainTextShape(687, 'Paragraph blinds target', 2500000, 3200000, 'Blinds') + plainTextShape(688, 'Paragraph checker target', 5500000, 3200000, 'Checker') + plainTextShape(689, 'Paragraph barn target', 8500000, 3200000, 'Barn') + plainTextShape(690, 'Paragraph random bars target', 10500000, 3200000, 'Random bars') + plainTextShape(691, 'Paragraph strips target', 8500000, 4000000, 'Strips') + plainTextShape(692, 'Character strips target', 10500000, 4000000, 'ABCD') + plainTextShape(693, 'Paragraph dissolve target', 0, 4800000, 'Dissolve') + plainTextShape(694, 'Character dissolve target', 3000000, 4800000, 'ABCD') + plainTextShape(695, 'Paragraph wheel target', 6000000, 4800000, 'Wheel') + plainTextShape(696, 'Character wedge target', 9000000, 4800000, 'ABCD') + plainTextShape(697, 'Paragraph shape target', 12000000, 4800000, 'Shape'))}</p:cSld><p:timing><p:tnLst><p:par><p:cTn id="673" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1"><p:cTn id="674" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="675" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${textScale}${textRotation}${nestedPresetScale}${characterBlinds}${paragraphBlinds}${paragraphChecker}${paragraphBarn}${characterBarn}${paragraphRandomBars}${paragraphStrips}${characterStrips}${paragraphDissolve}${characterDissolve}${paragraphWheel}${characterWedge}${paragraphShapeMask}${characterRangeOpacity}${setCharacterRangeOpacity}${characterRangeVisibility}${paragraphRangeVisibility}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing></p:sld>`)
+  zip.file('ppt/slides/slide67.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld>${tree(plainTextShape(670, 'Character transform target', 2500000, 1800000, 'PPTX') + plainTextShape(687, 'Paragraph blinds target', 2500000, 3200000, 'Blinds') + plainTextShape(688, 'Paragraph checker target', 5500000, 3200000, 'Checker') + plainTextShape(689, 'Paragraph barn target', 8500000, 3200000, 'Barn') + plainTextShape(690, 'Paragraph random bars target', 10500000, 3200000, 'Random bars') + plainTextShape(691, 'Paragraph strips target', 8500000, 4000000, 'Strips') + plainTextShape(692, 'Character strips target', 10500000, 4000000, 'ABCD') + plainTextShape(693, 'Paragraph dissolve target', 0, 4800000, 'Dissolve') + plainTextShape(694, 'Character dissolve target', 3000000, 4800000, 'ABCD') + plainTextShape(695, 'Paragraph wheel target', 6000000, 4800000, 'Wheel') + plainTextShape(696, 'Character wedge target', 9000000, 4800000, 'ABCD') + plainTextShape(697, 'Paragraph shape target', 12000000, 4800000, 'Shape') + plainTextShape(91005, 'Zoom preset entrance target', 400000, 5700000, 'Zoom in') + plainTextShape(91006, 'Zoom preset exit target', 3400000, 5700000, 'Zoom out'))}</p:cSld><p:timing><p:tnLst><p:par><p:cTn id="673" dur="indefinite" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1"><p:cTn id="674" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="675" dur="indefinite" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${textScale}${textRotation}${nestedPresetScale}${characterBlinds}${paragraphBlinds}${paragraphChecker}${paragraphBarn}${characterBarn}${paragraphRandomBars}${paragraphStrips}${characterStrips}${paragraphDissolve}${characterDissolve}${paragraphWheel}${characterWedge}${paragraphShapeMask}${characterRangeOpacity}${setCharacterRangeOpacity}${characterRangeVisibility}${paragraphRangeVisibility}${presetZoomEntrance}${presetZoomExit}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing></p:sld>`)
+  const flyDirectionShapes = flyDirectionCases.map(([name, targetId], index) => plainTextShape(targetId, name, (index % 4) * 2800000, 5000000 + Math.floor(index / 4) * 850000, name)).join('')
+  const flyDirectionAnimations = flyDirectionCases.map(([name, targetId, subtype, transition, presetClass], index) => `<p:par><p:cTn id="${720 + index}" dur="indefinite" nodeType="withEffect" presetClass="${presetClass}" presetID="2"${subtype === undefined ? '' : ` presetSubtype="${subtype}"`}><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="${transition}" filter="vendorFlyFallback"><p:cBhvr><p:cTn id="${730 + index}" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${targetId}"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`).join('')
   const unsupportedFilterFade = `<p:par><p:cTn id="715" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="999"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="vendorCustom"><p:cBhvr><p:cTn id="716" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="698"/></p:tgtEl></p:cBhvr><p:progress><p:fltVal val="0.5"/></p:progress></p:animEffect></p:childTnLst></p:cTn></p:par>`
+  const unsupportedFilterAppear = effectGroup(8003, 'withEffect', 8002, 'in', 'vendorPreset', 8004, 5000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="1"')
+  const noneFilterAppear = effectGroup(8012, 'withEffect', 8006, 'in', 'none', 8013, 5000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="1"')
+  const noneFilterSplitIn = effectGroup(8020, 'withEffect', 8007, 'in', 'none', 8021, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="16"')
+  const noneFilterSplitOut = effectGroup(8022, 'withEffect', 8008, 'out', 'none', 8023, 1000, '0', undefined, '', 'hold', ' presetClass="exit" presetID="16" presetSubtype="21"')
+  const noneFilterFade = effectGroup(8030, 'withEffect', 8009, 'in', 'none', 8031, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="10"')
+  const noneFilterWheel = effectGroup(8032, 'withEffect', 8014, 'in', 'none', 8033, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="21" presetSubtype="8"')
+  const noneFilterWipe = effectGroup(8034, 'withEffect', 8015, 'in', 'none', 8035, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="22" presetSubtype="1"')
+  const shapePresetTargets = shapePresetCases.map(([title, targetId], index) => plainTextShape(targetId, title, (index % 4) * 2800000, 6500000, title)).join('')
+  const shapePresetAnimations = shapePresetCases.map(([, targetId, presetId, transition, presetClass, subtype], index) => {
+    const attributes = ` presetClass="${presetClass}" presetID="${presetId}"${subtype === undefined ? '' : ` presetSubtype="${subtype}"`}`
+    return effectGroup(8240 + index, 'withEffect', targetId, transition, 'none', 8260 + index, 5000, '0', undefined, '', 'hold', attributes)
+  }).join('')
+  const simpleFilterPresetTargets = simpleFilterPresetCases.map(([title, targetId], index) => plainTextShape(targetId, title, (index % 4) * 2800000, 6800000, title)).join('')
+  const simpleFilterPresetAnimations = simpleFilterPresetCases.map(([, targetId, presetId, transition, presetClass], index) =>
+    effectGroup(8340 + index, 'withEffect', targetId, transition, 'none', 8360 + index, 5000, '0', undefined, '', 'hold', ` presetClass="${presetClass}" presetID="${presetId}"`)
+  ).join('')
+  const noneTransitionEntrance = effectGroup(8010, 'withEffect', 8005, 'none', 'fade', 8011, 1000)
   const withGroupTextColor = `<p:par><p:cTn id="677" dur="indefinite" nodeType="withGroup"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr><p:cBhvr><p:cTn id="678" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="3" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.color</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="000000"/></p:from><p:to><a:srgbClr val="ff0000"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
   const afterGroupTextColor = `<p:par><p:cTn id="679" dur="indefinite" nodeType="afterGroup"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr><p:cBhvr><p:cTn id="680" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="3" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>style.color</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="ff0000"/></p:from><p:to><a:srgbClr val="0000ff"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par>`
   const characterChecker = `<p:par><p:cTn id="691" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="checkerboard(across)"><p:cBhvr><p:cTn id="692" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const textRangeSlideXml = await zip.file('ppt/slides/slide67.xml').async('string')
-  const textRangeSlideXmlWithFallback = textRangeSlideXml.replace('</p:spTree>', `${plainTextShape(698, 'Unsupported filter fallback target', 2500000, 6000000, 'Fade')}</p:spTree>`)
-  zip.file('ppt/slides/slide67.xml', textRangeSlideXmlWithFallback.replace('</p:childTnLst></p:cTn></p:seq>', `${withGroupTextColor}${afterGroupTextColor}${characterChecker}${unsupportedFilterFade}</p:childTnLst></p:cTn></p:seq>`))
-  const morphCharacterShape = morphTextShape(2, 'Morph Characters', 4500000, 2000000, 'SILENT!')
-  zip.file('ppt/slides/slide68.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main">${tree(morphCharacterShape)}<p:transition spd="med" p14:dur="800ms"><p159:morph option="byChar"/></p:transition></p:sld>`)
+  const textRangeSlideXmlWithFallback = textRangeSlideXml.replace('</p:spTree>', `${plainTextShape(698, 'Unsupported filter fallback target', 2500000, 6000000, 'Fade')}${plainTextShape(8002, 'Preset appear fallback target', 5500000, 6000000, 'Appear')}${plainTextShape(8005, 'None transition entrance target', 8500000, 6000000, 'None')}${plainTextShape(8006, 'None filter preset appear target', 10500000, 6000000, 'Appear')}${plainTextShape(8007, 'Split preset default vertical entrance target', 2500000, 6400000, 'Split in')}${plainTextShape(8008, 'Split preset mirrored exit target', 5500000, 6400000, 'Split out')}${plainTextShape(8009, 'Preset fade fallback target', 8500000, 6400000, 'Fade preset')}${plainTextShape(8014, 'Preset wheel fallback target', 2500000, 6400000, 'Wheel preset')}${plainTextShape(8015, 'Preset wipe fallback target', 5500000, 6400000, 'Wipe preset')}${flyDirectionShapes}</p:spTree>`)
+  zip.file('ppt/slides/slide67.xml', textRangeSlideXmlWithFallback.replace('</p:childTnLst></p:cTn></p:seq>', `${withGroupTextColor}${afterGroupTextColor}${characterChecker}${unsupportedFilterFade}${unsupportedFilterAppear}${noneFilterAppear}${noneFilterSplitIn}${noneFilterSplitOut}${noneFilterFade}${noneFilterWheel}${noneFilterWipe}${noneTransitionEntrance}${flyDirectionAnimations}</p:childTnLst></p:cTn></p:seq>`))
+  const shapePresetSlideXml = await zip.file('ppt/slides/slide67.xml').async('string')
+  zip.file('ppt/slides/slide67.xml', shapePresetSlideXml.replace('</p:spTree>', `${shapePresetTargets}</p:spTree>`).replace('</p:childTnLst></p:cTn></p:seq>', `${shapePresetAnimations}</p:childTnLst></p:cTn></p:seq>`))
+  const simpleFilterPresetSlideXml = await zip.file('ppt/slides/slide67.xml').async('string')
+  zip.file('ppt/slides/slide67.xml', simpleFilterPresetSlideXml.replace('</p:spTree>', `${simpleFilterPresetTargets}</p:spTree>`).replace('</p:childTnLst></p:cTn></p:seq>', `${simpleFilterPresetAnimations}</p:childTnLst></p:cTn></p:seq>`))
+  const multiConditionShapes = plainTextShape(708, 'Multi-condition trigger one', 100000, 6000000, 'Trigger one')
+    + plainTextShape(709, 'Multi-condition trigger two', 3000000, 6000000, 'Trigger two')
+    + plainTextShape(710, 'Multi-condition target', 6000000, 6000000, 'Must stay hidden')
+    + plainTextShape(711, 'Invalid condition delay trigger', 9000000, 5800000, 'Invalid delay')
+    + plainTextShape(712, 'Invalid condition delay target', 10200000, 5800000, 'Must stay visible')
+    + plainTextShape(713, 'Indefinite condition delay trigger', 100000, 5400000, 'Never starts')
+    + plainTextShape(714, 'Indefinite condition delay target', 3000000, 5400000, 'Must stay visible')
+    + plainTextShape(88003, 'Same-click master-relative target', 6000000, 5200000, 'Same click')
+    + plainTextShape(88004, 'Next-click after-effect target', 9000000, 5200000, 'Next click dim-after')
+    + plainTextShape(88005, 'Master-relative source click target', 6000000, 5600000, 'Source click')
+    + plainTextShape(88006, 'Master-relative next click target', 9000000, 5600000, 'Next click')
+    + plainTextShape(88007, 'Interactive next-click after-effect target', 6000000, 6000000, 'Interactive dim-after')
+    + plainTextShape(88008, 'Interactive next-click effect target', 9000000, 6000000, 'Interactive next click')
+  const mainSubTimeSet = (masterRel, afterEffect, targetId) => `<p:set><p:cBhvr><p:cTn fill="hold" masterRel="${masterRel}" afterEffect="${afterEffect}"/><p:tgtEl><p:spTgt spid="${targetId}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set>`
+  const multiConditionPrimaryClick = effectGroup(741, 'clickEffect', 710, 'out', 'fade', 742, 500)
+    .replace('</p:childTnLst></p:cTn></p:par>', `</p:childTnLst><p:subTnLst>${mainSubTimeSet('nextClick', '1', 88007)}</p:subTnLst></p:cTn></p:par>`)
+  const multiConditionSequence = `<p:seq><p:cTn id="740" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMouseOver" delay="0"><p:tgtEl><p:spTgt spid="708"/></p:tgtEl></p:cond><p:cond evt="onMouseOver" delay="250"><p:tgtEl><p:spTgt spid="709"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${multiConditionPrimaryClick}${effectGroup(743, 'clickEffect', 88008, 'in', 'fade', 744, 100)}</p:childTnLst></p:cTn></p:seq>`
+  const mainSubTimeList = `<p:subTnLst>${mainSubTimeSet('sameClick', '0', 88003)}${mainSubTimeSet('nextClick', '1', 88004)}</p:subTnLst>`
+  const mainSubTimeClick = effectGroup(88010, 'clickEffect', 88005, 'in', 'fade', 88011, 120)
+    .replace('</p:childTnLst></p:cTn></p:par>', `</p:childTnLst>${mainSubTimeList}</p:cTn></p:par>`)
+    + effectGroup(88020, 'clickEffect', 88006, 'in', 'fade', 88021, 120)
+  const unsupportedSubTimeNodeList = `<p:subTnLst><p:set><p:cBhvr><p:cTn fill="hold" masterRel="previousClick" afterEffect="1"/><p:tgtEl><p:spTgt spid="714"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set></p:subTnLst>`
+  const invalidDelaySequence = `<p:seq><p:cTn id="750" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="not-a-time"><p:tgtEl><p:spTgt spid="711"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(751, 'clickEffect', 712, 'out', 'fade', 752, 200)}</p:childTnLst></p:cTn></p:seq>`
+  const indefiniteDelaySequence = `<p:seq><p:cTn id="760" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="indefinite"><p:tgtEl><p:spTgt spid="713"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(761, 'clickEffect', 714, 'out', 'fade', 762, 200)}</p:childTnLst></p:cTn></p:seq>`
+  const indefiniteDelaySequenceWithSubTime = indefiniteDelaySequence.replace('</p:childTnLst></p:cTn></p:seq>', `</p:childTnLst>${unsupportedSubTimeNodeList}</p:cTn></p:seq>`)
+  const slide67Path = 'ppt/slides/slide67.xml'
+  const slide67Entry = zip.file(slide67Path)
+  if (!slide67Entry) throw new Error('The isolated slide 67 fixture could not be loaded.')
+  const slide67Xml = await slide67Entry.async('string')
+  const slide67TimingEnd = '</p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>'
+  if (!slide67Xml.includes('</p:spTree>') || !slide67Xml.includes(slide67TimingEnd)) throw new Error('The isolated slide 67 fixture has no insertion point for the multi-condition animation.')
+  zip.file(slide67Path, slide67Xml
+    .replace('</p:spTree>', `${multiConditionShapes}</p:spTree>`)
+    .replace('</p:childTnLst></p:cTn></p:seq>', `${mainSubTimeClick}</p:childTnLst></p:cTn></p:seq>`)
+    .replace(slide67TimingEnd, `</p:seq>${multiConditionSequence}${invalidDelaySequence}${indefiniteDelaySequenceWithSubTime}${slide67TimingEnd.slice('</p:seq>'.length)}`))
+  const morphCharacterShape = morphTextShape(2, 'Morph Characters', 4500000, 2000000, 'SILENT!').replace('<a:xfrm>', '<a:xfrm rot="900000" flipH="1">')
+  const alternateColorMap = '<p:clrMapOvr><a:overrideClrMapping accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/></p:clrMapOvr>'
+  const unrelatedSlideAlternate = `<mc:AlternateContent><mc:Choice Requires="p14">${alternateColorMap}</mc:Choice><mc:Fallback>${alternateColorMap}</mc:Fallback></mc:AlternateContent>`
+  const missingRequiresSlideTransition = '<mc:AlternateContent><mc:Choice><p:transition spd="med"><p:fade/></p:transition></mc:Choice></mc:AlternateContent>'
+  const morphAlternateTransition = '<mc:AlternateContent><mc:Choice Requires="p159"><p:transition spd="med" p14:dur="800ms"><p159:morph option="byChar"/></p:transition></mc:Choice><mc:Fallback><p:transition spd="med"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>'
+  zip.file('ppt/slides/slide68.xml', `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">${tree(morphCharacterShape)}${unrelatedSlideAlternate}${missingRequiresSlideTransition}${morphAlternateTransition}</p:sld>`)
   const morphContentTypes = await zip.file('[Content_Types].xml').async('string')
   zip.file('[Content_Types].xml', morphContentTypes.replace('</Types>', '<Override PartName="/ppt/slides/slide52.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide53.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>'))
   const presetContentTypes = await zip.file('[Content_Types].xml').async('string')
@@ -936,8 +1200,12 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const verticalOrientationFixtures = plainTextShape(74, 'Vertical 270 text', 6000000, 5800000, 'Vertical 270').replace('<a:bodyPr/>', '<a:bodyPr vert="vert270"/>')
     + plainTextShape(75, 'WordArt vertical', 9000000, 5800000, 'WordArt').replace('<a:bodyPr/>', '<a:bodyPr vert="wordArtVert"/>')
     + plainTextShape(76, 'East Asian vertical text', 6000000, 4700000, '東西南北').replace('<a:bodyPr/>', '<a:bodyPr vert="eaVert"/>')
-    + plainTextShape(77, 'Explicit horizontal text', 9000000, 4700000, 'Horizontal').replace('<a:bodyPr/>', '<a:bodyPr vert="horz"/>')
-    + plainTextShape(78, 'Mongolian vertical', 0, 5000000, 'ᠮᠣᠩᠭᠣᠯ').replace('<a:bodyPr/>', '<a:bodyPr vert="mongolianVert"/>')
+    + plainTextShape(77, 'Explicit horizontal text', 9000000, 4700000, 'Horizontal').replace('<a:bodyPr/>', '<a:bodyPr vert="horz" anchorCtr="1"/>')
+    + plainTextShape(78, 'Mongolian vertical', 0, 5000000, 'ᠮᠣᠩᠭᠣᠯ').replace('<a:bodyPr/>', '<a:bodyPr vert="mongolianVert" anchorCtr="invalid"/>')
+    + plainTextShape(86, 'Anchor center off', 6000000, 5000000, 'Left aligned').replace('<a:bodyPr/>', '<a:bodyPr anchorCtr="0"/>')
+    + plainTextShape(87, 'Two-column anchored text', 9000000, 5600000, 'Short title').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" anchorCtr="1"/>')
+    + plainTextShape(89, 'Rotated two-column anchored text', 9000000, 4600000, 'Short title').replace('<a:xfrm>', '<a:xfrm rot="2700000">').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" anchorCtr="1"/>')
+    + plainTextShape(88, 'Vertical anchored text', 6000000, 5600000, 'Vertical').replace('<a:bodyPr/>', '<a:bodyPr vert="vert" anchorCtr="1"/>')
     + wordArtVerticalRtl
     + plainTextShape(80, 'Two-column text', 0, 3000000, 'First column text keeps flowing until its height is full, then the remaining words continue in the second column with the configured gap.').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="0"/>')
     + plainTextShape(81, 'Two-column RTL text', 3000000, 3000000, 'The rightmost text column comes first, then overflow continues in the left column while paragraph text remains left-to-right.').replace('<a:bodyPr/>', '<a:bodyPr numCol="2" spcCol="457200" rtlCol="1"/>')
@@ -945,12 +1213,14 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
     + plainTextShape(83, 'Vertical columns LTR', 0, 0, '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏').replace('cy="800000"', 'cy="2500000"').replace('<a:bodyPr/>', '<a:bodyPr vert="eaVert" numCol="2" spcCol="457200" rtlCol="0"/>')
     + plainTextShape(84, 'Vertical columns RTL', 3000000, 0, '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏').replace('cy="800000"', 'cy="2500000"').replace('<a:bodyPr/>', '<a:bodyPr vert="eaVert" numCol="2" spcCol="457200" rtlCol="1"/>')
     + plainTextShape(85, 'WordArt RTL columns missing rtlCol', 6000000, 0, '天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏').replace('cy="800000"', 'cy="2500000"').replace('<a:bodyPr/>', '<a:bodyPr vert="wordArtVertRtl" numCol="2"/>')
+    + plainTextShape(90, 'Default overflow', 9000000, 0, 'Overflow default text '.repeat(18))
+    + plainTextShape(91, 'Gradient text', 0, 6500000, 'Gradient text').replace('<a:rPr sz="1800">', '<a:rPr sz="1800"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="ef4444"/></a:gs><a:gs pos="100000"><a:srgbClr val="2563eb"/></a:gs></a:gsLst><a:lin ang="2700000" scaled="1"/></a:gradFill>')
   zip.file('ppt/slides/slide17.xml', slide17Xml.replace('</p:spTree>', verticalOrientationFixtures + '</p:spTree>'))
   const layoutPath = 'ppt/slideLayouts/slideLayout1.xml'
   const layoutXml = await zip.file(layoutPath).async('string')
   const groupFillLayoutPlaceholder = '<p:sp><p:nvSpPr><p:cNvPr id="95" name="Group fill layout"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="2"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2600000" cy="2500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:ln w="25400"><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
-  const layoutWithStyles = layoutXml.replace('<a:noFill/>', '<a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:prstDash val="dash"/></a:ln>').replace('<a:bodyPr/>', '<a:bodyPr wrap="none" vert="vert"/>').replace('</p:spTree>', groupFillLayoutPlaceholder + '</p:spTree>')
-  assert(layoutWithStyles !== layoutXml && layoutWithStyles.includes('<a:bodyPr wrap="none" vert="vert"/>'), 'The layout placeholder line, no-wrap, and vertical-text fixtures must be inserted.')
+  const layoutWithStyles = layoutXml.replace('<a:noFill/>', '<a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="ef4444"/></a:solidFill><a:prstDash val="dash"/></a:ln>').replace('<a:bodyPr/>', '<a:bodyPr wrap="none" vert="vert" anchorCtr="1"/>').replace('</p:spTree>', groupFillLayoutPlaceholder + '</p:spTree>')
+  assert(layoutWithStyles !== layoutXml && layoutWithStyles.includes('<a:bodyPr wrap="none" vert="vert" anchorCtr="1"/>'), 'The layout placeholder line, no-wrap, vertical-text, and anchor-center fixtures must be inserted.')
   const inheritedLineLayoutPlaceholder = '<p:sp><p:nvSpPr><p:cNvPr id="97" name="Inherited line layout"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="3"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="6000000" y="5000000"/><a:ext cx="2600000" cy="500000"/></a:xfrm><a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 25000"/></a:avLst></a:prstGeom><a:ln w="63500"><a:solidFill><a:srgbClr val="008800"/></a:solidFill></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>'
   zip.file(layoutPath, layoutWithStyles.replace('</p:spTree>', `${inheritedLineLayoutPlaceholder}</p:spTree>`))
   const imageContentTypes = await zip.file('[Content_Types].xml').async('string')
@@ -1694,6 +1964,25 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
       return shapeXml.replace('</a:pathLst>', `${fillModePaths}</a:pathLst>`)
     }))
   }
+  const alphaInverseSlide = await zip.file('ppt/slides/slide3.xml').async('string')
+  const alphaInversePictures = picture(313, 'Alpha inverse alpha only', 11500000)
+    .replace('<a:blip r:embed="rIdBullet"/>', '<a:blip r:embed="rIdBullet"><a:alphaInv/></a:blip>')
+    + picture(314, 'Alpha inverse color replacement', 12400000)
+      .replace('<a:blip r:embed="rIdBullet"/>', '<a:blip r:embed="rIdBullet"><a:alphaInv><a:srgbClr val="ff0000"><a:alpha val="50%"/></a:srgbClr></a:alphaInv></a:blip>')
+    + picture(315, 'Alpha inverse after grayscale', 13300000)
+      .replace('<a:blip r:embed="rIdBullet"/>', '<a:blip r:embed="rIdBullet"><a:grayscl/><a:alphaInv><a:srgbClr val="00ff00"/></a:alphaInv></a:blip>')
+    + picture(316, 'Alpha inverse before grayscale', 14200000)
+      .replace('<a:blip r:embed="rIdBullet"/>', '<a:blip r:embed="rIdBullet"><a:alphaInv><a:srgbClr val="00ff00"/></a:alphaInv><a:grayscl/></a:blip>')
+    + picture(317, 'Alpha inverse effect DAG', 15100000)
+      .replace('</p:spPr>', '<a:effectDag type="tree"><a:alphaInv><a:srgbClr val="0000ff"/></a:alphaInv></a:effectDag></p:spPr>')
+    + picture(318, 'Alpha inverse nested effect container', 16000000)
+      .replace('</p:spPr>', '<a:effectDag type="tree"><a:cont type="tree"><a:alphaInv><a:srgbClr val="00ffff"/></a:alphaInv></a:cont></a:effectDag></p:spPr>')
+    + picture(319, 'Alpha inverse across image and shape effects', 16900000)
+      .replace('<a:blip r:embed="rIdBullet"/>', '<a:blip r:embed="rIdBullet"><a:alphaInv><a:srgbClr val="ff0000"/></a:alphaInv></a:blip>')
+      .replace('</p:spPr>', '<a:effectDag type="tree"><a:alphaInv><a:srgbClr val="0000ff"/></a:alphaInv></a:effectDag></p:spPr>')
+  const slide3WithAlphaInverse = alphaInverseSlide.replace('</p:spTree>', alphaInversePictures + '</p:spTree>')
+  if (slide3WithAlphaInverse === alphaInverseSlide) throw new Error('The alpha-inverse fixture could not add its pictures to slide 3.')
+  zip.file('ppt/slides/slide3.xml', slide3WithAlphaInverse)
   await writeFile(fixturePath, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }))
 }
 
@@ -1713,7 +2002,7 @@ async function connectToPage() {
 try {
   if (!inputPptx) await createFixture()
   browser = spawn(browserPath, [
-    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--autoplay-policy=no-user-gesture-required',
+    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--autoplay-policy=no-user-gesture-required', '--lang=en-US',
     '--remote-allow-origins=*', `--remote-debugging-port=${debugPort}`,
     `--user-data-dir=${profilePath}`, baseUrl,
   ], { stdio: 'ignore', windowsHide: true })
@@ -1789,6 +2078,7 @@ try {
         wipeProgress: getComputedStyle(element).getPropertyValue('--wipe-progress'),
         blindsStripeSize: getComputedStyle(element).getPropertyValue('--blinds-stripe-size').trim(),
         boxShadow: getComputedStyle(element).boxShadow,
+        svgShadowFilter: (() => { const svg = element.querySelector('.custom-geometry, .preset-outline'); return svg ? getComputedStyle(svg).filter : undefined })(),
         backgroundColor: getComputedStyle(element).backgroundColor,
         borderColor: getComputedStyle(element.querySelector('.preset-outline path') || element)[element.querySelector('.preset-outline path') ? 'stroke' : 'borderColor'],
         borderStyle: (() => { const path = element.querySelector('.preset-outline path'); if (!path) return getComputedStyle(element).borderStyle; const style = getComputedStyle(path); return style.stroke === 'none' ? 'none' : style.strokeDasharray === 'none' ? 'solid' : 'dashed' })(),
@@ -1863,7 +2153,7 @@ try {
       lines: [...(currentHost?.querySelectorAll('.ink-layer polyline') || [])].map(line => ({ stroke: line.getAttribute('stroke'), opacity: line.getAttribute('opacity') })),
       laserCount: currentHost?.querySelectorAll('.ink-layer circle').length || 0,
     },
-    warnings: [...document.querySelectorAll('.warning-pill')].map(element => element.textContent),
+    warnings: [...document.querySelectorAll('.warning-list li')].map(element => element.textContent),
     error: document.querySelector('.error-card')?.textContent?.replace(/\\s+/g, ' ').trim(),
     captureEndedAt: performance.now(),
   })})()`
@@ -1934,15 +2224,20 @@ try {
     await delay(100)
   }
   assert(inputObjectId, 'PPTX file input was not found.')
-  await evaluate(`new Promise((resolve, reject) => {
-    const deadline = performance.now() + 5000
-    const check = () => {
-      if (document.querySelector('#__nuxt')?.__vue_app__) resolve(true)
-      else if (performance.now() >= deadline) reject(new Error('The Nuxt app did not hydrate before file input testing.'))
-      else requestAnimationFrame(check)
-    }
-    check()
-  })`)
+  try {
+    await evaluate(`new Promise((resolve, reject) => {
+      const deadline = performance.now() + 5000
+      const check = () => {
+        if (document.querySelector('#__nuxt')?.__vue_app__) resolve(true)
+        else if (performance.now() >= deadline) reject(new Error('The Nuxt app did not hydrate before file input testing.'))
+        else requestAnimationFrame(check)
+      }
+      check()
+    })`)
+  } catch (error) {
+    const browserState = await evaluate(`({ readyState: document.readyState, title: document.title, rootPresent: Boolean(document.querySelector('#__nuxt')), appMounted: Boolean(document.querySelector('#__nuxt')?.__vue_app__), body: document.body.innerText.replace(/\\s+/g, ' ').slice(0, 400), scripts: [...document.scripts].map(script => script.src).filter(Boolean) })`).catch(() => null)
+    throw new Error(`${error instanceof Error ? error.message : String(error)} Browser state: ${JSON.stringify(browserState)} Runtime exceptions: ${runtimeErrors.join('; ') || '(none)'}`)
+  }
   const uploadPath = async path => {
     const input = await call('Runtime.evaluate', { expression: `document.querySelector('input[type=file]')` })
     await call('DOM.setFileInputFiles', { objectId: input.result.objectId, files: [path] })
@@ -1959,7 +2254,7 @@ try {
     }
     throw new Error(`The upload error did not contain "${expected}". Last message: ${lastError || '(none)'}; state: ${JSON.stringify(lastState)}`)
   }
-  if (!inputPptx && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
+  if (!inputPptx && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly) {
     const fallbackArchive = await JSZip.loadAsync(await readFile(fixturePath))
     const fallbackPresentation = await fallbackArchive.file('ppt/presentation.xml').async('string')
     const slideList = /<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/.exec(fallbackPresentation)?.[1]
@@ -1988,7 +2283,7 @@ try {
     assert(fallbackLoaded && !fallbackState.error && fallbackState.shapes.length > 0 && fallbackState.warnings.some(warning => warning.includes('parsing worker could not start')),
       `A valid deck must still parse locally when worker construction fails, with a visible main-thread fallback warning: ${JSON.stringify({ fallbackName, title: fallbackState.title, shapes: fallbackState.shapes.length, warnings: fallbackState.warnings, error: fallbackState.error })}`)
   }
-  if (!grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
+  if (!grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly) {
     const corruptArchivePath = join(runtimeDir, 'damaged.pptx')
     await writeFile(corruptArchivePath, Buffer.from('not a zip archive'))
     await uploadPath(corruptArchivePath)
@@ -1999,6 +2294,18 @@ try {
     await writeFile(invalidXmlPath, Buffer.from(await invalidXmlArchive.generateAsync({ type: 'uint8array', compression: 'STORE' })))
     await uploadPath(invalidXmlPath)
     assert((await waitForError('ppt/presentation.xml contains invalid XML')).includes('Couldn’t open this presentation'), 'A valid ZIP with malformed presentation XML must display a specific upload error.')
+    if (!inputPptx) {
+      const invalidSlideSizeArchive = await JSZip.loadAsync(await readFile(fixturePath))
+      const presentationPath = 'ppt/presentation.xml'
+      const validSlideSizeXml = await invalidSlideSizeArchive.file(presentationPath).async('string')
+      const invalidSlideSizeXml = validSlideSizeXml.replace(/(<p:sldSz\b[^>]*\bcx=")\d+(")/, (_, prefix, suffix) => `${prefix}0${suffix}`)
+      assert(invalidSlideSizeXml !== validSlideSizeXml, 'The invalid slide-size fixture could not update cx.')
+      invalidSlideSizeArchive.file(presentationPath, invalidSlideSizeXml)
+      const invalidSlideSizePath = join(runtimeDir, 'invalid-slide-size.pptx')
+      await writeFile(invalidSlideSizePath, Buffer.from(await invalidSlideSizeArchive.generateAsync({ type: 'uint8array', compression: 'STORE' })))
+      await uploadPath(invalidSlideSizePath)
+      assert((await waitForError('contains an invalid slide size')).includes('Couldn’t open this presentation'), 'A presentation with a zero slide width must display a specific upload error.')
+    }
     const partialCompoundSignaturePath = join(runtimeDir, 'partial-compound-signature.pptx')
     await writeFile(partialCompoundSignaturePath, Buffer.from([0xd0, 0xcf, 0x11, 0xe0]))
     await uploadPath(partialCompoundSignaturePath)
@@ -2028,8 +2335,15 @@ try {
     await writeFile(excessiveEntriesPath, Buffer.from(await excessiveEntriesArchive.generateAsync({ type: 'uint8array', compression: 'STORE' })))
     await uploadPath(excessiveEntriesPath)
     assert((await waitForError('more than 20,000 package entries')).includes('Couldn’t open this presentation'), 'An archive with excessive package-part count must display the safety-limit error.')
+    const excessiveSlidesPath = join(runtimeDir, 'excessive-slides.pptx')
+    const excessiveSlidesArchive = new JSZip()
+    const slideIds = Array.from({ length: 501 }, (_, index) => `<p:sldId id="${256 + index}" r:id="rId${index + 1}"/>`).join('')
+    excessiveSlidesArchive.file('ppt/presentation.xml', `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst>${slideIds}</p:sldIdLst></p:presentation>`)
+    await writeFile(excessiveSlidesPath, Buffer.from(await excessiveSlidesArchive.generateAsync({ type: 'uint8array', compression: 'STORE' })))
+    await uploadPath(excessiveSlidesPath)
+    assert((await waitForError('more than 500 slides')).includes('Couldn’t open this presentation'), 'A presentation with more than 500 slide IDs must display the slide-count safety-limit error.')
   }
-  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
+  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly) {
     const latestFilePath = join(runtimeDir, 'latest-wins.pptx')
     await copyFile(fixturePath, latestFilePath)
     await evaluate(`globalThis.__decklineWorkerDelayMs = 700; globalThis.__decklineDelayNextWorkerPost = true`)
@@ -2095,7 +2409,57 @@ try {
         return true
       })()`)
     }
-    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : initial.shapes.length === 106) break
+    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : initial.shapes.length === FIXTURE_FIRST_SLIDE_SHAPE_COUNT) break
+  }
+  if (narrationOnly) {
+    await evaluate(`window.__decklineMediaCalls = []; window.__decklineOriginalPlay = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function () { window.__decklineMediaCalls.push({ id: this.dataset.mediaId, currentTime: this.currentTime, volume: this.volume, muted: this.muted }); return Promise.resolve() }`)
+    for (const {name, setting, narrationPlays} of [
+      {name: 'default', setting: '', narrationPlays: false},
+      {name: 'disabled', setting: ' showNarration="0"', narrationPlays: false},
+      {name: 'enabled', setting: ' showNarration="1"', narrationPlays: true},
+    ]) {
+      const narrationArchive = await JSZip.loadAsync(await readFile(fixturePath))
+      const presentationRelsPath = 'ppt/_rels/presentation.xml.rels'
+      const presentationRels = await narrationArchive.file(presentationRelsPath).async('string')
+      narrationArchive.file(presentationRelsPath, presentationRels.replace('</Relationships>', '<Relationship Id="rIdNarration" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/></Relationships>'))
+      const contentTypes = await narrationArchive.file('[Content_Types].xml').async('string')
+      narrationArchive.file('[Content_Types].xml', contentTypes.replace('</Types>', '<Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/></Types>'))
+      narrationArchive.file('ppt/presProps.xml', `<?xml version="1.0"?><p:presentationPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:showPr showAnimation="0"${setting}/></p:presentationPr>`)
+      const mediaSlidePath = 'ppt/slides/slide15.xml'
+      const mediaSlide = await narrationArchive.file(mediaSlidePath).async('string')
+      const ordinaryAudioAction = '<p:audio><p:cMediaNode vol="50000" mute="0"><p:cTn id="99001" dur="indefinite"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="5"/></p:tgtEl></p:cMediaNode></p:audio>'
+      const markedNarrationSlide = mediaSlide
+        .replace('<p:audio><p:cMediaNode vol="80000"', '<p:audio isNarration="1"><p:cMediaNode vol="80000"')
+        .replace('<p:video><p:cMediaNode', `${ordinaryAudioAction}<p:video><p:cMediaNode`)
+      assert(markedNarrationSlide !== mediaSlide && markedNarrationSlide.includes(ordinaryAudioAction), 'The narration fixture could not mark narration and add an ordinary audio action.')
+      narrationArchive.file(mediaSlidePath, markedNarrationSlide)
+      const narrationFixturePath = join(runtimeDir, `presentation-narration-${name}.pptx`)
+      await writeFile(narrationFixturePath, Buffer.from(await narrationArchive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })))
+      const narrationDocumentName = await uploadPath(narrationFixturePath)
+      let narrationDocumentLoaded = false
+      for (let attempt = 0; attempt < 100; attempt++) {
+        narrationDocumentLoaded = await evaluate(`document.querySelector('.deck-title')?.textContent === ${JSON.stringify(narrationDocumentName)} && !document.querySelector('.loading-overlay')`)
+        if (narrationDocumentLoaded) break
+        await delay(50)
+      }
+      assert(narrationDocumentLoaded, `The ${name} narration fixture did not load.`)
+      await evaluate(`window.__decklineMediaCalls = []; for (const key of ['1', '5', 'Enter']) window.dispatchEvent(new KeyboardEvent('keydown', {key}))`)
+      let mediaSlideActive = false
+      for (let attempt = 0; attempt < 100; attempt++) {
+        mediaSlideActive = await evaluate(`Number(document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber) === 15`)
+        if (mediaSlideActive) break
+        await delay(25)
+      }
+      assert(mediaSlideActive, `The ${name} narration fixture did not navigate to its media slide.`)
+      await delay(350)
+      const narrationCalls = await evaluate(`window.__decklineMediaCalls`)
+      const narrationPlayed = narrationCalls.some(call => call.id === '3')
+      assert(narrationPlayed === narrationPlays && narrationCalls.some(call => call.id === '5') && narrationCalls.some(call => call.id === '2'),
+        `showNarration ${name} must gate only marked narration while ordinary audio and video continue: ${JSON.stringify({narrationCalls, narrationPlays})}`)
+    }
+    await evaluate(`HTMLMediaElement.prototype.play = window.__decklineOriginalPlay; delete window.__decklineOriginalPlay; delete window.__decklineMediaCalls`)
+    console.log('showNarration default, enabled/disabled, ordinary audio, and video playback verification passed.')
+    break captureFlow
   }
   if (!captureOnly && !themeBackgroundOnly && !strokeWidthOnly && !textOutlineRangeOnly) {
     assert(!initial.warnings.some(warning => warning.includes('beyond 30 seconds')), `Valid timing over 30 seconds must not be capped or skipped: ${JSON.stringify(initial.warnings)}`)
@@ -2162,7 +2526,8 @@ try {
     if (process.env.DECKLINE_CAPTURE_SLIDE_NUMBER) {
       const captureSlideNumber = Number(process.env.DECKLINE_CAPTURE_SLIDE_NUMBER)
       assert(Number.isInteger(captureSlideNumber) && captureSlideNumber > 0 && captureSlideNumber <= Number(initial.slide?.split('/')[1].trim()), `DECKLINE_CAPTURE_SLIDE_NUMBER must select an existing slide: ${captureSlideNumber}`)
-      await evaluate(`document.querySelector(${JSON.stringify(`[aria-label="Go to slide ${captureSlideNumber}"]`)})?.click()`)
+      for (const digit of String(captureSlideNumber)) await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(digit)} }))`)
+      await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
       for (let attempt = 0; attempt < 40 && Number((await state()).slide?.split('/')[0].trim()) !== captureSlideNumber; attempt++) await delay(50)
       initial = await state()
       assert(Number(initial.slide?.split('/')[0].trim()) === captureSlideNumber, `The requested capture slide did not open: ${captureSlideNumber}`)
@@ -2183,11 +2548,17 @@ try {
       assert(numericJump?.startsWith('02 / 03'), `Number plus Enter must jump to slide 2: ${numericJump}`)
     }
     assert(process.env.DECKLINE_CAPTURE_SLIDE_PATH, 'Set DECKLINE_CAPTURE_SLIDE_PATH for the browser capture.')
+    await call('Emulation.setDeviceMetricsOverride', { width: 1628, height: 992, deviceScaleFactor: 1, mobile: false })
+    await delay(100)
+    await evaluate(`document.querySelectorAll('.warning-strip').forEach(element => element.style.display = 'none')`)
     await evaluate('document.fonts.ready.then(() => true)')
+    await delay(100)
+    await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-frame')?.scrollIntoView({ block: 'center', inline: 'center' })`)
     await delay(100)
     const rect = await evaluate(`(() => { const { x, y, width, height } = document.querySelector('.stage-shell > .slide-host .slide-frame').getBoundingClientRect(); return { x, y, width, height } })()`)
     assert(rect.width > 0 && rect.height > 0, `The rendered slide frame has no size: ${JSON.stringify(rect)}`)
-    const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { ...rect, scale: 1280 / rect.width } })
+    const captureMetrics = await evaluate(`(() => { const box = element => { const { x, y, width, height } = element.getBoundingClientRect(); return { x, y, width, height } }; const viewport = visualViewport; return { dpr: devicePixelRatio, innerWidth, innerHeight, scrollX, scrollY, bodyMargin: getComputedStyle(document.body).margin, body: box(document.body), root: box(document.documentElement), stageShell: box(document.querySelector('.stage-shell')), host: box(document.querySelector('.stage-shell > .slide-host')), frame: box(document.querySelector('.stage-shell > .slide-host .slide-frame')), visualViewport: viewport ? { offsetLeft: viewport.offsetLeft, offsetTop: viewport.offsetTop, pageLeft: viewport.pageLeft, pageTop: viewport.pageTop, scale: viewport.scale, width: viewport.width, height: viewport.height } : null } })()`)
+    const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { ...rect, x: rect.x + captureMetrics.scrollX, y: rect.y + captureMetrics.scrollY, scale: 1280 / rect.width } })
     await writeFile(process.env.DECKLINE_CAPTURE_SLIDE_PATH, Buffer.from(screenshot.data, 'base64'))
     const glowStyles = await evaluate(`(() => {
       const shape = document.querySelector('.stage-shell > .slide-host [title="Effect reference 6"]')
@@ -2195,7 +2566,7 @@ try {
       return { shapeFilter: shape ? getComputedStyle(shape).filter : null, textShadow: text ? getComputedStyle(text).textShadow : null }
     })()`)
     const radialStyles = initial.shapes.filter(shape => shape.backgroundImage.includes('radial-gradient')).map(({name, backgroundImage, backgroundPosition, backgroundSize}) => ({name, backgroundImage, backgroundPosition, backgroundSize}))
-    console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, shapeCount: initial.shapes.length, radialStyles, glowStyles }))
+    console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, frameRect: rect, captureMetrics, shapeCount: initial.shapes.length, radialStyles, glowStyles }))
     break captureFlow
   }
   if (embeddedFontTestPath && !inputPptx) {
@@ -3010,7 +3381,7 @@ try {
          const runGlow = await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host [title="Run glow"] .text-run')).textShadow`)
          assert(runGlow.includes('rgb(0, 0, 255)'), `Run-level glow must compose with the text shadow style: ${runGlow}`)
         const effectWarnings = (await state()).warnings
-         assert(effectWarnings.some(warning => warning.includes('shape effectRef')) && effectWarnings.some(warning => warning.includes('not been calibrated against Office/WPS')) && !effectWarnings.some(warning => warning.includes('shape glow effect is not rendered')), 'Invalid effect references must warn and supported theme glow must report its approximation.')
+         assert(effectWarnings.some(warning => warning.includes('shape effectRef')) && effectWarnings.some(warning => warning.includes('not been calibrated against Office/WPS')) && effectWarnings.some(warning => warning.includes('outer shadow uses scale, skew, alignment, or rotation')) && !effectWarnings.some(warning => warning.includes('shape glow effect is not rendered')), 'Invalid effect references and unsupported outer-shadow transforms must warn while supported theme glow reports its approximation.')
         const svgLines = await evaluate(`[7, 8].map(index => { const host = document.querySelector('.stage-shell > .slide-host [title="Line reference ' + index + '"]'); const line = host.querySelector('.line-render > line'); const style = getComputedStyle(line); return { width: parseFloat(style.strokeWidth), cap: style.strokeLinecap, dash: style.strokeDasharray, marker: Boolean(host.querySelector('marker')) } })`)
         assert(svgLines[0].width > 0 && svgLines[0].width < 1 && svgLines[0].dash.split(/[ ,]+/).filter(Boolean).every((value, index) => Math.abs(parseFloat(value) / svgLines[0].width - [3, 4][index]) < 0.01) && svgLines[0].cap === 'round' && svgLines[0].dash !== 'none' && svgLines[0].marker && svgLines[1].cap === 'square' && svgLines[1].dash === 'none' && !svgLines[1].marker && Math.abs(svgLines[1].width / svgLines[0].width - 2) < 0.01, `Theme line cap/endings must inherit and local width/cap/dash/endings override independently: ${JSON.stringify(svgLines)}`)
       }
@@ -3027,7 +3398,7 @@ try {
     assert(runtimeErrors.length === 0, `Notes browser exceptions: ${runtimeErrors.join('; ')}`)
     console.log('Speaker-note rich text, master colors/defaults, character/number/picture bullets verified.')
   } else if (textOutlineRangeOnly) {
-    assert(initial.slide && !initial.error && initial.shapes.length === 106, `The text-outline-range fixture did not render: ${JSON.stringify({ upload, slide: initial.slide, shapeCount: initial.shapes.length, runtimeErrors })}`)
+    assert(initial.slide && !initial.error && initial.shapes.length === 107, `The text-outline-range fixture did not render: ${JSON.stringify({ upload, slide: initial.slide, shapeCount: initial.shapes.length, runtimeErrors })}`)
     const readOutlineWidths = snapshot => Object.fromEntries(snapshot.textRuns.filter(run => run.name === 'Text outline range').map(run => [run.text, Number.parseFloat(run.textStrokeWidth)]))
     const readOutlineShadows = snapshot => Object.fromEntries(snapshot.textRuns.filter(run => run.name === 'Text outline range').map(run => [run.text, run.textShadow]))
     const initialWidths = readOutlineWidths(initial)
@@ -3114,6 +3485,14 @@ try {
     await delay(80)
     const afterPointerCancel = await state()
     assert(afterPointerCancel.slide?.startsWith('03 / 68'), `A cancelled horizontal touch gesture must not advance the presentation: ${afterPointerCancel.slide}`)
+    const scaleAxisBefore = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Third slide"]'); const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)] })()`)
+    await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Third slide"]')?.click()`)
+    await delay(70)
+    const scaleAxisDuring = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Third slide"]'); const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)] })()`)
+    assert(scaleAxisDuring.every((value, axis) => value > scaleAxisBefore[axis] * 1.05 && value < scaleAxisBefore[axis] * 1.7), `Generic ScaleX and formula-backed ScaleY must animate independently: ${JSON.stringify({scaleAxisBefore, scaleAxisDuring})}`)
+    await delay(160)
+    const scaleAxisComplete = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Third slide"]'); const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)] })()`)
+    assert(scaleAxisComplete.every((value, axis) => Math.abs(value / scaleAxisBefore[axis] - 2) < 0.05), `Generic ScaleX and formula-backed ScaleY must hold their final factors: ${JSON.stringify({scaleAxisBefore, scaleAxisComplete})}`)
     await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Grayscale direct"]')?.click()`)
     await delay(80)
     const grayscaleDuring = await state()
@@ -3126,6 +3505,32 @@ try {
       && grayscaleDuring.warnings.some(warning => warning.includes('Multiple picture glows use layered CSS drop-shadows')),
     `Picture effectDag glows must render in order and warn that layered drop-shadows are approximate: ${JSON.stringify({pictureGlowFilter, warnings: grayscaleDuring.warnings})}`)
     assert(shape(grayscaleDuring, 'Grayscale direct').imageFilter === 'none' && shape(grayscaleDuring, 'Grayscale keyframes').imageFilter === 'none' && shape(grayscaleDuring, 'Grayscale p:set').imageFilter === 'grayscale(1)', `Discrete imageData.grayscale animations must honor from/keyframe starts and the immediate p:set value: ${JSON.stringify({ filters: grayscaleDuring.shapes.filter(element => element.name.startsWith('Grayscale ')).map(element => [element.name, element.imageFilter]), warnings: grayscaleDuring.warnings.filter(warning => warning.toLowerCase().includes('grayscale')) })}`)
+    assert(shape(grayscaleDuring, 'Static grayscale').imageFilter === 'grayscale(1)', `Static a:grayscl picture effects must render as grayscale: ${JSON.stringify(shape(grayscaleDuring, 'Static grayscale'))}`)
+    const alphaInverseFilters = await evaluate("(() => { const read = name => { const host = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.title === name); const image = host?.querySelector('img'); const filter = host?.querySelector('.image-alpha-inverse-filter'); const transfer = filter?.querySelector('feComponentTransfer'); return { imageFilter: image ? getComputedStyle(image).filter : '', alpha: transfer?.querySelector('feFuncA')?.getAttribute('tableValues') ?? null, red: transfer?.querySelector('feFuncR')?.getAttribute('intercept') ?? null, green: transfer?.querySelector('feFuncG')?.getAttribute('intercept') ?? null, blue: transfer?.querySelector('feFuncB')?.getAttribute('intercept') ?? null } }; return { alphaOnly: read('Alpha inverse alpha only'), color: read('Alpha inverse color replacement'), effectDag: read('Alpha inverse effect DAG'), nested: read('Alpha inverse nested effect container') } })()")
+    assert(alphaInverseFilters.alphaOnly.imageFilter.includes('url(') && alphaInverseFilters.alphaOnly.alpha === '1 0'
+      && alphaInverseFilters.alphaOnly.red === null
+      && alphaInverseFilters.color.imageFilter.includes('url(') && alphaInverseFilters.color.alpha === '1 0'
+      && alphaInverseFilters.color.red === '1' && alphaInverseFilters.color.green === '0' && alphaInverseFilters.color.blue === '0'
+      && alphaInverseFilters.effectDag.imageFilter.includes('url(') && alphaInverseFilters.effectDag.alpha === '1 0'
+      && alphaInverseFilters.effectDag.red === '0' && alphaInverseFilters.effectDag.green === '0' && alphaInverseFilters.effectDag.blue === '1'
+      && alphaInverseFilters.nested.imageFilter.includes('url(') && alphaInverseFilters.nested.alpha === '1 0'
+      && alphaInverseFilters.nested.red === '0' && alphaInverseFilters.nested.green === '1' && alphaInverseFilters.nested.blue === '1',
+    `a:blip alpha inverse must invert source alpha and use an optional replacement color: ${JSON.stringify(alphaInverseFilters)}`)
+    const combinedAlphaInverse = await evaluate("(() => { const host = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.title === 'Alpha inverse across image and shape effects'); const image = host?.querySelector('img'); const filters = [...(host?.querySelectorAll('.image-alpha-inverse-filter') || [])].map(filter => { const transfer = filter.querySelector('feComponentTransfer'); return {alpha: transfer?.querySelector('feFuncA')?.getAttribute('tableValues') ?? null, red: transfer?.querySelector('feFuncR')?.getAttribute('intercept') ?? null, green: transfer?.querySelector('feFuncG')?.getAttribute('intercept') ?? null, blue: transfer?.querySelector('feFuncB')?.getAttribute('intercept') ?? null} }); return {imageFilter: image ? getComputedStyle(image).filter : '', filters} })()")
+    const combinedFilterUrls = combinedAlphaInverse.imageFilter.match(/url\(/g) || []
+    assert(combinedAlphaInverse.filters.length === 2 && combinedFilterUrls.length === 2
+      && combinedAlphaInverse.imageFilter.indexOf('url(') < combinedAlphaInverse.imageFilter.lastIndexOf('url(')
+      && combinedAlphaInverse.filters[0].alpha === '1 0' && combinedAlphaInverse.filters[0].red === '1'
+      && combinedAlphaInverse.filters[0].green === '0' && combinedAlphaInverse.filters[0].blue === '0'
+      && combinedAlphaInverse.filters[1].alpha === '1 0' && combinedAlphaInverse.filters[1].red === '0'
+      && combinedAlphaInverse.filters[1].green === '0' && combinedAlphaInverse.filters[1].blue === '1',
+    `blip effects must run before picture effectDag alpha inverse without dropping either color replacement: ${JSON.stringify(combinedAlphaInverse)}`)
+    const inverseAfterGrayscale = shape(grayscaleDuring, 'Alpha inverse after grayscale').imageFilter
+    const inverseBeforeGrayscale = shape(grayscaleDuring, 'Alpha inverse before grayscale').imageFilter
+    assert(inverseAfterGrayscale.indexOf('grayscale(1)') < inverseAfterGrayscale.indexOf('url(')
+      && inverseBeforeGrayscale.indexOf('url(') < inverseBeforeGrayscale.indexOf('grayscale(1)')
+      && !grayscaleDuring.warnings.some(warning => warning.includes('ordered before grayscale')),
+    `a:blip grayscale and color alpha inverse must render in document order: ${JSON.stringify({inverseAfterGrayscale, inverseBeforeGrayscale, warnings: grayscaleDuring.warnings})}`)
     const cropDirectDuring = shape(grayscaleDuring, 'Crop direct').imageCropStyle
     const cropKeyframesDuring = shape(grayscaleDuring, 'Crop keyframes').imageCropStyle
     assert(parseFloat(cropDirectDuring.width) > 100 && parseFloat(cropDirectDuring.width) < 166.67 && parseFloat(cropDirectDuring.left) < 0, `Linear imageData.cropLeft animation must interpolate the source rectangle: ${JSON.stringify(cropDirectDuring)}`)
@@ -3141,6 +3546,28 @@ try {
     await delay(260)
     const grayscaleComplete = await state()
     assert(grayscaleComplete.shapes.filter(element => element.name.startsWith('Grayscale ')).every(element => element.imageFilter === 'grayscale(1)'), `Direct, keyframed, and p:set imageData.grayscale animations must hold their final true state: ${JSON.stringify(grayscaleComplete.shapes.filter(element => element.name.startsWith('Grayscale ')).map(element => [element.name, element.imageFilter]))}`)
+    assert(shape(grayscaleComplete, 'Static grayscale').imageFilter === 'grayscale(1)', 'Static a:grayscl picture effects must remain applied after animation playback.')
+    const scaleToOnlyStart = await evaluate(`new Promise(resolve => {
+      const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale to only"]')
+      element.click()
+      requestAnimationFrame(() => {
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform)
+        resolve([Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)])
+      })
+    })`)
+    assert(scaleToOnlyStart.every(value => value < 0.2), `A to-only scale animation must start at (0, 0): ${JSON.stringify(scaleToOnlyStart)}`)
+    await delay(300)
+    const scaleToOnlyComplete = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale to only"]'); const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)] })()`)
+    assert(Math.abs(scaleToOnlyComplete[0] - 2) < 0.03 && Math.abs(scaleToOnlyComplete[1] - 1.5) < 0.03, `A generic numeric by-only ScaleX must start at zero and hold its relative endpoint while animScale to-only holds its independent target: ${JSON.stringify(scaleToOnlyComplete)}`)
+    await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale accumulation"]')?.click()`)
+    await delay(360)
+    const accumulatedScale = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale accumulation"]'); const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)] })()`)
+    assert(accumulatedScale.every(value => Math.abs(value - 2.5) < 0.03), `A three-cycle 100%→150% scale animation with accumulate="always" must build to 250%: ${JSON.stringify(accumulatedScale)}`)
+    const motionAccumulationStart = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Motion accumulation"]'); const frame = element.closest('.slide-frame').getBoundingClientRect(); return (element.getBoundingClientRect().left - frame.left) / frame.width })()`)
+    await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Motion accumulation"]')?.click()`)
+    await delay(360)
+    const motionAccumulationEnd = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Motion accumulation"]'); const frame = element.closest('.slide-frame').getBoundingClientRect(); return (element.getBoundingClientRect().left - frame.left) / frame.width })()`)
+    assert(Math.abs(motionAccumulationEnd - motionAccumulationStart - 0.03) < 0.003, `A three-cycle 1% parent-origin motion with accumulate="always" must build to a 3% offset: ${JSON.stringify({motionAccumulationStart, motionAccumulationEnd})}`)
     const cropDirectComplete = shape(grayscaleComplete, 'Crop direct').imageCropStyle
     const cropKeyframesComplete = shape(grayscaleComplete, 'Crop keyframes').imageCropStyle
     assert(Math.abs(parseFloat(cropDirectComplete.width) - 166.6667) < 0.1 && Math.abs(parseFloat(cropDirectComplete.left) + 66.6667) < 0.1, `imageData.cropLeft animation must hold its final crop: ${JSON.stringify(cropDirectComplete)}`)
@@ -3161,20 +3588,27 @@ try {
     assert((await state()).slide?.startsWith('05 / 68'), 'A leftward touch swipe must advance one slide.')
     await evaluate(`(() => {
       const stage = document.querySelector('.stage-shell')
-      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 503, pointerType: 'touch', clientX: 400, clientY: 300 }))
-      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: 500, clientY: 300 }))
-      stage.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: 550, clientY: 300 }))
-      stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: 550, clientY: 300 }))
-      stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 503, pointerType: 'touch', clientX: 400, clientY: 300 }))
+      const bounds = stage.getBoundingClientRect()
+      const centerX = bounds.left + bounds.width / 2
+      const centerY = bounds.top + bounds.height / 2
+      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 503, pointerType: 'touch', clientX: centerX - 50, clientY: centerY }))
+      stage.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: centerX + 50, clientY: centerY }))
+      stage.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: centerX + 100, clientY: centerY }))
+      stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 504, pointerType: 'touch', clientX: centerX + 100, clientY: centerY }))
+      stage.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 503, pointerType: 'touch', clientX: centerX - 50, clientY: centerY }))
     })()`)
     await delay(40)
     const pinched = await state()
     assert(pinched.zoomTransform.startsWith('matrix(1.5') && pinched.slide?.startsWith('05 / 68'), `A two-finger pinch must update zoom without advancing the slide: ${JSON.stringify({ slide: pinched.slide, transform: pinched.zoomTransform })}`)
+    const pinchPan = await evaluate('document.querySelector(".stage-shell > .slide-host")?.style.translate')
+    const pinchPanCoordinates = String(pinchPan || '').split(/\s+/).map(value => Number.parseFloat(value) || 0)
+    assert(Math.abs((pinchPanCoordinates[0] ?? 0) - 25) < 0.1 && Math.abs(pinchPanCoordinates[1] || 0) < 0.1, `Pinch zoom must keep the slide point under the moving finger midpoint anchored: ${JSON.stringify(pinchPan)}`)
     await evaluate('(() => { const stage = document.querySelector(".stage-shell"); stage.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 505, pointerType: "touch", clientX: 400, clientY: 300 })); stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 505, pointerType: "touch", clientX: 350, clientY: 270 })); stage.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 505, pointerType: "touch", clientX: 350, clientY: 270 })) })()')
     await delay(40)
     const zoomPan = await evaluate('document.querySelector(".stage-shell > .slide-host")?.style.translate')
+    const zoomPanCoordinates = String(zoomPan || '').split(/\s+/).map(value => Number.parseFloat(value) || 0)
     const panned = await state()
-    assert(zoomPan === '-50px -30px' && panned.zoomTransform.startsWith('matrix(1.5') && panned.slide?.startsWith('05 / 68'), `Dragging at increased zoom must pan the slide without changing its scale or slide: ${JSON.stringify({ slide: panned.slide, transform: panned.zoomTransform, zoomPan })}`)
+    assert(Math.abs((zoomPanCoordinates[0] ?? 0) + 25) < 0.1 && Math.abs((zoomPanCoordinates[1] ?? 0) + 30) < 0.1 && panned.zoomTransform.startsWith('matrix(1.5') && panned.slide?.startsWith('05 / 68'), `Dragging at increased zoom must pan the slide without changing its scale or slide: ${JSON.stringify({ slide: panned.slide, transform: panned.zoomTransform, zoomPan })}`)
     await evaluate(`document.querySelector('[aria-label="Zoom out"]').click(); document.querySelector('[aria-label="Zoom out"]').click()`)
     await delay(40)
     assert((await state()).zoomTransform.startsWith('matrix(1,'), 'The touch gesture check must restore the default zoom.')
@@ -3182,11 +3616,16 @@ try {
     assert(restoredPan === '0px' || restoredPan === '0px 0px', 'Returning to 100% zoom must recenter the slide: ' + JSON.stringify(restoredPan))
     console.log('Image grayscale, picture crop, image tone, and touch swipe/pinch/pan verification passed.')
   } else if (performanceOnly) {
-    assert(initial.shapes.length === 106 && !initial.error, `The performance fixture must render before sampling: ${JSON.stringify({ shapeCount: initial.shapes?.length, error: initial.error, warnings: initial.warnings, runtimeErrors })}`)
+    assert(initial.shapes.length === FIXTURE_FIRST_SLIDE_SHAPE_COUNT && !initial.error, `The performance fixture must render before sampling: ${JSON.stringify({ shapeCount: initial.shapes?.length, error: initial.error, warnings: initial.warnings, runtimeErrors })}`)
     assert(process.env.DECKLINE_PERFORMANCE_PATH, 'Set DECKLINE_PERFORMANCE_PATH to retain the measurement JSON.')
     await call('Performance.enable')
     const traceCompleted = new Promise(resolve => { resolveTrace = resolve })
     await call('Tracing.start', { categories: 'devtools.timeline,toplevel', transferMode: 'ReturnAsStream' })
+    const cpuProfileEnabled = process.env.DECKLINE_PROFILE_CPU === '1'
+    if (cpuProfileEnabled) {
+      await call('Profiler.enable')
+      await call('Profiler.start')
+    }
     const before = Object.fromEntries((await call('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]))
     const sample = await evaluate(`new Promise(resolve => {
       const intervals = [], longTasks = [];
@@ -3204,6 +3643,7 @@ try {
       };
       requestAnimationFrame(frame);
     })`)
+    const cpuProfile = cpuProfileEnabled ? (await call('Profiler.stop')).profile : undefined
     const after = Object.fromEntries((await call('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]))
     await call('Tracing.end')
     const { stream } = await traceCompleted
@@ -3238,11 +3678,31 @@ try {
     const summary = { frames: sorted.length, medianIntervalMs: sorted[Math.floor(sorted.length / 2)], p95IntervalMs: sorted[Math.ceil(sorted.length * 0.95) - 1], maxIntervalMs: sorted.at(-1), longTasks: sample.longTasksMs.length, metricsMs }
     const taskTimes = [...frameTaskMs].sort((a, b) => a - b)
     summary.frameTasks = { p95Ms: taskTimes[Math.ceil(taskTimes.length * 0.95) - 1], maxMs: taskTimes.at(-1), intervalsOver16Ms: taskTimes.filter(value => value > 16).length }
-    const report = { capturedAt: new Date().toISOString(), baseUrl, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'unspecified', browserFlags: ['--headless=new', '--disable-gpu'], fixture: 'First slide, 106 rendered shapes, first animation step, two seconds', tracePath, summary, sample, frameTaskMs, limitations: ['RAF intervals describe scheduling cadence, not per-frame CPU/render time.', 'Trace task durations measure main-thread occupied wall time between RAF callback markers, not GPU paint/compositor time or CPU-only execution.', 'Tracing adds measurement overhead; compare only identically instrumented runs.', 'This sample does not establish Office/WPS fidelity, all-file performance, or cross-browser performance.'] }
+    const profileNodes = new Map((cpuProfile?.nodes || []).map(node => [node.id, {node, selfTimeUs: 0}]))
+    cpuProfile?.samples?.forEach((nodeId, index) => {
+      const sample = profileNodes.get(nodeId)
+      if (sample) sample.selfTimeUs += cpuProfile.timeDeltas?.[index] || 0
+    })
+    const cpuProfileSummary = cpuProfile ? {
+      samples: cpuProfile.samples?.length || 0,
+      topSelfTime: [...profileNodes.values()].sort((a, b) => b.selfTimeUs - a.selfTimeUs).slice(0, 20).map(({node, selfTimeUs}) => ({
+        functionName: node.callFrame.functionName || '(anonymous)',
+        url: node.callFrame.url,
+        line: node.callFrame.lineNumber + 1,
+        column: node.callFrame.columnNumber,
+        selfMs: Number((selfTimeUs / 1000).toFixed(3))
+      }))
+    } : undefined
+    const report = { capturedAt: new Date().toISOString(), baseUrl, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'unspecified', browserFlags: ['--headless=new', '--disable-gpu'], fixture: `First slide, ${FIXTURE_FIRST_SLIDE_SHAPE_COUNT} rendered shapes, first animation step, two seconds`, tracePath, summary, ...(cpuProfileSummary ? {cpuProfile: cpuProfileSummary} : {}), sample, frameTaskMs, limitations: ['RAF intervals describe scheduling cadence, not per-frame CPU/render time.', 'Trace task durations measure main-thread occupied wall time between RAF callback markers, not GPU paint/compositor time or CPU-only execution.', 'Tracing and CPU profiling add measurement overhead; compare only identically instrumented runs.', 'This sample does not establish Office/WPS fidelity, all-file performance, or cross-browser performance.'] }
     await writeFile(process.env.DECKLINE_PERFORMANCE_PATH, JSON.stringify(report, null, 2) + '\n')
-    console.log(JSON.stringify({ performanceReport: process.env.DECKLINE_PERFORMANCE_PATH, ...summary }))
+    console.log(JSON.stringify({ performanceReport: process.env.DECKLINE_PERFORMANCE_PATH, ...summary, ...(cpuProfileSummary ? {cpuProfile: cpuProfileSummary} : {}) }))
   } else if (captureOnly) {
     assert(initial.slide && !initial.error, `The PPTX did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+    await call('Emulation.setDeviceMetricsOverride', { width: 1628, height: 992, deviceScaleFactor: 1, mobile: false })
+    await delay(100)
+    await evaluate(`document.querySelectorAll('.warning-strip').forEach(element => element.style.display = 'none')`)
+    await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-frame')?.scrollIntoView({ block: 'center', inline: 'center' })`)
+    await delay(100)
     const textLayout = await evaluate(`(() => [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].map(shape => {
       const text = shape.querySelector('.text-frame')
       const run = text?.querySelector('.text-run')
@@ -3250,16 +3710,18 @@ try {
       const rect = node => { const { top, bottom, height } = node.getBoundingClientRect(); return { top, bottom, height } }
       return { name: shape.title, shape: rect(shape), textFrame: { ...rect(text), clientHeight: text.clientHeight, scrollHeight: text.scrollHeight, overflow: getComputedStyle(text).overflow }, paragraph: rect(run.parentElement), run: rect(run), fontSize: getComputedStyle(run).fontSize, bodyFit: shape.className }
     }).filter(Boolean))()`)
-    const rect = await evaluate(`(() => { const { x, y, width, height } = document.querySelector('.stage-shell > .slide-host .slide-frame').getBoundingClientRect(); return { x, y, width, height } })()`)
+    const rect = await evaluate(`(() => { const { x, y, width, height } = document.querySelector('.stage-shell > .slide-host .slide-frame').getBoundingClientRect(); return { x: x + scrollX, y: y + scrollY, width, height } })()`)
     const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { ...rect, scale: 1280 / rect.width } })
     assert(process.env.DECKLINE_CAPTURE_SLIDE_PATH, 'Set DECKLINE_CAPTURE_SLIDE_PATH for the browser capture.')
     await writeFile(process.env.DECKLINE_CAPTURE_SLIDE_PATH, Buffer.from(screenshot.data, 'base64'))
     console.log(JSON.stringify({ screenshot: process.env.DECKLINE_CAPTURE_SLIDE_PATH, slide: initial.slide, hostFrame: initial.hostFrame, shapes: initial.shapes, paragraphs: initial.paragraphs, textRuns: initial.textRuns, textLayout }))
   } else {
-  assert(initial.shapes.length === 106, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+  assert(initial.shapes.length === FIXTURE_FIRST_SLIDE_SHAPE_COUNT, `The animation fixture did not render: ${JSON.stringify({ upload, initial, runtimeErrors })}`)
+  const triggerControl = await evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale emphasis"]'); return { trigger: target?.classList.contains('is-animation-trigger'), role: target?.getAttribute('role'), tabIndex: target?.getAttribute('tabindex'), label: target?.getAttribute('aria-label') } })()`)
+  assert(triggerControl.trigger && triggerControl.role === 'button' && triggerControl.tabIndex === '0' && triggerControl.label === 'Play animation from Scale emphasis', `Shape-trigger controls must retain click styling, keyboard focus, and an accessible label: ${JSON.stringify(triggerControl)}`)
   const boundConnectorPath = await evaluate(`[...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === 'Bound straight connector')?.querySelector('.line-render path')?.getAttribute('d') || ''`)
   assert(boundConnectorPath === 'M 26.3158 142.8571 L 947.3684 857.1429', `Preset connection sites must use their indices and the rotated target transform: ${boundConnectorPath}`)
-  assert(initial.warnings.includes('Only rotation animations currently accumulate repeated values; this animation repeats without accumulation.'), 'A repeated non-rotation behavior with accumulate="always" must warn when its values are not accumulated.')
+  assert(!initial.warnings.some(warning => warning.includes('accumulate="always"')), 'Accumulating rotation and scale behaviors must not report a fallback warning.')
   assert(initial.warnings.some(warning => warning.includes('line arrow size p:set') && warning.includes('unsupported value'))
     && initial.warnings.some(warning => warning.includes('line arrow size animation') && warning.includes('unsupported string values')),
     `Invalid arrow size values must be skipped with warnings: ${JSON.stringify(initial.warnings)}`)
@@ -3626,6 +4088,8 @@ try {
   assert(staticStrikethroughRuns.length > 0 && staticStrikethroughRuns.every(run => run.textDecorationLine.includes('line-through')) && staticStrikeStyles.length === staticStrikethroughRuns.length && staticStrikeStyles.every(style => style === 'double'), `DrawingML a:rPr strike="dblStrike" must render as a double CSS line-through across text-run segmentation: ${JSON.stringify({ runs: staticStrikethroughRuns, styles: staticStrikeStyles })}`)
   const textUnderlineStyles = await evaluate(`(() => Object.fromEntries([...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Opacity formula targets"] .text-run') || [])].filter(run => run.textContent.trim()).map(run => [run.textContent.trim(), { underline: getComputedStyle(run.querySelector('.text-run-underline') || run).textDecorationStyle, strikethrough: getComputedStyle(run).textDecorationStyle }])))()`)
   assert(textUnderlineStyles.Run.underline === 'dotted' && textUnderlineStyles.Dash.underline === 'dashed' && textUnderlineStyles.Wave.underline === 'wavy' && textUnderlineStyles.Pair.underline === 'double' && textUnderlineStyles.Word.underline === 'solid' && textUnderlineStyles.Mix.underline === 'dotted' && textUnderlineStyles.Mix.strikethrough === 'double', `DrawingML underline and strikethrough styles must render independently: ${JSON.stringify(textUnderlineStyles)}`)
+  const unstruckTextRuns = initial.textRuns.filter(run => run.name === 'Opacity formula targets' && ['Run', 'Dash', 'Wave', 'Pair', 'Word'].includes(run.text.trim()))
+  assert(unstruckTextRuns.length === 5 && unstruckTextRuns.every(run => !run.textDecorationLine.split(/\s+/).includes('line-through')), `Text runs without a strike attribute must not render a strikethrough: ${JSON.stringify(unstruckTextRuns)}`)
   assert(initial.warnings.some(warning => warning.includes('underline value "words" is approximated')), `Unrepresentable underline variants must be reported: ${JSON.stringify(initial.warnings)}`)
   const outlinedParagraphRuns = await evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Paragraph wipe target"] .text-run') || [])].map(run => ({ color: getComputedStyle(run).webkitTextStrokeColor, width: parseFloat(getComputedStyle(run).webkitTextStrokeWidth) })))()`)
   assert(outlinedParagraphRuns.length === 2 && outlinedParagraphRuns.every(run => run.color === 'rgb(255, 0, 0)' && run.width > 0), `A solid DrawingML text outline must render with its color and width across p:charRg segmentation: ${JSON.stringify(outlinedParagraphRuns)}`)
@@ -3686,11 +4150,13 @@ try {
     checkFrame()
   })`)
   assert(autoComplete, 'The repeated automatic sequence must hold its final state without a click.')
-  const pressPresentationKey = key => evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`)
+  const pressPresentationKey = (key, repeat = false) => evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, repeat: ${repeat}, bubbles: true }))`)
   const readScreenBlank = () => evaluate(`document.querySelector('.screen-overlay')?.classList.contains('is-black') ? 'black' : document.querySelector('.screen-overlay')?.classList.contains('is-white') ? 'white' : null`)
   for (const [key, mode] of [['b', 'black'], ['w', 'white'], ['.', 'black'], [',', 'white']]) {
     await pressPresentationKey(key)
     assert(await readScreenBlank() === mode, `${key} must activate the ${mode} blank screen.`)
+    await pressPresentationKey(key, true)
+    assert(await readScreenBlank() === mode, `A repeated ${key} keydown must keep the ${mode} blank screen active.`)
     await pressPresentationKey(key)
     assert(await readScreenBlank() === null, `${key} must restore the presentation from the ${mode} blank screen.`)
   }
@@ -3743,14 +4209,18 @@ try {
   const afterWith = await stateAtElapsed(clickStartedAt, 150)
   assert(Number(shape(afterWith, 'Parent speed delayed').opacity) > 0.6, `A positive parent time-node speed must scale its child's delay: ${shape(afterWith, 'Parent speed delayed').opacity}`)
   assert(shape(afterWith, 'With previous').visibility === 'visible' && shape(afterWith, 'Exit after previous').visibility === 'visible', 'The with-effect delay must be applied inside the click step.')
-  const zeroIntervalRuns = afterWith.textRuns.filter(run => run.name === 'Zero-interval letters')
+  const byWordBlindsAfterWith = afterWith.textRuns.filter(run => run.name === 'By-word blinds' && run.text.trim())
+  assert(byWordBlindsAfterWith.length > 1 && byWordBlindsAfterWith.every(run => run.maskImage.startsWith('repeating-linear-gradient(')) && new Set(byWordBlindsAfterWith.map(run => run.maskImage)).size > 1, `p:iterate by word must stagger blinds masks across text runs: ${JSON.stringify(byWordBlindsAfterWith)}`)
+  const zeroIntervalRuns = afterStart.textRuns.filter(run => run.name === 'Zero-interval letters')
   const zeroIntervalOpacities = zeroIntervalRuns.map(run => Number(run.opacity))
   assert(zeroIntervalRuns.map(run => run.text).join('') === 'SYNC' && zeroIntervalOpacities.length === 4
     && zeroIntervalOpacities.every(opacity => opacity > 0 && opacity < 1 && Math.abs(opacity - zeroIntervalOpacities[0]) < 0.02)
-    && !afterWith.warnings.some(warning => warning.includes('text iteration with unsupported type or interval')),
-    `A zero tmAbs interval must animate every letter concurrently without an unsupported-interval warning: ${JSON.stringify({ runs: zeroIntervalRuns, warnings: afterWith.warnings })}`)
+    && !afterStart.warnings.some(warning => warning.includes('text iteration with unsupported type or interval')),
+    `A zero tmAbs interval must animate every letter concurrently without an unsupported-interval warning: ${JSON.stringify({ elapsed: afterStart.now - clickStartedAt, runs: zeroIntervalRuns, iterationWarnings: afterStart.warnings.filter(warning => /iteration|interval/i.test(warning)) })}`)
 
   const midIteration = await stateAtElapsed(clickStartedAt, 350)
+  const byLetterBlindsMidIteration = midIteration.textRuns.filter(run => run.name === 'By letter' && run.text.trim())
+  assert(byLetterBlindsMidIteration.length === 4 && byLetterBlindsMidIteration.every(run => run.maskImage.startsWith('repeating-linear-gradient(')) && new Set(byLetterBlindsMidIteration.map(run => run.maskImage)).size > 1, `p:iterate by letter must stagger blinds masks across text runs: ${JSON.stringify(byLetterBlindsMidIteration)}`)
   assert(midIteration.textRuns.find(run => run.text === 'D')?.visibility === 'hidden' && shape(midIteration, 'After letters').opacity === '1', `The delayed exit must not start before the final by-letter iteration: ${JSON.stringify({ lastLetter: midIteration.textRuns.find(run => run.text === 'D'), afterEffect: shape(midIteration, 'After letters') })}`)
   const beforeParentEnd = await stateAtElapsed(clickStartedAt, 500)
   assert(shape(beforeParentEnd, 'Parent timing after-effect').visibility === 'hidden', 'The parent time-container after-effect must remain pending before its duration ends.')
@@ -3794,7 +4264,10 @@ try {
   assert(shape(afterSecond, 'Second click').visibility === 'visible', 'Second click must reveal its appear target.')
   assert(shape(afterSecond, 'Exit after previous').visibility === 'visible', 'A frozen exit must restore its base visibility when a later sibling animation starts.')
   assert(paragraph(afterSecond, 'Built paragraph').visibility === 'visible', 'The second click must reveal its targeted paragraph.')
-  assert(rotation(shape(afterSecond, 'Scale emphasis')) > 0.5 && rotation(shape(afterSecond, 'Scale emphasis')) < 89.5, `A by-only rotation animation must interpolate its DrawingML angle: ${shape(afterSecond, 'Scale emphasis').transform}`)
+  assert(rotation(shape(afterSecond, 'Scale emphasis')) > 0.5 && rotation(shape(afterSecond, 'Scale emphasis')) < 115, `A by-only rotation and additive formula keyframes must interpolate their DrawingML angles: ${shape(afterSecond, 'Scale emphasis').transform}`)
+  const rotationProgress = Math.max(0, Math.min(1, (afterSecond.now - scaleStartedAt) / 300))
+  const expectedFormulaRotation = rotationProgress * 45 + 75 * Math.sin(Math.PI * rotationProgress)
+  assert(Math.abs(rotation(shape(afterSecond, 'Scale emphasis')) - expectedFormulaRotation) < 10, `A style.rotation p:tav formula must sample the base property and progress: ${JSON.stringify({ elapsed: afterSecond.now - scaleStartedAt, expected: expectedFormulaRotation, actual: rotation(shape(afterSecond, 'Scale emphasis')), warnings: afterSecond.warnings.filter(warning => /rotation|formula|keyframe/i.test(warning)) })}`)
   const scaleReverse = await stateAtElapsed(scaleStartedAt, 250)
   const scaleReverseRatio = transformScale(shape(scaleReverse, 'Scale emphasis'))
   assert(scaleReverseRatio > 1.15 && scaleReverseRatio < 1.45, 'Auto-reverse must interpolate back from the scale target before the next forward pass.')
@@ -3802,7 +4275,7 @@ try {
   assert(transformScale(shape(scaleBeforeRemove, 'Scale emphasis')) > 1.01 && transformScale(shape(scaleBeforeRemove, 'Scale emphasis')) < 1.45, `The repeat duration must keep the scale animation active until its final phase: ${JSON.stringify(shape(scaleBeforeRemove, 'Scale emphasis'))}`)
   const scaleComplete = await stateAtElapsed(scaleStartedAt, 1_100)
   assert(Math.abs(transformScale(shape(scaleComplete, 'Scale emphasis')) - 1) < 0.02, 'A remove fill must restore the original scale after the repeat duration expires.')
-  assert(Math.abs(rotation(shape(scaleComplete, 'Scale emphasis')) - 90) < 2, `A completed by-only rotation animation must hold its final angle: ${JSON.stringify({ angle: rotation(shape(scaleComplete, 'Scale emphasis')), transform: shape(scaleComplete, 'Scale emphasis').transform })}`)
+  assert(Math.abs(rotation(shape(scaleComplete, 'Scale emphasis')) - 45) < 2, `A by-only p:animRot and additive style.rotation p:anim keyframe must compose their final angles: ${JSON.stringify({ angle: rotation(shape(scaleComplete, 'Scale emphasis')), transform: shape(scaleComplete, 'Scale emphasis').transform })}`)
   for (const direction of ['right', 'left', 'up', 'down']) {
     const wipe = shape(scaleComplete, `Wipe ${direction}`)
     const cssDirection = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : direction
@@ -3874,6 +4347,16 @@ try {
   const textShadowNames = ['Text shadow direct', 'Text shadow keyframes', 'Text shadow set none', 'Text shadow set auto']
   const dynamicMotionStart = await evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="Dynamic formula motion path"]'); const frame = target.closest('.slide-frame').getBoundingClientRect(); const left = target.getBoundingClientRect().left - frame.left; const frameWidth = frame.width; const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale emphasis"]').click(); window.__triggerTextShadowStart = new Promise(resolve => requestAnimationFrame(() => resolve(${JSON.stringify(textShadowNames)}.map(name => { const style = getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="' + name + '"] .text-run')); return {filter: style.filter, textShadow: style.textShadow} })))); window.__triggerAnimationState = new Promise(resolve => { const sample = frameTime => { if (frameTime - started >= 100) { const sampleTime = frameTime; resolve(${stateExpression}) } else requestAnimationFrame(sample) }; requestAnimationFrame(sample) }); return { left, frameWidth, started } })()`)
   const triggerStartedAt = dynamicMotionStart.started
+  // Capture on the browser clock so CDP round trips cannot skip over the middle keyframe.
+  await evaluate(`window.__iterationMiddleState = new Promise(resolve => {
+    const sample = frameTime => {
+      if (frameTime - ${triggerStartedAt} >= 190) {
+        const sampleTime = frameTime
+        resolve(${stateExpression})
+      } else requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+  }); true`)
   const textShadowStartStyles = await evaluate('window.__triggerTextShadowStart')
   const triggered = await evaluate('window.__triggerAnimationState')
   await evaluate(`window.__hueSample = new Promise(resolve => {
@@ -3885,9 +4368,7 @@ try {
     }
     sample()
   }); true`)
-  // Capture the shared midpoint before later CDP round trips can pass the word-stagger window.
-  await delay(Math.max(0, 190 - ((await evaluate('performance.now()')) - triggerStartedAt)))
-  const iterationMiddle = await state()
+  const iterationMiddle = await evaluate('window.__iterationMiddleState')
   const hueSample = await evaluate('window.__hueSample')
   const textRangeOpacityDuring = triggered.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
   const opacityFormulaTextRunsDuring = triggered.textRuns.filter(run => run.name === 'Opacity formula targets' && run.text.trim() === 'Run')
@@ -3915,7 +4396,7 @@ try {
   assert(coordinateDuring.left > coordinateStart.left + coordinateStart.frameWidth * 0.02 && coordinateDuring.top > coordinateStart.top + coordinateStart.frameHeight * 0.02, `Generic ppt_x/ppt_y animations must move their target independently on both axes: ${JSON.stringify({ start: coordinateStart, during: coordinateDuring })}`)
   const triggerOpacity = Number(shape(triggered, 'Click fade').opacity)
   const formulaOpacityDuring = Number(shape(triggered, 'By word').opacity)
-  assert(formulaOpacityDuring > 0.4 && formulaOpacityDuring < 0.8, `A linear style.opacity p:tav formula must affect the target element: ${formulaOpacityDuring}`)
+  assert(formulaOpacityDuring > 0.4 && formulaOpacityDuring < 0.8, `A linear style.opacity p:tav formula with rand(x) must affect the target element: ${formulaOpacityDuring}`)
   const formulaFontSizeDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'By word' && run.text.trim())?.fontSize || '') / formulaFontSizeBase
   assert(formulaFontSizeDuring > 1.3 && formulaFontSizeDuring < 1.8, `A linear style.fontSize p:tav formula must affect the active text size: ${formulaFontSizeDuring}`)
   const fontWeightDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'Paragraph wipe target' && run.text.trim())?.fontWeight || '')
@@ -3926,6 +4407,12 @@ try {
   assert(Math.abs(keyframedFontWeightDuring - expectedKeyframedFontWeight) < 50, `A numeric font-weight p:tavLst must interpolate from its keyframes at the captured animation time: ${keyframedFontWeightDuring}/${expectedKeyframedFontWeight}`)
   assert(shape(triggered, 'Custom geometry').opacity === '0.5', `A triggered p:set fltVal must apply its fixed opacity: ${shape(triggered, 'Custom geometry').opacity}`)
   assert(shape(triggered, 'Custom geometry').customPaths[0]?.fill === 'rgb(255, 0, 0)', `A triggered p:set clrVal must apply its fixed fill color: ${JSON.stringify(shape(triggered, 'Custom geometry').customPaths)}`)
+  const shadowBlurPixels = value => (value.match(/-?[\d.]+px/g) || []).map(Number.parseFloat)[2]
+  const boxShadowBlur = shadowBlurPixels(shape(triggered, 'With previous').boxShadow)
+  const ellipseShadowBlur = shadowBlurPixels(shape(triggered, 'Shadow ellipse').boxShadow)
+  const svgShadowBlur = shadowBlurPixels(shape(triggered, 'Custom geometry').svgShadowFilter || '')
+  assert(Number.isFinite(boxShadowBlur) && Number.isFinite(ellipseShadowBlur) && Math.abs(ellipseShadowBlur - boxShadowBlur / 2) < 0.1, `Ellipse box-shadow blur must use half the matching rectangle blur radius: ${JSON.stringify({boxShadow: shape(triggered, 'With previous').boxShadow, ellipseShadow: shape(triggered, 'Shadow ellipse').boxShadow})}`)
+  assert(Number.isFinite(boxShadowBlur) && Number.isFinite(svgShadowBlur) && Math.abs(svgShadowBlur - boxShadowBlur / 2) < 0.1, `SVG drop-shadow blur must use half the matching box-shadow blur radius: ${JSON.stringify({boxShadow: shape(triggered, 'With previous').boxShadow, svgShadowFilter: shape(triggered, 'Custom geometry').svgShadowFilter})}`)
   assert(shape(triggered, 'Paragraph wipe target').opacity === '0.75', `A triggered p:set strVal must apply its numeric opacity: ${shape(triggered, 'Paragraph wipe target').opacity}`)
   assert(triggerOpacity > 0 && triggerOpacity < 1, 'A shape-triggered fade must interpolate from the trigger click.')
   const opacityDuring = Number(shape(triggered, 'Fast speed fade').opacity)
@@ -3988,6 +4475,8 @@ try {
   assert(textEmbossKeyframeMiddle.includes('drop-shadow'), `The textEffectEmboss middle keyframe must enable its embossed filter: ${textEmbossKeyframeMiddle}`)
   assert(iteratedWordMiddle.length === 2 && iteratedWordMiddle[0].weight > iteratedWordMiddle[1].weight && iteratedWordMiddle[1].weight > 400 && iteratedWordMiddle.every(run => run.fontStyle === 'normal'), `p:iterate by word must stagger font-weight and discrete text style: ${JSON.stringify(iteratedWordMiddle)}`)
   assert(iteratedOpacityMiddle.length === 2 && iteratedOpacityMiddle[0].opacity > iteratedOpacityMiddle[1].opacity && iteratedOpacityMiddle[1].opacity > 0.2 && iteratedOpacityMiddle[0].opacity < 1, `p:iterate by word must stagger generic style.opacity on text runs: ${JSON.stringify(iteratedOpacityMiddle)}`)
+  // Sample near the center of the 300–450 ms window where word one is done and word two is still animating.
+  const iterationNearEnd = await stateAtElapsed(triggerStartedAt, 375)
   const triggerComplete = await stateAtElapsed(triggerStartedAt, 400)
   const textRangeOpacityFinal = triggerComplete.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
   const textOutlineRangeFinal = triggerComplete.textRuns.filter(run => run.name === 'Text outline range' && run.text.trim())
@@ -3997,7 +4486,7 @@ try {
   const textEmbossFinalFilters = textShadowNames.map(name => textShadowRuns(triggerComplete, name)[0]?.filter || 'none')
   assert(textEmbossFinalFilters[0]?.includes('drop-shadow') && textEmbossFinalFilters[1] === 'none' && textEmbossFinalFilters[2]?.includes('drop-shadow') && textEmbossFinalFilters[3] === 'none', `Text emboss animations and p:set must hold or reset their final value: ${JSON.stringify(textEmbossFinalFilters)}`)
   assert(textShadowRuns(triggerComplete, 'Text shadow direct').every(run => run.textShadow === 'none') && textShadowRuns(triggerComplete, 'Text shadow keyframes').every(run => run.textShadow !== 'none') && textShadowRuns(triggerComplete, 'Text shadow set none').every(run => run.textShadow === 'none') && textShadowRuns(triggerComplete, 'Text shadow set auto').every(run => run.textShadow !== 'none'), `Discrete text-shadow animations and p:set must hold none or restore the static shadow for auto/normal: ${JSON.stringify(textShadowNames.map(name => [name, textShadowRuns(triggerComplete, name)]))}`)
-  const iteratedFontFamilyFinal = triggerComplete.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
+  const iteratedFontFamilyFinal = iterationNearEnd.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim())
   const byLetterFontFamily = triggerComplete.textRuns.filter(run => run.name === 'By letter' && run.text.trim())
   const unsafeFontFamilyRuns = triggerComplete.textRuns.filter(run => run.name === 'Paragraph wipe target' && run.text.trim())
   assert(iteratedFontFamilyFinal.length === 2 && iteratedFontFamilyFinal[0].fontFamily.toLowerCase().includes('courier new') && iteratedFontFamilyFinal[1].fontFamily.toLowerCase().includes('arial'), `p:iterate by word must finish the first discrete font-family value while the second word remains at its start value: ${JSON.stringify(iteratedFontFamilyFinal)}`)
@@ -4013,13 +4502,13 @@ try {
   // Read all styles from the same snapshot instead of advancing time through CDP round trips.
   const paragraphWipeEnd = textShadowRuns(triggerComplete, 'Paragraph wipe target')[0]
   const byLetterEnd = textShadowRuns(triggerComplete, 'By letter')[0]
-  const byWordEnd = textShadowRuns(triggerComplete, 'By word')[0]
+  const byWordEnd = textShadowRuns(iterationNearEnd, 'By word')[0]
   const fontWeightEnd = Number(paragraphWipeEnd.fontWeight)
   const keyframedFontWeightEnd = Number(byLetterEnd.fontWeight)
   const formulaFontWeightEnd = Number(byWordEnd.fontWeight)
   const formulaFontSizeEnd = Number.parseFloat(byWordEnd.fontSize) / formulaFontSizeBase
-  const iteratedWordEnd = textShadowRuns(triggerComplete, 'By word').map(run => ({ text: run.text, weight: Number(run.fontWeight), fontStyle: run.fontStyle }))
-  const iteratedOpacityEnd = textRangeOpacityFinal.map(run => ({ text: run.text, opacity: Number(run.opacity) }))
+  const iteratedWordEnd = textShadowRuns(iterationNearEnd, 'By word').map(run => ({ text: run.text, weight: Number(run.fontWeight), fontStyle: run.fontStyle }))
+  const iteratedOpacityEnd = iterationNearEnd.textRuns.filter(run => run.name === 'Text range opacity' && run.text.trim()).map(run => ({ text: run.text, opacity: Number(run.opacity) }))
   const formulaOpacityEnd = Number(shape(triggerComplete, 'By word').opacity)
   const textStyleFontStyleEnd = byWordEnd.fontStyle
   const textStyleUnderlineEnd = byWordEnd.textDecorationLine
@@ -4109,7 +4598,7 @@ try {
   await delay(50)
   const repeatDurationWhileActive = await state()
   const repeatDurationActiveOpacity = Number(shape(repeatDurationWhileActive, 'Parent repeat duration target').opacity)
-  assert(repeatDurationActiveOpacity > 0.55 && repeatDurationActiveOpacity < 0.95, `restart="whenNotActive" must let the active sequence continue instead of restarting it: ${JSON.stringify({ elapsed: repeatDurationWhileActive.now - repeatDurationStartedAt, opacity: repeatDurationActiveOpacity })}`)
+  assert(repeatDurationActiveOpacity > 0.45 && repeatDurationActiveOpacity < 0.95, `restart="whenNotActive" must let the active sequence continue instead of restarting it: ${JSON.stringify({ elapsed: repeatDurationWhileActive.now - repeatDurationStartedAt, opacity: repeatDurationActiveOpacity })}`)
   await delay(120)
   await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat duration trigger"]').click()`)
   await delay(60)
@@ -4120,12 +4609,27 @@ try {
   const afterRepeatOpacity = Number(shape(repeatedParentDuration, 'Parent repeat after-effect').opacity)
   assert(Number(shape(repeatedParentDuration, 'Parent repeat duration target').opacity) === 1 && afterRepeatOpacity > 0.05 && afterRepeatOpacity < 0.95, `A finite parent repeatDur must cap looping and defer the after-effect until the cap: ${JSON.stringify({ elapsed: repeatedParentDuration.now - repeatDurationStartedAt, repeatedTarget: shape(repeatedParentDuration, 'Parent repeat duration target'), afterEffect: shape(repeatedParentDuration, 'Parent repeat after-effect'), warnings: repeatedParentDuration.warnings })}`)
 
+  const directRepeatStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Action repeat count trigger"]').click(); return started })()`)
+  await delay(370)
+  const directRepeatSettled = await state()
+  const directRepeatOpacity = Number(shape(directRepeatSettled, 'Action repeat count target').opacity)
+  assert(directRepeatSettled.now - directRepeatStartedAt >= 300 && directRepeatOpacity > 0.45 && directRepeatOpacity < 0.55, `A 1.5-iteration action repeatCount must settle halfway through the final iteration: ${JSON.stringify({ elapsed: directRepeatSettled.now - directRepeatStartedAt, opacity: directRepeatOpacity, warnings: directRepeatSettled.warnings })}`)
+
+  const directRepeatDurationStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Action repeat duration trigger"]').click(); return started })()`)
+  await delay(520)
+  const directRepeatDurationSettled = await state()
+  const directRepeatDurationOpacity = Number(shape(directRepeatDurationSettled, 'Action repeat duration target').opacity)
+  assert(directRepeatDurationSettled.now - directRepeatDurationStartedAt >= 450 && directRepeatDurationOpacity > 0.2 && directRepeatDurationOpacity < 0.3, `An auto-reversed action repeatDur must cap its last partial iteration and freeze at that progress: ${JSON.stringify({ elapsed: directRepeatDurationSettled.now - directRepeatDurationStartedAt, opacity: directRepeatDurationOpacity, warnings: directRepeatDurationSettled.warnings })}`)
+
   await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat after-effect"]').click()`)
   await delay(150)
-  const concurrentOffBeforeAdvance = await state()
-  const concurrentOffOpacityBefore = Number(shape(concurrentOffBeforeAdvance, 'Parent reverse speed fade').opacity)
-  assert(concurrentOffOpacityBefore > 0.1 && concurrentOffOpacityBefore < 0.9, `A sequential trigger step must be active before advancing: ${JSON.stringify({ elapsed: concurrentOffBeforeAdvance.now, opacity: concurrentOffOpacityBefore })}`)
-  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat after-effect"]').click()`)
+  const concurrentOffOpacityBefore = await evaluate(`(() => {
+    const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent reverse speed fade"]')
+    const opacity = Number(getComputedStyle(target).opacity)
+    document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent repeat after-effect"]').click()
+    return opacity
+  })()`)
+  assert(concurrentOffOpacityBefore > 0.1 && concurrentOffOpacityBefore < 0.9, `A sequential trigger step must be active before advancing: ${JSON.stringify({ opacity: concurrentOffOpacityBefore })}`)
   await delay(220)
   const concurrentOffAfterAdvance = await state()
   const concurrentOffOpacityAfter = Number(shape(concurrentOffAfterAdvance, 'Parent reverse speed fade').opacity)
@@ -4233,6 +4737,7 @@ try {
   const secondSlide = await state()
   assert(secondSlide.slide?.startsWith('02 / 68'), 'The next click after all builds must advance the slide.')
   assert(secondSlide.slideTransition && secondSlide.slideTransition.keyframes[0] === 'translate(-100%, 100%)' && secondSlide.slideTransition.keyframes[1] === 'translate(0px, 0px)' && secondSlide.slideTransition.translateX < 0 && secondSlide.slideTransition.translateY > 0 && Number(secondSlide.slideTransition.duration) === 750, `The diagonal OOXML cover transition must follow its direction and duration: ${JSON.stringify(secondSlide.slideTransition)}`)
+  assert(secondSlide.warnings.some(warning => warning.includes('slide transition speed "turbo" is invalid; it was ignored')), 'An unsupported slide transition speed must warn and retain the default duration.')
   assert(secondSlide.transitionUnderlay.slideCount === 1 && secondSlide.transitionUnderlay.shapeNames.includes('Click fade'), 'The previous slide must remain rendered below the incoming transition until it finishes.')
   assert(secondSlide.transitionUnderlay.translateX === 0 && secondSlide.transitionUnderlay.translateY === 0 && Math.abs(secondSlide.transitionUnderlay.frame.width - initial.hostFrame.width) < 1 && Math.abs(secondSlide.transitionUnderlay.frame.height - initial.hostFrame.height) < 1, `Cover must leave the outgoing page stationary beneath the incoming slide: ${JSON.stringify({ before: initial.hostFrame, underlay: secondSlide.transitionUnderlay })}`)
   await delay(850)
@@ -4273,6 +4778,55 @@ try {
   await delay(850)
   const chartRender = await evaluate(`(() => { const format = (value, options) => new Intl.NumberFormat(undefined, options).format(value); const percent = value => format(value, { style: 'percent', maximumFractionDigits: 1 }); return [...document.querySelectorAll('.slide-chart')].map(svg => { const name = svg.closest('.slide-element')?.title; return { name, title: svg.querySelector('title')?.textContent, labels: [...svg.querySelectorAll('text')].map(item => item.textContent), dataLabels: [...svg.querySelectorAll('.chart-data-label')].map(item => [...item.querySelectorAll('tspan')].map(line => line.textContent).join('\\n')), expectedDataLabels: name === 'Quarterly sales chart' ? [format(9, { useGrouping: true, minimumFractionDigits: 1, maximumFractionDigits: 1 }), format(18, { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 2 }), format(15, { useGrouping: true, minimumFractionDigits: 1, maximumFractionDigits: 1 }), format(21, { useGrouping: true, minimumFractionDigits: 1, maximumFractionDigits: 1 })] : name === 'Quarterly trend chart' ? [18, 15, 26, 21].map(value => format(value, { style: 'percent', useGrouping: false, minimumFractionDigits: 1, maximumFractionDigits: 1 })) : name === 'Quarterly share chart' ? ['Q1\\n' + percent(12 / 56), '18 / Q2', 'Q3\\n' + percent(26 / 56)] : undefined, bars: [...svg.querySelectorAll('rect')].filter(item => Number(item.getAttribute('height')) > 20).map(item => item.getAttribute('fill')), paths: svg.querySelectorAll('path').length, markers: svg.querySelectorAll('circle').length }; }) })()`)
   const barChart = chartRender.find(chart => chart.name === 'Quarterly sales chart')
+  const chartPatternRender = await evaluate(`(() => {
+    const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly sales chart')
+    const fills = [...(svg?.querySelectorAll('.chart-bar') || [])].map(bar => bar.getAttribute('fill') || '')
+    const ids = [...new Set(fills.filter(fill => fill.startsWith('url(#')).map(fill => fill.slice(5, -1)))]
+    const backgrounds = ids.map(id => [...(svg?.querySelectorAll('pattern') || [])].find(item => item.id === id)?.querySelector('foreignObject div')?.style.background || '')
+    return { patternCount: ids.length, backgrounds }
+  })()`)
+  assert(chartPatternRender.patternCount === 2 && chartPatternRender.backgrounds.some(background => background.includes('repeating-linear-gradient')) && chartPatternRender.backgrounds.some(background => background.includes('radial-gradient')), `Chart series and point a:pattFill values must render through SVG patterns: ${JSON.stringify(chartPatternRender)}`)
+  const chartOutlinePatternRender = await evaluate(`(() => {
+    const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly sales chart')
+    const bars = [...(svg?.querySelectorAll('.chart-bar') || [])]
+    const strokes = bars.map(bar => bar.getAttribute('stroke') || '')
+    const ids = [...new Set(strokes.filter(stroke => stroke.startsWith('url(#')).map(stroke => stroke.slice(5, -1)))]
+    const backgrounds = ids.map(id => [...(svg?.querySelectorAll('pattern') || [])].find(item => item.id === id)?.querySelector('foreignObject div')?.style.background || '')
+    return { patternCount: ids.length, backgrounds, strokeWidths: bars.map(bar => Number(bar.getAttribute('stroke-width'))), strokeDashes: bars.map(bar => bar.getAttribute('stroke-dasharray') || ''), strokeCaps: bars.map(bar => bar.getAttribute('stroke-linecap') || '') }
+  })()`)
+  const chartSeriesDash = chartOutlinePatternRender.strokeDashes.find(dash => dash.split(' ').length === 2 && Math.abs(Number(dash.split(' ')[0]) - 4 * 25400 * 1000 / 4300000) < 0.01)
+  const chartPointDash = chartOutlinePatternRender.strokeDashes.find(dash => dash.split(' ').length === 4 && Math.abs(Number(dash.split(' ')[0]) - 3 * 63500 * 1000 / 4300000) < 0.01)
+  assert(chartOutlinePatternRender.patternCount === 2 && chartOutlinePatternRender.backgrounds.every(background => background.includes('repeating-linear-gradient')) && chartOutlinePatternRender.strokeWidths.some(width => Math.abs(width - 25400 * 1000 / 4300000) < 0.01) && chartOutlinePatternRender.strokeWidths.some(width => Math.abs(width - 63500 * 1000 / 4300000) < 0.01) && chartSeriesDash && chartPointDash && chartOutlinePatternRender.strokeCaps.includes('butt'), `Chart series and point a:ln styles must preserve SVG pattern paint, EMU widths, dash rhythms, and caps: ${JSON.stringify(chartOutlinePatternRender)}`)
+  const scatterMarkerOutlineRender = await evaluate(`(() => {
+    const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'XY scatter chart')
+    const marker = svg?.querySelector('.chart-line-marker[data-marker-shape="triangle"]')
+    const stroke = marker?.getAttribute('stroke') || ''
+    const id = stroke.startsWith('url(#') ? stroke.slice(5, -1) : ''
+    const background = [...(svg?.querySelectorAll('pattern') || [])].find(item => item.id === id)?.querySelector('foreignObject div')?.style.background || ''
+    return { shape: marker?.getAttribute('data-marker-shape'), stroke, background, strokeWidth: Number(marker?.getAttribute('stroke-width')), strokeDash: marker?.getAttribute('stroke-dasharray') || '', strokeCap: marker?.getAttribute('stroke-linecap') }
+  })()`)
+  assert(scatterMarkerOutlineRender.shape === 'triangle' && scatterMarkerOutlineRender.stroke.startsWith('url(#') && scatterMarkerOutlineRender.background.includes('repeating-linear-gradient') && Math.abs(scatterMarkerOutlineRender.strokeWidth - 31750 * 1000 / 4300000) < 0.01 && Math.abs(Number(scatterMarkerOutlineRender.strokeDash.split(' ')[0]) - 4 * 31750 * 1000 / 4300000) < 0.01 && scatterMarkerOutlineRender.strokeCap === 'butt', `A point-level a:ln/a:pattFill must render on a scatter marker with its EMU width, dash, and cap: ${JSON.stringify(scatterMarkerOutlineRender)}`)
+  const scatterSmoothingRender = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'XY scatter chart'); const paths = [...(svg?.querySelectorAll('.chart-series-line') || [])].map(line => line.getAttribute('d') || ''); return {curved: paths.some(path => path.includes(' C ')), straight: paths.some(path => path.includes(' L '))} })()`)
+  assert(scatterSmoothingRender.curved && scatterSmoothingRender.straight, `Scatter c:smooth and smoothMarker must render Catmull-Rom curves while a series-level c:smooth=0 keeps straight segments: ${JSON.stringify(scatterSmoothingRender)}`)
+  const pieSliceOutline = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly share chart'); const slice = svg?.querySelectorAll('path')[1]; return { stroke: slice?.getAttribute('stroke'), width: Number(slice?.getAttribute('stroke-width')), dash: (slice?.getAttribute('stroke-dasharray') || '').split(' ').map(Number), cap: slice?.getAttribute('stroke-linecap') } })()`)
+  const pieSliceWidth = 31750 * 1000 / 4300000
+  assert(pieSliceOutline.stroke === '#1d4ed8' && Math.abs(pieSliceOutline.width - pieSliceWidth) < 0.01 && pieSliceOutline.dash[0] === 0 && Math.abs(pieSliceOutline.dash[1] - 4 * pieSliceWidth) < 0.01 && pieSliceOutline.cap === 'round', `A pie data-point a:ln must control slice color, width, round dots, and cap: ${JSON.stringify(pieSliceOutline)}`)
+  const lineChartStrokeStyles = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Line width chart'); return [...(svg?.querySelectorAll('.chart-series-line') || [])].map(line => ({ width: Number(line.getAttribute('stroke-width')), dash: (line.getAttribute('stroke-dasharray') || '').split(' ').map(Number), cap: line.getAttribute('stroke-linecap') })) })()`)
+  const lineDashWidth = 38100 * 1000 / 4300000
+  assert(lineChartStrokeStyles.some(style => Math.abs(style.width - lineDashWidth) < 0.01 && style.cap === 'square' && Math.abs(style.dash[0] - 3 * lineDashWidth) < 0.01 && Math.abs(style.dash[1] - 4 * lineDashWidth) < 0.01), `A chart series a:ln width, preset dash, and cap must control its rendered line: ${JSON.stringify(lineChartStrokeStyles)}`)
+  const namedRangeChart = chartRender.find(chart => chart.name === 'Horizontal axis tick chart')
+  assert(namedRangeChart?.bars.length === 6, `Chart categories and series without caches must resolve workbook defined names: ${JSON.stringify(namedRangeChart)}`)
+  const workbookCategoryChart = chartRender.find(chart => chart.name === 'Value axis deleted chart')
+  assert(['Q1', 'Q2', 'Q3'].every(label => workbookCategoryChart?.labels.includes(label)), `A chart without a saved category cache must read shared-string labels from its embedded workbook: ${JSON.stringify(workbookCategoryChart)}`)
+  assert(initial.warnings.some(warning => warning.includes('unsupported references use saved chart caches')) && initial.warnings.some(warning => warning.includes('could not be resolved from the embedded workbook')), `A chart reference to another workbook must not be resolved against the embedded workbook: ${JSON.stringify(initial.warnings.filter(warning => warning.includes('chart workbook') || warning.includes('chart reference without')))} `)
+  const oversizedWorkbookChart = chartRender.find(chart => chart.name === 'Oversized workbook guard chart')
+  assert(oversizedWorkbookChart?.bars.length === 6 && ['Q1', 'Q2', 'Q3'].every(label => oversizedWorkbookChart.labels.includes(label)) && initial.warnings.some(warning => warning.includes('32 MB browser reading limit')), `An oversized embedded workbook must be skipped with a warning while saved chart caches remain renderable: ${JSON.stringify({ chart: oversizedWorkbookChart, warnings: initial.warnings.filter(warning => warning.includes('32 MB browser reading limit')) })}`)
+  const conditionalAxisColors = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly sales chart'); return [...(svg?.querySelectorAll('.chart-value-axis-label') || [])].map(item => ({ label: item.textContent, fill: getComputedStyle(item).fill })) })()`)
+  assert(conditionalAxisColors.some(tick => tick.label === '0.0' && tick.fill === 'rgb(18, 52, 86)') && conditionalAxisColors.some(tick => tick.label === '20.0' && tick.fill === 'rgb(101, 67, 33)'), `Embedded workbook indexed colors must reach conditional chart axis labels: ${JSON.stringify(conditionalAxisColors)}`)
+  const conditionalDataLabelColors = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly share chart'); return [...(svg?.querySelectorAll('.chart-data-label') || [])].map(item => ({ text: item.textContent, fill: getComputedStyle(item).fill })) })()`)
+  assert(conditionalDataLabelColors.some(label => label.text?.includes('Q1') && label.fill === 'rgb(255, 0, 0)') && conditionalDataLabelColors.some(label => label.text?.includes('Q3') && label.fill === 'rgb(0, 0, 255)'), `Conditional chart number-format colors must reach data labels: ${JSON.stringify(conditionalDataLabelColors)}`)
+  const pieLeaderLines = await evaluate(`(() => { const find = name => [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === name); const pie = find('Quarterly share chart'); const doughnut = find('Quarterly allocation doughnut'); return { pie: [...(pie?.querySelectorAll('.chart-data-label') || [])].map(item => ({text: item.textContent, anchor: item.getAttribute('text-anchor'), line: item.parentElement?.querySelector('.chart-data-label-leader-line')?.getAttribute('d')})), doughnutCount: doughnut?.querySelectorAll('.chart-data-label-leader-line').length || 0 } })()`)
+  assert(pieLeaderLines.pie.length === 3 && pieLeaderLines.pie.filter(label => label.line).length === 2 && pieLeaderLines.pie.some(label => label.text?.includes('18 / Q2') && !label.line) && pieLeaderLines.pie.filter(label => label.line).every(label => /M .+ L .+ L /.test(label.line) && ['start', 'end'].includes(label.anchor)) && pieLeaderLines.doughnutCount === 0, `Pie c:showLeaderLines must draw outside connectors and honor a point-level disable override: ${JSON.stringify(pieLeaderLines)}`)
   const lineChart = chartRender.find(chart => chart.name === 'Quarterly trend chart')
   const pieChart = chartRender.find(chart => chart.name === 'Quarterly share chart')
   const doughnutGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly allocation doughnut'); const path = svg?.querySelector('path'); const d = path?.getAttribute('d') || ''; return { count: svg?.querySelectorAll('path').length, fillRule: path?.getAttribute('fill-rule'), start: /^M\\s+([-.\\d]+)\\s+([-.\\d]+)/.exec(d)?.slice(1).map(Number), arcRadii: [...d.matchAll(/A\\s+([-.\\d]+)\\s+([-.\\d]+)\\s+0\\s+[01]\\s+[01]/g)].map(match => Number(match[1])) }; })()`)
@@ -4352,7 +4906,7 @@ try {
   const pieLegend = chartLegends.find(legend => legend.name === 'Quarterly share chart')
   const barPositionedLabels = dataLabelGeometry.find(chart => chart.name === 'Quarterly sales chart')
   const linePositionedLabels = dataLabelGeometry.find(chart => chart.name === 'Quarterly trend chart')
-  assert(barChart?.title === 'Quarterly sales' && ['Q1', 'Q2', 'Q3', 'South'].every(label => barChart.labels.includes(label)) && !barChart.labels.includes('North') && barChart.bars.length === 6 && new Set(barChart.bars).size === 2, `A linked chart must render cached categories, preserve both series, and apply legend-entry deletion: ${JSON.stringify(chartRender)}`)
+  assert(barChart?.title === 'Quarterly sales' && ['Q1', 'Q2', 'Q3', 'South'].every(label => barChart.labels.includes(label)) && !barChart.labels.includes('North') && barChart.bars.length === 6 && new Set(barChart.bars).size === 3, `A linked chart must render cached categories, preserve both series, and apply legend-entry deletion: ${JSON.stringify(chartRender)}`)
   const groupedDataLabelStyle = chartDataLabelStyles.find(label => label.text === '9.0')
   const pointDataLabelStyle = chartDataLabelStyles.find(label => label.text === '18.00')
   assert(groupedDataLabelStyle?.fontFamily.includes('Arial') && groupedDataLabelStyle.fontSize === '16px' && groupedDataLabelStyle.fontWeight === '700' && groupedDataLabelStyle.fontStyle === 'normal' && groupedDataLabelStyle.fill === 'rgb(30, 64, 175)' && groupedDataLabelStyle.textDecorationLine.includes('underline') && groupedDataLabelStyle.textDecorationColor === 'rgb(0, 170, 255)' && Math.abs(parseFloat(groupedDataLabelStyle.textDecorationThickness) - 4 / 3) < 0.02 && pointDataLabelStyle?.fontFamily.includes('Verdana') && Math.abs(parseFloat(pointDataLabelStyle.fontSize) - 40 / 3) < 0.01 && Math.abs(parseFloat(pointDataLabelStyle.letterSpacing) - 8 / 3) < 0.02 && pointDataLabelStyle.baselineShift === '-0.3em' && pointDataLabelStyle.fontWeight === '400' && pointDataLabelStyle.fontStyle === 'italic' && pointDataLabelStyle.fill === 'rgb(210, 31, 60)' && !pointDataLabelStyle.textDecorationLine.includes('underline') && pointDataLabelStyle.textDecorationLine.includes('line-through'), `Chart-group, series, and point typography, character spacing, baseline shift, and underline paint must cascade, with explicit point-level overrides: ${JSON.stringify(chartDataLabelStyles)}`)
@@ -4363,7 +4917,9 @@ try {
   assert(Math.abs(barPositionedLabels?.labels.find(label => label.text === '18.00')?.y - 354) < 1, `A point-level c:dLblPos must override the series position and center its column label: ${JSON.stringify(dataLabelGeometry)}`)
   assert(barChart.dataLabels.join(',') === barChart.expectedDataLabels.join(','), `Chart, series, and point overrides must resolve while applying decimal/grouping formats: ${JSON.stringify(barChart)}`)
   const lineChartGeometry = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Quarterly trend chart'); return {paths: svg?.querySelectorAll('.chart-series-line').length, markers: svg?.querySelectorAll('.chart-line-marker').length} })()`)
-  assert(lineChartGeometry?.markers === 6 && lineChartGeometry.paths === 6, `Line chart caches must render series paths and every point marker: ${JSON.stringify({lineChart, lineChartGeometry})}`)
+  assert(lineChartGeometry?.markers === 6 && lineChartGeometry.paths === 2, `Line chart caches must render one continuous path per series and every point marker: ${JSON.stringify({lineChart, lineChartGeometry})}`)
+  const lineSmoothingRender = await evaluate(`(() => { const svg = [...document.querySelectorAll('.slide-chart')].find(item => item.closest('.slide-element')?.title === 'Smoothed line chart'); const paths = [...(svg?.querySelectorAll('.chart-series-line') || [])].map(line => line.getAttribute('d') || ''); return {curved: paths.some(path => path.includes(' C ')), straight: paths.some(path => path.includes(' L '))} })()`)
+  assert(lineSmoothingRender.curved && lineSmoothingRender.straight, `Line-chart c:smooth must create Catmull-Rom curves while a series-level c:smooth=0 preserves straight lines: ${JSON.stringify(lineSmoothingRender)}`)
   assert(lineValueAxis?.ticks.map(tick => tick.label).join(',') === '10.0,15.0,20.0,25.0,30.0' && lineValueAxis.ticks[0].y < lineValueAxis.ticks.at(-1).y, `A reversed value axis must place minimum above maximum: ${JSON.stringify(valueAxisRender)}`)
   assert(lineLegend?.items.map(item => item.text).join(',') === 'North,South' && lineLegend.items.every(item => item.x === 118 && item.y >= 135) && lineValueAxis.ticks.every(tick => tick.x === 644 && tick.anchor === 'start'), `A c:catAx/crossesAt category index must position the value-axis labels at that category: ${JSON.stringify({ chartLegends, valueAxisRender })}`)
   assert(lineCategoryAxis?.labels.map(label => label.text).join(',') === 'Q1,Q2,Q3' && lineCategoryAxis.labels.every(label => Math.abs(label.y - 162.5) < 0.01 && label.anchor === 'middle'), `A c:valAx/crossesAt value must position the category-axis labels at that value: ${JSON.stringify(categoryAxisRender)}`)
@@ -4412,9 +4968,9 @@ try {
   const rightPointLabel = linePositionedLabels?.labels.find(label => label.text === '2600.0% | North')
   assert(rightPointLabel?.anchor === 'start' && rightPointLabel.x > 840, `A series-level c:dLblPos must override the chart label position: ${JSON.stringify(dataLabelGeometry)}`)
   assert(lineChart.dataLabels.filter(label => label.includes(' | ')).map(label => label.split(' | ')[0]).join(',') === lineChart.expectedDataLabels.join(',') && ['North', 'South'].every(label => lineChart.dataLabels.includes(label)) && lineChart.dataLabels.filter(label => label.includes(' | ')).every(label => / \| (North|South)$/.test(label)), `Series names and custom separators must follow chart and point overrides: ${JSON.stringify(lineChart)}`)
-  assert(pieChart?.paths === 3 && ['Q1', 'Q2', 'Q3'].every(label => pieChart.dataLabels.some(item => item.includes(label))), `Pie chart caches must render one colored slice and data label per category: ${JSON.stringify(pieChart)}`)
+  assert(pieChart?.paths === 5 && ['Q1', 'Q2', 'Q3'].every(label => pieChart.dataLabels.some(item => item.includes(label))), `Pie chart caches must render one colored slice and data label per category plus its enabled leader lines: ${JSON.stringify(pieChart)}`)
   assert(doughnutGeometry.count === 6 && doughnutGeometry.fillRule === 'evenodd' && doughnutGeometry.arcRadii.length === 2 && Math.abs(doughnutGeometry.arcRadii[1] / doughnutGeometry.arcRadii[0] - 4 / 7) < 0.001 && doughnutGeometry.start?.[1] === 270 && doughnutGeometry.start?.[0] > 513, `Doughnut charts must render annular slices with configured hole size and first-slice angle: ${JSON.stringify(doughnutGeometry)}`)
-  assert(scatterChartGeometry.markers.length === 6 && scatterChartGeometry.markers.map(marker => marker.shape).join(',') === 'diamond,diamond,diamond,square,triangle,square' && scatterChartGeometry.markers.every(marker => marker.d?.endsWith('Z')) && scatterChartGeometry.markers[0].radius === 7 && scatterChartGeometry.markers[4].radius === 10 && scatterChartGeometry.markers.slice(3).every(marker => marker.fill === scatterChartGeometry.markers[3].fill) && Math.abs(scatterChartGeometry.markers[0].x - (88 + 850 / 6)) < 0.1 && Math.abs(scatterChartGeometry.markers[1].x - 513) < 0.1 && scatterChartGeometry.lines.length === 1 && scatterChartGeometry.xLabels.join(',') === '0,2,4,6' && scatterChartGeometry.yLabels.join(',') === '0,10,20,30' && scatterChartGeometry.xGridlines === 4 && scatterChartGeometry.yGridlines === 4 && scatterChartGeometry.xTicks === 4 && scatterChartGeometry.xAxis === 465 && scatterChartGeometry.yAxis === 88 && scatterChartGeometry.categories === 0, `XY scatter charts must honor series and point marker symbols/sizes alongside cached x/y values and separate numeric axes: ${JSON.stringify(scatterChartGeometry)}`)
+  assert(scatterChartGeometry.markers.length === 6 && scatterChartGeometry.markers.map(marker => marker.shape).join(',') === 'diamond,diamond,diamond,square,triangle,square' && scatterChartGeometry.markers.every(marker => marker.d?.endsWith('Z')) && scatterChartGeometry.markers[0].radius === 7 && scatterChartGeometry.markers[4].radius === 10 && scatterChartGeometry.markers.slice(3).every(marker => marker.fill === scatterChartGeometry.markers[3].fill) && Math.abs(scatterChartGeometry.markers[0].x - (88 + 850 / 6)) < 0.1 && Math.abs(scatterChartGeometry.markers[1].x - 513) < 0.1 && scatterChartGeometry.lines.length === 2 && scatterChartGeometry.xLabels.join(',') === '0,2,4,6' && scatterChartGeometry.yLabels.join(',') === '0,10,20,30' && scatterChartGeometry.xGridlines === 4 && scatterChartGeometry.yGridlines === 4 && scatterChartGeometry.xTicks === 4 && scatterChartGeometry.xAxis === 465 && scatterChartGeometry.yAxis === 88 && scatterChartGeometry.categories === 0, `XY scatter charts must honor series and point marker symbols/sizes alongside cached x/y values and separate numeric axes: ${JSON.stringify(scatterChartGeometry)}`)
   assert(logScatterChartGeometry.markers.length === 4 && logScatterChartGeometry.xLabels.join(',') === '1,10,100' && logScatterChartGeometry.yLabels.join(',') === '1,10,100' && logScatterChartGeometry.xGridlines === 3 && logScatterChartGeometry.yGridlines === 3 && logScatterChartGeometry.xTicks === 3 && logScatterChartGeometry.markers.slice(0, 3).every((point, index) => Math.abs(point.x - [88, 513, 938][index]) < 0.1 && Math.abs(point.y - [465, 270, 75][index]) < 0.1), `Logarithmic XY axes must place decade ticks geometrically and omit non-positive x/y points: ${JSON.stringify(logScatterChartGeometry)}`)
   assert(invalidLogScatterGeometry.markers.length === 6 && Math.abs(invalidLogScatterGeometry.markers[1].x - 173) < 0.1 && Math.abs(invalidLogScatterGeometry.markers[1].y - 422.525) < 0.1 && Math.abs(invalidLogScatterGeometry.markers[3].x - 88) < 0.1 && Math.abs(invalidLogScatterGeometry.markers[4].y - 465) < 0.1 && initial.warnings.some(warning => warning.includes('Invalid chart x-axis logarithmic base')) && initial.warnings.some(warning => warning.includes('Invalid chart value-axis logarithmic base')), `Out-of-range c:logBase values must warn, render linearly, and preserve non-positive data: ${JSON.stringify({ geometry: invalidLogScatterGeometry, warnings: initial.warnings.filter(warning => warning.includes('logarithmic base')) })}`)
   assert(bubbleChartGeometry.area.bubbles.length === 3 && Math.abs(bubbleChartGeometry.area.bubbles[0].r / bubbleChartGeometry.area.bubbles[1].r - 0.5) < 0.001 && Math.abs(bubbleChartGeometry.area.bubbles[2].r / bubbleChartGeometry.area.bubbles[1].r - 0.8) < 0.001 && new Set(bubbleChartGeometry.area.bubbles.map(item => item.fill)).size === 3 && bubbleChartGeometry.area.labels.join(',') === '1,25,5,100,9,-64' && bubbleChartGeometry.area.xLabels.join(',') === '0,2,4,6,8,10' && bubbleChartGeometry.area.yLabels.join(',') === '0,10,20,30,40', `Bubble charts must use paired x/y/size caches, area-scaled radii, standard negative-bubble defaults, varying point colors, labels, and numeric axes: ${JSON.stringify(bubbleChartGeometry.area)}`)
@@ -4426,7 +4982,7 @@ try {
   assert(stockChartGeometry.ohlc.type === 'stock' && stockChartGeometry.ohlc.lines.length === 1 && stockChartGeometry.ohlc.bars.length === 3 && stockChartGeometry.ohlc.bars.every(bar => bar.height > 0) && stockChartGeometry.ohlc.bars.map(bar => bar.fill).join(',') === '#16a34a,#dc2626,#16a34a' && stockChartGeometry.ohlc.labels.map(label => label.text).join(',') === '13,11,16', `Open-high-low-close stock charts must render one up/down bar and open/close ticks per category: ${JSON.stringify(stockChartGeometry.ohlc)}`)
   assert(stockVolumeGeometry.hlc.type === 'stock' && stockVolumeGeometry.hlc.categories.join(',') === 'Mon,Tue,Wed' && stockVolumeGeometry.hlc.bars.length === 3 && stockVolumeGeometry.hlc.bars.every(bar => bar.fill === '#2563eb' && bar.height > 0 && bar.width > 0) && stockVolumeGeometry.hlc.secondaryTicks.map(tick => `${tick.id}:${tick.label}`).join(',') === '902:0,902:1000,902:2000' && stockVolumeGeometry.hlc.secondaryAxes.includes('902'), `Volume-high-low-close stock charts must draw cached volume columns against their referenced secondary value axis: ${JSON.stringify(stockVolumeGeometry.hlc)}`)
   assert(stockVolumeGeometry.ohlc.type === 'stock' && stockVolumeGeometry.ohlc.bars.map(bar => bar.fill).join(',') === '#2563eb,#2563eb,#2563eb,#16a34a,#dc2626,#16a34a' && stockVolumeGeometry.ohlc.labels.join(',') === '13,11,16' && stockVolumeGeometry.ohlc.secondaryTicks.every(tick => tick.id === '902'), `Volume-open-high-low-close charts must layer volume columns under cached OHLC up/down bars while preserving price labels and the secondary scale: ${JSON.stringify(stockVolumeGeometry.ohlc)}`)
-  assert(comboChartGeometry.type === 'bar' && comboChartGeometry.bars === 6 && comboChartGeometry.lines.length === 3 && comboChartGeometry.lines.every(line => line.color === '#0ea5e9') && comboChartGeometry.markers === 3 && comboChartGeometry.categories.join(',') === 'Q1,Q2,Q3', `A c:barChart+c:lineChart combo must preserve both chart groups and shared category caches: ${JSON.stringify(comboChartGeometry)}`)
+  assert(comboChartGeometry.type === 'bar' && comboChartGeometry.bars === 6 && comboChartGeometry.lines.length === 1 && comboChartGeometry.lines.every(line => line.color === '#0ea5e9') && comboChartGeometry.markers === 3 && comboChartGeometry.categories.join(',') === 'Q1,Q2,Q3', `A c:barChart+c:lineChart combo must preserve both chart groups and shared category caches: ${JSON.stringify(comboChartGeometry)}`)
   assert(comboChartGeometry.primaryTicks.join(',') === '0,10,20,30' && comboChartGeometry.secondaryTicks.map(tick => `${tick.id}:${tick.label}`).join(',') === '3:0,3:25,3:50,3:75,3:100' && comboChartGeometry.secondaryAxes.length === 1 && comboChartGeometry.secondaryAxes[0].id === '3' && comboChartGeometry.secondaryAxes[0].x1 === comboChartGeometry.secondaryAxes[0].x2, `A combo series c:axId reference must select and render its secondary valAx and right-side scale: ${JSON.stringify(comboChartGeometry)}`)
   assert(comboAreaGeometry.areas.length === 2 && comboAreaGeometry.areas.every(area => area.d.startsWith('M ') && area.d.endsWith('Z')) && comboAreaGeometry.bars === 6 && comboAreaGeometry.axisIds.join(',') === '3' && comboAreaGeometry.secondaryTicks.join(',') === '0,12,24,35,47', `A stacked area group in a bar/area combo must use stacked totals to auto-scale its referenced secondary axis and preserve the filled series: ${JSON.stringify(comboAreaGeometry)}`)
   assert(!initial.warnings.some(warning => warning.includes('mixed chart is simplified')), `Supported bar/line combo groups must not trigger the first-chart fallback warning: ${JSON.stringify(initial.warnings)}`)
@@ -4442,6 +4998,20 @@ try {
     && dynamicTableCell.textScrollHeight <= dynamicTableCell.textClientHeight + 1
     && dynamicTableCell.scrollHeight <= dynamicTableCell.clientHeight,
     `A table-cell a:normAutofit must shrink text to fit its saved row height: ${JSON.stringify({ dynamicTableCell, referenceTableCell })}`)
+  const tableAnchorCenter = await evaluate(`(() => {
+    const cell = [...document.querySelectorAll('.stage-shell > .slide-host .slide-table td')].find(item => item.textContent.includes('Left cell'))
+    const frame = cell?.querySelector('.table-cell-text')
+    if (!cell || !frame) return undefined
+    const cellRect = cell.getBoundingClientRect()
+    const frameRect = frame.getBoundingClientRect()
+    const style = getComputedStyle(cell)
+    const insetLeft = parseFloat(style.paddingLeft) || 0
+    const insetRight = parseFloat(style.paddingRight) || 0
+    const contentCenter = cellRect.left + insetLeft + (cell.clientWidth - insetLeft - insetRight) / 2
+    return { boundsCenter: frameRect.left + frameRect.width / 2, contentCenter, boundsWidth: frameRect.width, contentWidth: cell.clientWidth - insetLeft - insetRight }
+  })()`)
+  assert(tableAnchorCenter && Math.abs(tableAnchorCenter.boundsCenter - tableAnchorCenter.contentCenter) < 1 && tableAnchorCenter.boundsWidth < tableAnchorCenter.contentWidth,
+    `a:bodyPr anchorCtr must center the table-cell text bounds independently of paragraph alignment: ${JSON.stringify(tableAnchorCenter)}`)
   const columnTableCellRender = secondSlide.tables[0].cells.find(cell => cell.text.includes('fills its first text column'))
   const expectedTableColumnGap = 457200 * (columnTableCellRender?.frameWidth || 0) / 12192000
   const tableColumnXs = (columnTableCellRender?.runRects || []).map(rect => rect.left)
@@ -4543,7 +5113,7 @@ try {
   await delay(800)
   assert((await state()).transitionUnderlay.slideCount === 0, 'The outgoing slide snapshot must be removed when the transition finishes.')
   if (process.env.DECKLINE_CAPTURE_SLIDE_PATH) {
-    const rect = await evaluate(`(() => { const { x, y, width, height } = document.querySelector('.stage-shell > .slide-host .slide-frame').getBoundingClientRect(); return { x, y, width, height } })()`)
+    const rect = await evaluate(`(() => { const { x, y, width, height } = document.querySelector('.stage-shell > .slide-host .slide-frame').getBoundingClientRect(); return { x: x + scrollX, y: y + scrollY, width, height } })()`)
     const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { ...rect, scale: 1280 / rect.width } })
     await writeFile(process.env.DECKLINE_CAPTURE_SLIDE_PATH, Buffer.from(screenshot.data, 'base64'))
   }
@@ -4658,7 +5228,8 @@ try {
   const wheelBack = await state()
   assert(shape(wheelBack, 'Click fade').visibility === 'hidden', 'Wheel up must undo the current build.')
 
-  await evaluate(`window.__decklineMediaCalls = []; window.__decklineMediaPauses = []; window.__decklineOriginalPlay = HTMLMediaElement.prototype.play; window.__decklineOriginalPause = HTMLMediaElement.prototype.pause; HTMLMediaElement.prototype.play = function () { window.__decklineMediaCalls.push({ id: this.dataset.mediaId, currentTime: this.currentTime, volume: this.volume, muted: this.muted }); return window.__decklineBlockNextMediaPlay ? (delete window.__decklineBlockNextMediaPlay, Promise.reject(new DOMException('Autoplay blocked', 'NotAllowedError'))) : Promise.resolve() }; HTMLMediaElement.prototype.pause = function () { window.__decklineMediaPauses.push(this.dataset.mediaId); return window.__decklineOriginalPause.apply(this, arguments) }; window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+  await evaluate(`window.__decklineBlockNextMediaPlay = true`)
+  await evaluate(`window.__decklineMediaCalls = []; window.__decklineMediaPauses = []; window.__decklineMockedMedia = new Set(); window.__decklineOriginalPlay = HTMLMediaElement.prototype.play; window.__decklineOriginalPause = HTMLMediaElement.prototype.pause; HTMLMediaElement.prototype.play = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaCalls.push({ id: this.dataset.mediaId, currentTime: this.currentTime, volume: this.volume, muted: this.muted }); if (window.__decklineBlockNextMediaPlay) { delete window.__decklineBlockNextMediaPlay; return Promise.reject(new DOMException('Autoplay blocked', 'NotAllowedError')) }; Object.defineProperty(this, 'paused', { configurable: true, value: false }); return Promise.resolve() }; HTMLMediaElement.prototype.pause = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaPauses.push(this.dataset.mediaId); Object.defineProperty(this, 'paused', { configurable: true, value: true }) }; window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(300)
   const embeddedMedia = await state()
   assert(embeddedMedia.slide?.startsWith('15 / 68') && embeddedMedia.media.videos.length === 1 && embeddedMedia.media.audios.length === 3 && embeddedMedia.slideTransition?.clipKeyframes?.length === 5 && embeddedMedia.slideTransition.clipPath.startsWith('path('), `Embedded media and the OOXML dissolve transition must render on their source slide: ${JSON.stringify({ slide: embeddedMedia.slide, media: embeddedMedia.media, transition: embeddedMedia.slideTransition })}`)
@@ -4667,9 +5238,18 @@ try {
   assert(automaticMediaCalls.some(call => call.id === '3' && Math.abs(call.volume - 0.8) < 0.01 && !call.muted) && automaticMediaCalls.some(call => call.id === '2' && call.volume === 1 && !call.muted), `Timed p:audio/p:video nodes must start their respective targets using authored volume and mute settings: ${JSON.stringify(automaticMediaCalls)}`)
   const automaticMediaPauses = await evaluate(`window.__decklineMediaPauses`)
   assert(automaticMediaPauses.includes('2'), `A finite 100 ms media time node must stop its video target at its declared end: ${JSON.stringify(automaticMediaPauses)}`)
+  assert(shape(embeddedMedia, 'Media timed node end').visibility === 'visible', 'An authored media time-node end must fire when its finite duration ends.')
+  assert(shape(embeddedMedia, 'Media target onEnd').visibility === 'hidden', 'A target onEnd event must wait for the target media end event, not only a time-node duration.')
   assert(shape(embeddedMedia, 'Media after-effect').visibility === 'hidden', 'An afterEffect animation must wait for an indefinite timed media node to end.')
   assert(shape(embeddedMedia, 'Media bookmark trigger').visibility === 'hidden', 'A media-bookmark-triggered animation must remain hidden before playback crosses its bookmark.')
   assert(shape(embeddedMedia, 'Media bookmark start trigger').visibility === 'hidden', 'A zero-time bookmark animation must remain hidden before its media starts.')
+  assert(shape(embeddedMedia, 'Media node end trigger').visibility === 'hidden', 'A media time-node onEnd animation must remain hidden while the source audio is still playing.')
+  assert(shape(embeddedMedia, 'Media node begin time-node').visibility === 'visible', 'A media time-node begin condition must fire when its scheduled time node starts, even if playback is blocked.')
+  assert(shape(embeddedMedia, 'Media node end time-node').visibility === 'hidden', 'A media time-node end condition must wait until its source time node ends.')
+  assert(shape(embeddedMedia, 'Media node begin trigger').visibility === 'hidden', 'A media time-node onBegin animation must wait for its authored trigger delay.')
+  await delay(750)
+  const mediaNodeBeginState = await state()
+  assert(shape(mediaNodeBeginState, 'Media node begin trigger').visibility === 'hidden', 'An onBegin target event must not fire when the browser rejects media playback.')
   await evaluate(`(() => { const audio = document.querySelector('.slide-audio[data-media-id="5"]'); Object.defineProperty(audio, 'paused', { configurable: true, value: false }); Object.defineProperty(audio, 'currentTime', { configurable: true, writable: true, value: 0 }); audio.dispatchEvent(new Event('play')) })()`)
   await delay(50)
   await evaluate(`(() => { const audio = document.querySelector('.slide-audio[data-media-id="5"]'); delete audio.paused; delete audio.currentTime; audio.dispatchEvent(new Event('pause')) })()`)
@@ -4680,15 +5260,25 @@ try {
   await evaluate(`(() => { const audio = document.querySelector('.slide-audio[data-media-id="3"]'); delete audio.paused; delete audio.currentTime; audio.dispatchEvent(new Event('pause')) })()`)
   const mediaBookmarkState = await state()
   assert(shape(mediaBookmarkState, 'Media bookmark trigger').visibility === 'visible', `RAF sampling must start a p14 bookmark-triggered animation without a timeupdate event: ${JSON.stringify(shape(mediaBookmarkState, 'Media bookmark trigger'))}`)
+  assert(Number(shape(mediaBookmarkState, 'Interactive subtime parallel target').opacity) > 0 && Number(shape(mediaBookmarkState, 'Interactive subtime parallel target').opacity) < 1, 'Nested p:par nodes must also be scheduled from an interactive sequence.')
+  await delay(500)
+  const mediaNodeBeginAfterPlay = await state()
+  assert(shape(mediaNodeBeginAfterPlay, 'Media node begin trigger').visibility === 'visible', 'A media time-node onBegin animation must start after its target actually starts playback and the authored delay elapses.')
   assert(!embeddedMedia.warnings.some(warning => warning.includes('Cross-slide video playback is not supported')), 'Supported numSld video playback must not report an unsupported warning.')
   await evaluate(`document.querySelector('.slide-audio').dispatchEvent(new Event('ended'))`)
   await delay(220)
   const mediaAfterEffectState = await state()
   assert(shape(mediaAfterEffectState, 'Media after-effect').visibility === 'visible', 'An indefinite media ended event must release the following afterEffect animation after its finite sibling duration.')
+  assert(shape(mediaAfterEffectState, 'Media node end trigger').visibility === 'visible', 'A media time-node onEnd animation must start after its source audio ends.')
+  assert(shape(mediaAfterEffectState, 'Media node end time-node').visibility === 'visible', 'A media time-node end condition must fire when its source time node ends.')
   await evaluate(`(() => { const video = document.querySelector('.slide-video'); Object.defineProperty(video, 'duration', { configurable: true, value: 1 }); Object.defineProperty(video, 'currentTime', { configurable: true, writable: true, value: 0.1 }); video.dispatchEvent(new Event('loadedmetadata')) })()`)
   await delay(20)
   const videoFade = await state()
   assert(Math.abs(videoFade.media.videos[0].volume - 0.5) < 0.02 && !videoFade.media.videos[0].muted && videoFade.media.videos[0].opacity === '1', `Video media fade must control its audio volume while leaving its picture visible: ${JSON.stringify(videoFade.media.videos[0])}`)
+  await evaluate(`document.querySelector('.slide-video').dispatchEvent(new Event('ended'))`)
+  await delay(120)
+  const videoTargetEnded = await state()
+  assert(shape(videoTargetEnded, 'Media target onEnd').visibility === 'visible', 'A target onEnd event must fire after the referenced media target ends.')
   assert(embeddedMedia.media.audios[0].src.startsWith('blob:') && embeddedMedia.media.audios[0].controls && !embeddedMedia.media.audios[0].autoplay && embeddedMedia.media.audios[0].readyState >= 1 && Math.abs(embeddedMedia.media.audios[0].duration - 0.5) < 0.02 && Math.abs(embeddedMedia.media.audios[0].currentTime - 0.1) < 0.02 && embeddedMedia.media.audios[0].muted, `Embedded WAV metadata, 100 ms trim, and fade-in start must load from a local blob: ${JSON.stringify(embeddedMedia.media.audios[0])}`)
   assert(embeddedMedia.media.audios[1].readyState >= 1 && Math.abs(embeddedMedia.media.audios[1].duration - 0.25) < 0.02 && embeddedMedia.media.warnings.some(warning => warning.name === 'Invalid trim' && warning.message.includes('full media is used')) && embeddedMedia.media.warnings.some(warning => warning.name === 'Invalid trim' && warning.message.includes('fades are ignored')), `Trim and fade ranges longer than their WAV must be reported and ignored: ${JSON.stringify(embeddedMedia.media)}`)
   await evaluate(`(() => { const audio = document.querySelector('.slide-audio'); audio.currentTime = 0.2; audio.dispatchEvent(new Event('seeking')) })()`)
@@ -4712,15 +5302,69 @@ try {
   const shapeMaskStarts = shapeMaskNames.map(name => shape(shapeMasksInitial, name).clipPath)
   assert(shapeMaskStarts.every(clipPath => clipPath.startsWith('inset(') || clipPath.startsWith('path(')), `Circle, diamond, and box effects must have valid initial masks: ${JSON.stringify(shapeMaskStarts)}`)
   assert((shape(shapeMasksInitial, 'Wheel mask animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 4 && (shape(shapeMasksInitial, 'Wedge mask animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 1, 'The wheel and wedge filters must retain their authored spoke counts.')
+  assert(!shapeMasksInitial.warnings.some(warning => warning.includes('p:excl')), 'A finite p:excl group must be supported without a parser warning.')
+  const subTimeMediaCallsBefore = (await evaluate(`window.__decklineMediaCalls`)).length
+  const subTimeMediaPausesBefore = (await evaluate(`window.__decklineMediaPauses`)).length
   for (const [index, name] of shapeMaskNames.entries()) {
-    await evaluate(`document.querySelector('.stage-shell').click()`)
+    const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell').click(); return started })()`)
     await delay(60)
     const active = await state()
     assert(shape(active, name).clipPath !== shapeMaskStarts[index], `${name} must interpolate after its click trigger.`)
-    if (name === 'Random horizontal bars animation') assert(shape(active, name).clipPath.startsWith('path(') && (shape(active, name).clipPath.match(/M(?=\s*[-\d])/g) || []).length === 8, 'Horizontal random bars must render one progressive mask per horizontal band.')
-    if (name === 'Random vertical bars animation') assert(shape(active, name).clipPath.startsWith('path(') && (shape(active, name).clipPath.match(/M(?=\s*[-\d])/g) || []).length === 9, 'Vertical random bars must render one progressive mask per vertical band.')
-    if (name.startsWith('Strips ')) assert(shape(active, name).clipPath.startsWith('path(') && (shape(active, name).clipPath.match(/M(?=\s*[-\d])/g) || []).length === 8, `${name} must reveal through eight staggered bands.`)
-    await delay(420)
+    if (index === 0) {
+      assert(Number(shape(active, name).opacity) > 0 && Number(shape(active, name).opacity) < 1, 'A same-click p:subTnLst p:animEffect must start before p:excl.')
+      const parallelOpacities = ['Parallel subtime A', 'Parallel subtime B'].map(target => Number(shape(active, target).opacity))
+      assert(parallelOpacities.every(opacity => opacity > 0.75) && Math.abs(parallelOpacities[0] - parallelOpacities[1]) < 0.15, `Other p:par timelines must progress before p:excl starts: ${JSON.stringify(parallelOpacities)}`)
+      assert(Number(shape(active, 'Sequence subtime first').opacity) > 0 && Number(shape(active, 'Sequence subtime first').opacity) < 1 && Number(shape(active, 'Sequence subtime second').opacity) === 0, 'A p:seq child must wait until its preceding child finishes.')
+      assert(Number(shape(active, 'Exclusive subtime target').opacity) === 0, 'A delayed p:excl child must wait for its authored start time.')
+      const startedMedia = (await evaluate(`window.__decklineMediaCalls`)).slice(subTimeMediaCallsBefore)
+      assert(startedMedia.some(call => call.id === '3') && startedMedia.some(call => call.id === '2'), `Media actions must start before the delayed p:excl: ${JSON.stringify(startedMedia)}`)
+      await evaluate(`document.querySelector('video[data-media-id="2"]').pause()`)
+      const manualPauseCount = (await evaluate(`window.__decklineMediaPauses`)).length
+      await delay(90)
+      const exclusiveStart = await state()
+      assert(await evaluate(`document.querySelector('audio[data-media-id="3"]').paused`), 'p:excl must automatically pause audio already playing on another timeline.')
+      assert(await evaluate(`document.querySelector('video[data-media-id="2"]').paused`), 'A media element manually paused before p:excl must remain paused.')
+      const exclusivePauses = (await evaluate(`window.__decklineMediaPauses`)).slice(manualPauseCount)
+      assert(exclusivePauses.includes('3') && !exclusivePauses.includes('2'), `p:excl must pause active media while leaving already-paused media untouched: ${JSON.stringify(exclusivePauses)}`)
+      await delay(80)
+      const exclusiveLater = await state()
+      assert(shape(exclusiveLater, name).clipPath === shape(exclusiveStart, name).clipPath && shape(exclusiveLater, name).opacity === shape(exclusiveStart, name).opacity, `Other same-click animations must freeze for the full exclusive interval: ${JSON.stringify({start: shape(exclusiveStart, name), later: shape(exclusiveLater, name)})}`)
+      assert(Number(shape(exclusiveStart, 'Exclusive subtime target').opacity) > 0 && Number(shape(exclusiveLater, 'Exclusive subtime target').opacity) > Number(shape(exclusiveStart, 'Exclusive subtime target').opacity), 'The p:excl child must continue while other timelines are paused.')
+      const exclusiveParallel = ['Parallel subtime A', 'Parallel subtime B'].map(target => Number(shape(exclusiveLater, target).opacity))
+      const parallelAtExclusiveStart = ['Parallel subtime A', 'Parallel subtime B'].map(target => Number(shape(exclusiveStart, target).opacity))
+      assert(exclusiveParallel.every((opacity, index) => opacity === parallelAtExclusiveStart[index]), `Parallel timelines must retain their progress during p:excl: ${JSON.stringify(exclusiveParallel)}`)
+      await delay(190)
+      assert(!(await evaluate(`document.querySelector('audio[data-media-id="3"]').paused`)), 'Media automatically paused by p:excl must resume when it ends.')
+      assert(await evaluate(`document.querySelector('video[data-media-id="2"]').paused`), 'Media manually paused before p:excl must not be resumed.')
+      const resumed = await state()
+      await delay(100)
+      const beforeSecondExclusive = await state()
+      assert(Number(shape(beforeSecondExclusive, 'Sequence subtime second').opacity) > Number(shape(resumed, 'Sequence subtime second').opacity), 'Independent timelines must keep progressing between separate p:excl groups.')
+      const secondExclusiveBeforeOpacity = Number(shape(beforeSecondExclusive, 'Second exclusive subtime target').opacity)
+      assert(secondExclusiveBeforeOpacity === 0, `The second p:excl child must wait for its authored start time: ${JSON.stringify({ elapsed: beforeSecondExclusive.now - clickStartedAt, captureDuration: beforeSecondExclusive.captureEndedAt - beforeSecondExclusive.now, opacity: secondExclusiveBeforeOpacity })}`)
+      assert(await evaluate(`document.querySelector('audio[data-media-id="3"]').paused`), 'The timed audio action must finish after the first exclusive pause.')
+      await delay(200)
+      await delay(25)
+      const secondExclusiveStart = await state()
+      assert(Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity) > 0 && Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity) < 1, 'A second independent p:excl child must run during its own interval.')
+      await delay(20)
+      const secondExclusiveLater = await state()
+      assert(shape(secondExclusiveLater, 'Sequence subtime second').opacity === shape(secondExclusiveStart, 'Sequence subtime second').opacity, `A second p:excl group must freeze timelines outside its own membership: ${JSON.stringify({start: shape(secondExclusiveStart, 'Sequence subtime second'), later: shape(secondExclusiveLater, 'Sequence subtime second')})}`)
+      assert(Number(shape(secondExclusiveLater, 'Second exclusive subtime target').opacity) > Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity), 'The second p:excl child must continue while other timelines are paused.')
+      await delay(120)
+      const secondExclusiveResumed = await state()
+      const secondSequenceDuringExclusive = Number(shape(secondExclusiveLater, 'Sequence subtime second').opacity)
+      const secondSequenceAfterExclusive = Number(shape(secondExclusiveResumed, 'Sequence subtime second').opacity)
+      assert(secondSequenceAfterExclusive > secondSequenceDuringExclusive, `Independent timelines must resume after the second p:excl ends: ${JSON.stringify({ elapsed: secondExclusiveResumed.now - clickStartedAt, during: secondSequenceDuringExclusive, resumed: secondSequenceAfterExclusive })}`)
+      await delay(100)
+      const subTimeMediaCalls = (await evaluate(`window.__decklineMediaCalls`)).slice(subTimeMediaCallsBefore)
+      assert(subTimeMediaCalls.some(call => call.id === '3' && Math.abs(call.volume - 0.4) < 0.01 && !call.muted) && subTimeMediaCalls.some(call => call.id === '2' && Math.abs(call.volume - 0.3) < 0.01 && !call.muted), `Same-click p:subTnLst p:audio/p:video nodes must start at the authored volumes: ${JSON.stringify(subTimeMediaCalls)}`)
+      const subTimeMediaPauses = (await evaluate(`window.__decklineMediaPauses`)).slice(subTimeMediaPausesBefore)
+      assert(subTimeMediaPauses.filter(id => id === '2').length >= 3, `Timed media and the later p:cmd pause must both finish after the exclusive interval: ${JSON.stringify(subTimeMediaPauses)}`)
+      const sequenceAdvanced = await state()
+      const secondSequenceOpacity = Number(shape(sequenceAdvanced, 'Sequence subtime second').opacity)
+      assert(secondSequenceOpacity > 0 && secondSequenceOpacity <= 1, `The next p:seq child must advance after its predecessor and the exclusive pause: ${secondSequenceOpacity}`)
+    } else await delay(360)
   }
   const shapeMasksComplete = await state()
   assert(shape(shapeMasksComplete, 'Circle mask animation').clipPath.startsWith('path(') && shape(shapeMasksComplete, 'Diamond mask animation').clipPath.startsWith('inset(50%') && shape(shapeMasksComplete, 'Box mask animation').clipPath.startsWith('inset(0') && shape(shapeMasksComplete, 'Dissolve mask animation').clipPath.startsWith('inset(0') && (shape(shapeMasksComplete, 'Wheel mask animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 4 && (shape(shapeMasksComplete, 'Wedge mask animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 1 && shape(shapeMasksComplete, 'Plus in mask animation').clipPath.startsWith('inset(0') && shape(shapeMasksComplete, 'Plus out mask animation').clipPath.startsWith('inset(50%') && shape(shapeMasksComplete, 'Random horizontal bars animation').clipPath.startsWith('path(') && (shape(shapeMasksComplete, 'Random horizontal bars animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 8 && shape(shapeMasksComplete, 'Random vertical bars animation').clipPath.startsWith('path(') && (shape(shapeMasksComplete, 'Random vertical bars animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 9, `Circle, diamond, box, dissolve, wheel, wedge, plus, and random-bar masks must reach their OOXML final states: ${JSON.stringify(shapeMaskNames.map(name => [name, shape(shapeMasksComplete, name).clipPath]))}`)
@@ -4766,7 +5410,7 @@ try {
   const stageAudioIds = await evaluate(`[...document.querySelectorAll('.stage-shell .slide-audio')].map(audio => audio.dataset.mediaId)`)
   assert(stageAudioIds.length === 3 && stageAudioIds.every(id => stopAudioPauseIds.includes(id)), `The onstopaudio event must stop every audio element on the slide: ${JSON.stringify({ stageAudioIds, stopAudioPauseIds })}`)
   assert(shape(stopAudioState, 'Stop audio trigger').visibility === 'visible', `The slide-targeted onStopAudio sequence must run when type=evt cmd=onstopaudio fires: ${JSON.stringify(shape(stopAudioState, 'Stop audio trigger'))}`)
-  await evaluate(`HTMLMediaElement.prototype.play = window.__decklineOriginalPlay; HTMLMediaElement.prototype.pause = window.__decklineOriginalPause; delete window.__decklineOriginalPlay; delete window.__decklineOriginalPause; delete window.__decklineMediaCalls; delete window.__decklineMediaPauses`)
+  await evaluate(`for (const media of window.__decklineMockedMedia) delete media.paused; HTMLMediaElement.prototype.play = window.__decklineOriginalPlay; HTMLMediaElement.prototype.pause = window.__decklineOriginalPause; delete window.__decklineOriginalPlay; delete window.__decklineOriginalPause; delete window.__decklineMockedMedia; delete window.__decklineMediaCalls; delete window.__decklineMediaPauses`)
 
   await evaluate(`document.querySelector('[data-tool=pen]').click(); (() => { const layer = document.querySelector('.ink-layer'); const rect = layer.getBoundingClientRect(); const event = (type, x, y, buttons) => layer.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 21, pointerType: 'mouse', clientX: rect.left + x, clientY: rect.top + y, buttons })); event('pointerdown', 30, 30, 1); event('pointermove', 90, 80, 1); event('pointerup', 90, 80, 0) })()`)
   await delay(20)
@@ -4833,6 +5477,29 @@ try {
   await delay(300)
   const visibilityEnd = await state()
   assert(shape(visibilityEnd, 'Visibility from-to').visibility === 'hidden' && shape(visibilityEnd, 'Visibility keyframes').visibility === 'visible', `Discrete style.visibility must hold its direct and keyframed end values: ${JSON.stringify({ fromTo: shape(visibilityEnd, 'Visibility from-to'), keyframes: shape(visibilityEnd, 'Visibility keyframes') })}`)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(700)
+  const nestedSequenceWaiting = await state()
+  assert(shape(nestedSequenceWaiting, 'Nested sequence first').visibility === 'hidden'
+    && shape(nestedSequenceWaiting, 'Nested sequence second').visibility === 'visible'
+    && shape(nestedSequenceWaiting, 'Nested sequence long').visibility === 'visible'
+    && !nestedSequenceWaiting.warnings.some(warning => warning.includes('Conditional advancement and seek/skip actions on a nested p:seq are not applied.')),
+  `A nested p:seq must wait for onNext before starting its next child: ${JSON.stringify({ first: shape(nestedSequenceWaiting, 'Nested sequence first'), second: shape(nestedSequenceWaiting, 'Nested sequence second'), long: shape(nestedSequenceWaiting, 'Nested sequence long'), warnings: nestedSequenceWaiting.warnings })}`)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(50)
+  await evaluate(`document.querySelector('.stage-shell')?.click()`)
+  await delay(50)
+  const nestedSequenceAdvanced = await state()
+  assert(shape(nestedSequenceAdvanced, 'Nested sequence second').visibility === 'visible'
+    && shape(nestedSequenceAdvanced, 'Nested sequence long').visibility === 'visible',
+  `Nested nextAc=none must preserve the current child state instead of seeking it to its natural end: ${JSON.stringify({ second: shape(nestedSequenceAdvanced, 'Nested sequence second'), long: shape(nestedSequenceAdvanced, 'Nested sequence long') })}`)
+  await delay(350)
+  const nestedSequenceThird = await state()
+  assert(shape(nestedSequenceThird, 'Nested sequence third').visibility === 'hidden', `A nested p:seq must start its third child only after the next slide step: ${JSON.stringify(shape(nestedSequenceThird, 'Nested sequence third'))}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }))`)
+  await delay(80)
+  const nestedSequenceRewound = await state()
+  assert(shape(nestedSequenceRewound, 'Nested sequence third').visibility === 'visible', `A nested p:seq prevCondLst must permit rewinding even when the main sequence blocks onPrev: ${JSON.stringify(shape(nestedSequenceRewound, 'Nested sequence third'))}`)
   await delay(550)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(80)
@@ -4844,10 +5511,20 @@ try {
   assert(groupedFillChild?.backgroundColor === 'rgb(18, 171, 52)' && groupedFillChild.borderColor === 'rgb(18, 171, 52)', 'A grouped shape’s grpFill must inherit the parent group’s solid fill for both its fill and line.')
   const groupedFillTextRuns = verticalRandomBarTransition.textRuns.filter(run => run.name === 'Grouped fill child')
   assert(groupedFillTextRuns.find(run => run.text === 'Group fill text')?.color === 'rgb(18, 171, 52)', 'A text run’s grpFill must inherit its parent group’s solid fill.')
+  const textHighlightRendering = await evaluate(`(() => {
+    const runs = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element[title="Grouped fill child"] .text-run')]
+    const solid = runs.find(run => run.textContent === 'Group fill text')
+    const patterned = runs.find(run => run.textContent === 'Highlighted patterned text')
+    if (!solid || !patterned) return undefined
+    const style = getComputedStyle(patterned)
+    return { solidBackground: getComputedStyle(solid).backgroundColor, patternBackground: style.backgroundImage, patternClip: style.backgroundClip, highlighted: patterned.classList.contains('text-run-highlight'), filled: patterned.classList.contains('text-run-fill') }
+  })()`)
+  assert(textHighlightRendering?.solidBackground === 'rgb(255, 255, 0)' && textHighlightRendering.patternBackground.includes('linear-gradient') && textHighlightRendering.patternBackground.includes('repeating-linear-gradient') && textHighlightRendering.patternClip.includes('border-box') && textHighlightRendering.patternClip.includes('text') && textHighlightRendering.highlighted && textHighlightRendering.filled && verticalRandomBarTransition.warnings.some(warning => warning.includes('DrawingML text highlights use browser inline backgrounds')),
+    `DrawingML a:highlight must render inline backgrounds alongside pattern fills and report its line-fragment limitation: ${JSON.stringify({textHighlightRendering, warnings: verticalRandomBarTransition.warnings})}`)
   const wordsUnderline = groupedFillTextRuns.find(run => run.text === 'Words and spaces')
   assert(wordsUnderline?.textDecorationLine.includes('underline'), `PowerPoint loads the unsupported DrawingML words underline as a single underline across the run: ${JSON.stringify(wordsUnderline)}`)
   assert(groupedFillTextRuns.find(run => run.text === 'No fill text')?.color === 'rgba(0, 0, 0, 0)', 'A text run’s noFill must render with transparent text color.')
-  assert(groupedFillTextRuns.find(run => run.text === 'Gradient text')?.color === 'rgb(239, 68, 68)' && verticalRandomBarTransition.warnings.some(warning => warning.includes('Gradient text fills are approximated with their first color stop')), 'A gradient text fill must use a visible first-stop fallback and report the approximation.')
+  assert(groupedFillTextRuns.find(run => run.text === 'Gradient text')?.color === 'rgba(0, 0, 0, 0)' && verticalRandomBarTransition.warnings.some(warning => warning.includes('Text run gradients use CSS background clipping')), `A gradient text fill must render through clipped text and report per-run limitations: ${JSON.stringify({run: groupedFillTextRuns.find(run => run.text === 'Gradient text'), warnings: verticalRandomBarTransition.warnings})}`)
   assert(groupedFillTextRuns.find(run => run.text === 'Custom underline fill')?.textDecorationColor === 'rgb(255, 0, 255)', 'a:uFill must render the underline with its explicit fill color.')
   assert(groupedFillTextRuns.find(run => run.text === 'Underline follows text')?.color === 'rgb(11, 83, 148)' && groupedFillTextRuns.find(run => run.text === 'Underline follows text')?.textDecorationColor === 'rgb(11, 83, 148)', 'a:uFillTx must make the underline follow its text run color.')
   assert(groupedFillTextRuns.find(run => run.text === 'Transparent underline')?.textDecorationColor === 'rgba(0, 0, 0, 0)', 'a:uFill with a:noFill must suppress the underline paint.')
@@ -4890,6 +5567,71 @@ try {
   const eastAsianFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'East Asian vertical text')
   assert(eastAsianFrame?.writingMode === 'vertical-rl' && eastAsianFrame.textOrientation === 'upright', 'eaVert text must use upright glyphs in right-to-left vertical columns.')
   assert(verticalRandomBarTransition.textFrames.find(frame => frame.name === 'Explicit horizontal text')?.writingMode === 'horizontal-tb', 'An explicit horz value must remain horizontal.')
+  const defaultOverflowLayout = await evaluate(`(() => {
+    const shape = document.querySelector('.stage-shell > .slide-host .slide-element[title="Default overflow"]')
+    const frame = shape?.querySelector('.text-frame')
+    const run = frame?.querySelector('.text-run')
+    if (!shape || !frame || !run) return undefined
+    const frameStyle = getComputedStyle(frame)
+    return { shapeOverflow: getComputedStyle(shape).overflow, frameOverflowX: frameStyle.overflowX, frameOverflowY: frameStyle.overflowY, frameBottom: frame.getBoundingClientRect().bottom, textBottom: run.getBoundingClientRect().bottom }
+  })()`)
+  assert(defaultOverflowLayout?.shapeOverflow === 'visible' && defaultOverflowLayout.frameOverflowX === 'visible' && defaultOverflowLayout.frameOverflowY === 'visible'
+    && defaultOverflowLayout.textBottom > defaultOverflowLayout.frameBottom + 1,
+    `DrawingML text with omitted overflow attributes must remain visible beyond the shape bounds: ${JSON.stringify(defaultOverflowLayout)}`)
+  const gradientTextRendering = await evaluate(`(() => {
+    const shape = document.querySelector('.stage-shell > .slide-host .slide-element[title="Gradient text"]')
+    const run = shape?.querySelector('.text-run')
+    if (!run) return undefined
+    const style = getComputedStyle(run)
+    return { backgroundImage: style.backgroundImage, backgroundClip: style.backgroundClip, fallbackColor: style.getPropertyValue('--pptx-text-fill-color'), clipped: run.classList.contains('text-run-fill') }
+  })()`)
+  assert(gradientTextRendering?.backgroundImage.includes('linear-gradient') && gradientTextRendering.backgroundClip.includes('text') && gradientTextRendering.fallbackColor.toLowerCase() === '#ef4444' && gradientTextRendering.clipped,
+    `DrawingML run gradients must render through clipped text backgrounds: ${JSON.stringify(gradientTextRendering)}`)
+  assert(!verticalRandomBarTransition.warnings.some(warning => warning.includes('anchorCtr text-bound centering is not rendered'))
+    && verticalRandomBarTransition.warnings.some(warning => warning.includes('invalid a:bodyPr anchorCtr value was ignored')),
+    `Valid anchorCtr values must render without warnings, while invalid values must remain visible: ${JSON.stringify(verticalRandomBarTransition.warnings)}`)
+  const anchorCenterLayout = await evaluate(`(() => {
+    const read = name => {
+      const shape = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(item => item.title === name)
+      const frame = shape?.querySelector('.text-frame')
+      const bounds = frame?.querySelector('.text-bounds')
+      if (!frame || !bounds) return undefined
+      const frameRect = frame.getBoundingClientRect()
+      const boundsRect = bounds.getBoundingClientRect()
+      const style = getComputedStyle(frame)
+      const insetLeft = parseFloat(style.paddingLeft) || 0
+      const insetRight = parseFloat(style.paddingRight) || 0
+      const insetTop = parseFloat(style.paddingTop) || 0
+      const insetBottom = parseFloat(style.paddingBottom) || 0
+      const contentWidth = frame.clientWidth - insetLeft - insetRight
+      const transform = getComputedStyle(shape).transform
+      const matrix = transform === 'none' ? new DOMMatrixReadOnly() : new DOMMatrixReadOnly(transform)
+      const targetX = frameRect.left + frameRect.width / 2 + matrix.a * (insetLeft - insetRight) / 2 + matrix.c * (insetTop - insetBottom) / 2
+      const targetY = frameRect.top + frameRect.height / 2 + matrix.b * (insetLeft - insetRight) / 2 + matrix.d * (insetTop - insetBottom) / 2
+      const boundsCenterX = boundsRect.left + boundsRect.width / 2
+      const boundsCenterY = boundsRect.top + boundsRect.height / 2
+      const axisCenterError = (boundsCenterX - targetX) * matrix.a + (boundsCenterY - targetY) * matrix.b
+      return { display: getComputedStyle(bounds).display, paragraphAlign: getComputedStyle(frame.querySelector('.text-paragraph')).textAlign, boundsCenter: boundsCenterX, contentCenter: frameRect.left + insetLeft + contentWidth / 2, axisCenterError, boundsWidth: boundsRect.width, contentWidth }
+    }
+    return { explicit: read('Explicit horizontal text'), inherited: read('Inherited paragraph'), off: read('Anchor center off'), multiColumn: read('Two-column anchored text'), rotatedMultiColumn: read('Rotated two-column anchored text'), vertical: read('Vertical anchored text') }
+  })()`)
+  assert(anchorCenterLayout?.explicit?.display === 'flex'
+    && Math.abs(anchorCenterLayout.explicit.boundsCenter - anchorCenterLayout.explicit.contentCenter) < 1
+    && anchorCenterLayout.explicit.boundsWidth < anchorCenterLayout.explicit.contentWidth
+    && anchorCenterLayout.explicit.paragraphAlign === 'left'
+    && anchorCenterLayout.inherited?.display === 'flex'
+    && anchorCenterLayout.off?.display === 'contents'
+    && anchorCenterLayout.multiColumn?.display === 'block'
+    && Math.abs(anchorCenterLayout.multiColumn.boundsCenter - anchorCenterLayout.multiColumn.contentCenter) < 1
+    && anchorCenterLayout.multiColumn.boundsWidth < anchorCenterLayout.multiColumn.contentWidth
+    && anchorCenterLayout.multiColumn.paragraphAlign === 'left'
+    && anchorCenterLayout.rotatedMultiColumn?.display === 'block'
+    && Math.abs(anchorCenterLayout.rotatedMultiColumn.axisCenterError) < 1
+    && anchorCenterLayout.rotatedMultiColumn.paragraphAlign === 'left'
+    && anchorCenterLayout.vertical?.display === 'flex'
+    && Math.abs(anchorCenterLayout.vertical.boundsCenter - anchorCenterLayout.vertical.contentCenter) < 1
+    && anchorCenterLayout.vertical.boundsWidth < anchorCenterLayout.vertical.contentWidth,
+    `anchorCtr must center text bounds for explicit, inherited, multi-column, rotated multi-column, and vertical text without changing paragraph alignment; anchorCtr="0" keeps the default layout: ${JSON.stringify(anchorCenterLayout)}`)
   const twoColumnFrame = verticalRandomBarTransition.textFrames.find(frame => frame.name === 'Two-column text')
   const expectedColumnGap = 457200 * (twoColumnFrame?.frameWidth || 0) / 12192000
   const columnXs = (twoColumnFrame?.runRects || []).map(rect => rect.left)
@@ -5194,10 +5936,24 @@ try {
   await delay(80)
   const morphByWord = await state()
   const morphWordSnapshot = await evaluate(`(() => { const incoming = document.querySelector('.stage-shell > .slide-host [data-element-name="Morph Words"] .text-frame'); const outgoing = document.querySelector('.slide-transition-underlay > .slide-host [data-element-name="Morph Words"] .text-frame'); const tokens = [...(incoming?.querySelectorAll('.morph-text-token') || [])]; return { hidden: [...(incoming?.querySelectorAll('.text-run') || [])].length > 0 && [...incoming.querySelectorAll('.text-run')].every(run => getComputedStyle(run).visibility === 'hidden'), outgoingHidden: [...(outgoing?.querySelectorAll('.text-run') || [])].every(run => getComputedStyle(run).visibility === 'hidden'), tokens: tokens.map(node => { const frames = node.getAnimations()[0]?.effect.getKeyframes() || []; const animation = node.getAnimations()[0]; return { text: node.dataset.morphToken, key: node.dataset.morphMatch, left: frames.map(frame => frame.left), opacity: frames.map(frame => frame.opacity), duration: animation?.effect.getTiming().duration } }) } })()`)
+   const transformedMorphSnapshot = await evaluate(`(() => {
+     const read = name => {
+       const frame = [...document.querySelectorAll('.stage-shell > .slide-host .text-frame')].find(node => node.closest('.slide-element')?.dataset.elementName === name)
+       const tokens = [...(frame?.querySelectorAll('.morph-text-token') || [])]
+       return { hidden: Boolean(frame && [...frame.querySelectorAll('.text-run')].length && [...frame.querySelectorAll('.text-run')].every(run => getComputedStyle(run).visibility === 'hidden')), tokens: tokens.map(node => { const frames = node.getAnimations()[0]?.effect.getKeyframes() || []; return { key: node.dataset.morphMatch, left: frames.map(frame => frame.left) } }) }
+     }
+     return { rotated: read('Morph Rotated Words'), flipped: read('Morph Flipped Words') }
+   })()`)
   const movedWord = morphWordSnapshot.tokens.find(token => token.key === 'The')
   const removedWord = morphWordSnapshot.tokens.find(token => token.key === 'brown')
   const addedWord = morphWordSnapshot.tokens.find(token => token.key === 'jumps')
   assert(morphByWord.slide?.startsWith('53 / 68') && morphByWord.transitionEffect === 'morph' && Number(morphWordSnapshot.tokens[0]?.duration) === 650 && morphWordSnapshot.hidden && morphWordSnapshot.outgoingHidden && movedWord?.left?.[0] !== movedWord?.left?.at(-1) && removedWord?.opacity?.join(',') === '1,0' && addedWord?.opacity?.join(',') === '0,1' && !morphByWord.warnings.some(warning => warning.includes('Morph byWord matching is not rendered yet')), `p159:morph byWord must move matching words and fade unmatched words: ${JSON.stringify({ slide: morphByWord.slide, transition: morphByWord.slideTransition, snapshot: morphWordSnapshot, warnings: morphByWord.warnings })}`)
+   const rotatedWord = transformedMorphSnapshot.rotated.tokens.find(token => token.key === 'rotate')
+   const flippedWord = transformedMorphSnapshot.flipped.tokens.find(token => token.key === 'flip')
+   assert(transformedMorphSnapshot.rotated.hidden && transformedMorphSnapshot.rotated.tokens.length > 0 && rotatedWord?.left?.[0] !== rotatedWord?.left?.at(-1)
+     && transformedMorphSnapshot.flipped.hidden && transformedMorphSnapshot.flipped.tokens.length > 0 && flippedWord?.left?.[0] !== flippedWord?.left?.at(-1)
+     && !morphByWord.warnings.some(warning => warning.includes('uses object motion for transformed shape')),
+   `p159:morph byWord must keep word matching inside rotated and flipped shapes: ${JSON.stringify({ snapshot: transformedMorphSnapshot, warnings: morphByWord.warnings })}`)
   await delay(700)
   assert(!(await evaluate(`document.querySelector('.stage-shell')?.classList.contains('is-morph-transition')`)) && !(await evaluate(`document.querySelector('.slide-transition-underlay')?.firstElementChild`)), 'The byWord transition must clear its temporary slide snapshot when finished.')
   await jumpToFixtureSlide(68)
@@ -5206,7 +5962,7 @@ try {
   const morphCharSnapshot = await evaluate(`(() => { const incoming = document.querySelector('.stage-shell > .slide-host [data-element-name="Morph Characters"] .text-frame'); const tokens = [...(incoming?.querySelectorAll('.morph-text-token') || [])]; return { hidden: [...(incoming?.querySelectorAll('.text-run') || [])].length > 0 && [...incoming.querySelectorAll('.text-run')].every(run => getComputedStyle(run).visibility === 'hidden'), tokens: tokens.map(node => { const frames = node.getAnimations()[0]?.effect.getKeyframes() || []; const animation = node.getAnimations()[0]; return { text: node.dataset.morphToken, key: node.dataset.morphMatch, left: frames.map(frame => frame.left), opacity: frames.map(frame => frame.opacity), duration: animation?.effect.getTiming().duration } }) } })()`)
   const movedCharacter = morphCharSnapshot.tokens.find(token => token.key === 'S')
   const addedCharacter = morphCharSnapshot.tokens.find(token => token.key === '!')
-  assert(morphByChar.slide?.startsWith('68 / 68') && morphByChar.transitionEffect === 'morph' && Number(morphCharSnapshot.tokens[0]?.duration) === 800 && morphCharSnapshot.hidden && morphCharSnapshot.tokens.length === 7 && movedCharacter?.left?.[0] !== movedCharacter?.left?.at(-1) && addedCharacter?.opacity?.join(',') === '0,1' && !morphByChar.warnings.some(warning => warning.includes('Morph byChar matching is not rendered yet')), `p159:morph byChar must move matching characters and fade new characters: ${JSON.stringify({ slide: morphByChar.slide, transition: morphByChar.slideTransition, snapshot: morphCharSnapshot, warnings: morphByChar.warnings })}`)
+   assert(morphByChar.slide?.startsWith('68 / 68') && morphByChar.transitionEffect === 'morph' && Number(morphCharSnapshot.tokens[0]?.duration) === 800 && morphCharSnapshot.hidden && morphCharSnapshot.tokens.length === 7 && movedCharacter?.left?.[0] !== movedCharacter?.left?.at(-1) && addedCharacter?.opacity?.join(',') === '0,1' && !morphByChar.warnings.some(warning => warning.includes('Morph byChar matching is not rendered yet') || warning.includes('uses object motion for transformed shape')), `p159:morph byChar must move matching characters and fade new characters in a rotated, flipped shape: ${JSON.stringify({ slide: morphByChar.slide, transition: morphByChar.slideTransition, snapshot: morphCharSnapshot, warnings: morphByChar.warnings })}`)
   await delay(850)
   assert(!(await evaluate(`document.querySelector('.stage-shell')?.classList.contains('is-morph-transition')`)) && !(await evaluate(`document.querySelector('.slide-transition-underlay')?.firstElementChild`)), 'The byChar transition must clear its temporary slide snapshot when finished.')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '7' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
@@ -5243,9 +5999,9 @@ try {
     assert(fixtureFaces.length === 1 && fixtureFaces[0].weight === '400' && fixtureFaces[0].style === 'normal' && fixtureFaces[0].status === 'loaded',
       `The projector window must load the embedded font before rendering slides: ${JSON.stringify(projectorFaces)}`)
   }
-  const pressProjectorKey = (key, { shiftKey = false, ctrlKey = false, altKey = false, metaKey = false } = {}) => evaluate(`(() => {
+  const pressProjectorKey = (key, { shiftKey = false, ctrlKey = false, altKey = false, metaKey = false, repeat = false } = {}) => evaluate(`(() => {
     const target = globalThis.__decklineOpenedWindows?.find(candidate => !candidate.closed && candidate.document?.querySelector('[data-projector-window]'))
-    target?.dispatchEvent(new target.KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shiftKey}, ctrlKey: ${ctrlKey}, altKey: ${altKey}, metaKey: ${metaKey}, cancelable: true }))
+    target?.dispatchEvent(new target.KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, shiftKey: ${shiftKey}, ctrlKey: ${ctrlKey}, altKey: ${altKey}, metaKey: ${metaKey}, repeat: ${repeat}, cancelable: true }))
     return Boolean(target)
   })()`)
   const waitForProjectorNumber = async number => {
@@ -5402,10 +6158,18 @@ try {
   assert(projector?.blank === '' && !(await state()).screenOverlay, `Pressing W again must restore the slide locally and on the projector: ${JSON.stringify(projector)}`)
   projector = await pressProjectorKeyAndWaitForBlank('.', 'black')
   assert(projector?.blank === 'black' && (await state()).screenOverlay?.includes('is-black'), `Period in the projector window must show the synchronized black screen: ${JSON.stringify(projector)}`)
+  await pressProjectorKey('.', { repeat: true })
+  await delay(100)
+  projector = await projectorStatus()
+  assert(projector?.blank === 'black', `A repeated period keydown must keep the projector's black screen active: ${JSON.stringify(projector)}`)
   projector = await pressProjectorKeyAndWaitForBlank('.', '')
   assert(projector?.blank === '' && !(await state()).screenOverlay, `Period again in the projector window must restore the synchronized slide: ${JSON.stringify(projector)}`)
   projector = await pressProjectorKeyAndWaitForBlank(',', 'white')
   assert(projector?.blank === 'white' && (await state()).screenOverlay?.includes('is-white'), `Comma in the projector window must show the synchronized white screen: ${JSON.stringify(projector)}`)
+  await pressProjectorKey(',', { repeat: true })
+  await delay(100)
+  projector = await projectorStatus()
+  assert(projector?.blank === 'white', `A repeated comma keydown must keep the projector's white screen active: ${JSON.stringify(projector)}`)
   projector = await pressProjectorKeyAndWaitForBlank(',', '')
   assert(projector?.blank === '' && !(await state()).screenOverlay, `Comma again in the projector window must restore the synchronized slide: ${JSON.stringify(projector)}`)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
@@ -5491,14 +6255,50 @@ try {
   assert((await state()).slide?.startsWith('01 / 68'), 'F5 must start the presentation from its first slide.')
   await jumpToFixtureSlide(67)
   await delay(80)
+  const renderingWarningPanel = await evaluate(`(() => { const panel = document.querySelector('.warning-panel'); const summary = panel?.querySelector('summary'); summary?.click(); return { summary: summary?.textContent?.trim(), expanded: panel?.open, warningCount: panel?.querySelectorAll('li').length } })()`)
+  assert(renderingWarningPanel.expanded && renderingWarningPanel.warningCount > 0 && renderingWarningPanel.summary?.includes('Rendering limitations'), `Rendering limitations must be available in an expandable, labeled warning list: ${JSON.stringify(renderingWarningPanel)}`)
+  await evaluate(`document.querySelector('.warning-panel summary')?.click()`)
   const textRangeSlide = await state()
+  assert(textRangeSlide.warnings.some(warning => warning.includes('p:subTnLst') && warning.includes('master-relative timing')), `Non-empty master-relative sub-time nodes must produce a playback warning: ${JSON.stringify(textRangeSlide.warnings)}`)
   assert(!textRangeSlide.warnings.some(warning => warning.includes('Text-range motion animations are not rendered yet.')), 'Character-range motion must not be skipped by the parser.')
+  assert(!textRangeSlide.warnings.some(warning => warning.includes('multiple start conditions')) && shape(textRangeSlide, 'Multi-condition target')?.visibility === 'visible', `A supported multi-condition sequence must remain idle until every condition is met: ${JSON.stringify({ target: shape(textRangeSlide, 'Multi-condition target'), warnings: textRangeSlide.warnings })}`)
+  assert(textRangeSlide.warnings.some(warning => warning.includes('invalid start-condition delay')) && shape(textRangeSlide, 'Invalid condition delay target')?.visibility === 'visible', `An invalid interactive delay must be warned and skipped: ${JSON.stringify({ target: shape(textRangeSlide, 'Invalid condition delay target'), warnings: textRangeSlide.warnings })}`)
+  assert(textRangeSlide.warnings.some(warning => warning.includes('indefinite start-condition delay')) && shape(textRangeSlide, 'Indefinite condition delay target')?.visibility === 'visible', `An indefinite interactive delay must be warned and skipped: ${JSON.stringify({ target: shape(textRangeSlide, 'Indefinite condition delay target'), warnings: textRangeSlide.warnings })}`)
+  assert(!textRangeSlide.warnings.some(warning => warning.includes('object effect animation outside supported timing groups')), `A condition-specific skip must not add a duplicate generic object-effect warning: ${JSON.stringify(textRangeSlide.warnings.filter(warning => /condition delay|object effect animation/i.test(warning)))}`)
+  await evaluate(`(() => { const trigger = document.querySelector('.stage-shell > .slide-host .slide-element[title="Invalid condition delay trigger"]'); trigger?.addEventListener('click', event => event.stopPropagation(), { once: true }); trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true })) })()`)
+  await delay(300)
+  const invalidDelayAfterClick = await state()
+  assert(shape(invalidDelayAfterClick, 'Invalid condition delay target')?.visibility === 'visible', `An invalid condition delay must not be treated as zero: ${JSON.stringify(shape(invalidDelayAfterClick, 'Invalid condition delay target'))}`)
+  await evaluate(`(() => { const trigger = document.querySelector('.stage-shell > .slide-host .slide-element[title="Indefinite condition delay trigger"]'); trigger?.addEventListener('click', event => event.stopPropagation(), { once: true }); trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true })) })()`)
+  await delay(300)
+  const indefiniteDelayAfterClick = await state()
+  assert(shape(indefiniteDelayAfterClick, 'Indefinite condition delay target')?.visibility === 'visible', `An indefinite condition delay must not be treated as zero: ${JSON.stringify(shape(indefiniteDelayAfterClick, 'Indefinite condition delay target'))}`)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Multi-condition trigger one"]')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
+  await delay(50)
+  const multiConditionAfterFirst = await state()
+  assert(shape(multiConditionAfterFirst, 'Multi-condition target')?.visibility === 'visible', `Meeting only the first start condition must not start an animation whose condition list is conjunctive: ${JSON.stringify(shape(multiConditionAfterFirst, 'Multi-condition target'))}`)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Multi-condition trigger two"]')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
+  await delay(100)
+  const multiConditionDuringDelay = await state()
+  assert(Number(shape(multiConditionDuringDelay, 'Multi-condition target')?.opacity) > 0.95, `A finite positive start-condition delay must elapse before the animation begins: ${JSON.stringify(shape(multiConditionDuringDelay, 'Multi-condition target'))}`)
+  await delay(900)
+  const multiConditionAfterBoth = await state()
+  assert(shape(multiConditionAfterBoth, 'Multi-condition target')?.visibility === 'hidden', `Meeting both start conditions must run the interactive animation: ${JSON.stringify(shape(multiConditionAfterBoth, 'Multi-condition target'))}`)
+  assert(shape(multiConditionAfterBoth, 'Interactive next-click after-effect target')?.visibility === 'visible', `Interactive nextClick must wait for the following trigger before dimming: ${JSON.stringify(shape(multiConditionAfterBoth, 'Interactive next-click after-effect target'))}`)
+  assert(shape(multiConditionAfterBoth, 'Indefinite condition delay target')?.visibility === 'visible', 'An unsupported masterRel value must not schedule its p:set.')
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Multi-condition trigger one"]')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
+  await delay(50)
+  await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Multi-condition trigger two"]')?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))`)
+  await delay(400)
+  const interactiveSubTimeAfterNextClick = await state()
+  assert(shape(interactiveSubTimeAfterNextClick, 'Interactive next-click after-effect target')?.visibility === 'hidden', `An interactive nextClick afterEffect p:set must run after the next triggered step: ${JSON.stringify({target: shape(interactiveSubTimeAfterNextClick, 'Interactive next-click after-effect target'), source: shape(interactiveSubTimeAfterNextClick, 'Interactive next-click effect target')})}`)
   assert(textRangeSlide.warnings.some(warning => warning.includes('unsupported object-effect filter was approximated as a fade.')) && !textRangeSlide.warnings.some(warning => warning.includes('vendorCustom object animation is not rendered')), `An unknown in-transition filter must degrade to a warned fade: ${JSON.stringify(textRangeSlide.warnings)}`)
   const textRangeRuns = () => evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host')?.querySelectorAll('.slide-element[title="Character transform target"] .text-run') || [])].map(run => ({ text: run.textContent, start: Number(run.dataset.charStart), end: Number(run.dataset.charEnd), transform: getComputedStyle(run).transform, clipPath: getComputedStyle(run).clipPath, maskImage: getComputedStyle(run).maskImage, color: getComputedStyle(run).color, opacity: Number(getComputedStyle(run).opacity), visibility: getComputedStyle(run).visibility, display: getComputedStyle(run).display })))()`)
   const textParagraphMask = title => evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"] .text-paragraph'); return target ? getComputedStyle(target).maskImage : 'missing' })()`)
   const textParagraphClip = title => evaluate(`(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"] .text-paragraph'); return target ? getComputedStyle(target).clipPath : 'missing' })()`)
   const textRangeMasks = title => evaluate(`(() => [...(document.querySelector('.stage-shell > .slide-host .slide-element[title="${title}"]')?.querySelectorAll('.text-run') || [])].map(run => ({ text: run.textContent, start: Number(run.dataset.charStart), end: Number(run.dataset.charEnd), mask: getComputedStyle(run).maskImage, clipPath: getComputedStyle(run).clipPath })))()`)
   const textRangeBefore = await textRangeRuns()
+  const zoomBefore = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Zoom preset entrance target"]'); const style = getComputedStyle(element); const matrix = new DOMMatrix(style.transform); return {visibility: style.visibility, opacity: Number(style.opacity), scaleX: Math.hypot(matrix.a, matrix.b)} })()`)
   const paragraphBarnStart = await textParagraphClip('Paragraph barn target')
   const paragraphRandomBarsStart = await textParagraphMask('Paragraph random bars target')
   const paragraphStripsStart = await textParagraphMask('Paragraph strips target')
@@ -5509,6 +6309,7 @@ try {
   const characterWedgeStart = await textRangeMasks('Character wedge target')
   const paragraphShapeStart = await textParagraphClip('Paragraph shape target')
   assert(textRangeSlide.slide?.startsWith('67 / 68') && textRangeBefore.length === 4 && textRangeBefore.map(run => run.text).join('') === 'PPTX' && !textRangeSlide.warnings.some(warning => warning.includes('unsupported target or text range was skipped') || warning.includes('unsupported target or property was skipped')), `Text-range scale and rotation targets must parse without a fallback warning: ${JSON.stringify({ slide: textRangeSlide.slide, runs: textRangeBefore, warnings: textRangeSlide.warnings })}`)
+  assert(zoomBefore.visibility === 'hidden' && zoomBefore.opacity === 0 && zoomBefore.scaleX < 0.01, `A presetID 23 entrance must remain hidden at zero scale before its trigger: ${JSON.stringify({zoomBefore, warnings: textRangeSlide.warnings})}`)
   assert(paragraphBarnStart.startsWith('inset(') && paragraphBarnStart.includes('50%') && !textRangeSlide.warnings.some(warning => warning.includes('text-range') && warning.includes('barn')), `A paragraph-range barn entrance must start closed and parse without an unsupported-range warning: ${JSON.stringify({ paragraphBarnStart, warnings: textRangeSlide.warnings })}`)
   assert(paragraphRandomBarsStart.includes('data:image/svg+xml') && !textRangeSlide.warnings.some(warning => warning.includes('text-range random bars')), `A paragraph-range random-bars entrance must start masked without an unsupported-range warning: ${JSON.stringify({ paragraphRandomBarsStart: paragraphRandomBarsStart.slice(0, 80), warnings: textRangeSlide.warnings })}`)
   assert(paragraphStripsStart.includes('data:image/svg+xml') && characterStripsStart.length === 3 && characterStripsStart[0]?.mask === 'none' && characterStripsStart[1]?.text === 'BC' && characterStripsStart[1]?.mask.includes('data:image/svg+xml') && characterStripsStart[2]?.mask === 'none' && !textRangeSlide.warnings.some(warning => warning.includes('unsupported text-range') && warning.includes('strips')), `Paragraph- and character-range strips must mask only their targets without an unsupported-range warning: ${JSON.stringify({ paragraphStripsStart: paragraphStripsStart.slice(0, 80), characterStripsStart, warnings: textRangeSlide.warnings })}`)
@@ -5518,12 +6319,11 @@ try {
   await evaluate(`document.querySelector('[aria-label="Next animation step or slide"]')?.click()`)
   const paragraphMasksDuring = await evaluate(`new Promise(resolve => setTimeout(() => {
     const paragraphMask = title => getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + '] .text-paragraph')).maskImage
-    resolve({ randomBars: paragraphMask('Paragraph random bars target'), strips: paragraphMask('Paragraph strips target') })
+    const flyOffsets = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element[title^="Fly preset "]')].map(element => { const matrix = new DOMMatrix(getComputedStyle(element).transform); return { name: element.title, x: matrix.e, y: matrix.f } })
+     const zoomState = title => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + ']'); const style = getComputedStyle(element); const matrix = new DOMMatrix(style.transform); return {visibility: style.visibility, opacity: Number(style.opacity), scaleX: Math.hypot(matrix.a, matrix.b)} }
+      const characterBarn = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element[title="Character transform target"] .text-run')].map(run => getComputedStyle(run).clipPath)
+      resolve({ randomBars: paragraphMask('Paragraph random bars target'), strips: paragraphMask('Paragraph strips target'), flyOffsets, zoomIn: zoomState('Zoom preset entrance target'), zoomOut: zoomState('Zoom preset exit target'), characterBarn })
   }, 150))`)
-  const paragraphRandomBarsDuring = paragraphMasksDuring.randomBars
-  const paragraphStripsDuring = paragraphMasksDuring.strips
-  const characterStripsDuring = await textRangeMasks('Character strips target')
-  const characterBarnDuring = (await textRangeRuns()).map(run => run.clipPath)
   const textRangeFilterDuring = await evaluate(`(() => {
     const find = (title, selector) => document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + '] ' + selector)
     const paragraphMask = title => getComputedStyle(find(title, '.text-paragraph')).maskImage
@@ -5535,17 +6335,74 @@ try {
       paragraphWheel: paragraphMask('Paragraph wheel target'),
       characterWedge: runs('Character wedge target'),
       fallbackObjectOpacity: Number(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Unsupported filter fallback target"]')).opacity),
+      presetAppear: (() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Preset appear fallback target"]'); const style = getComputedStyle(element); return {visibility: style.visibility, opacity: style.opacity} })(),
+      noneFilterAppear: (() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="None filter preset appear target"]'); const style = getComputedStyle(element); return {visibility: style.visibility, opacity: style.opacity} })(),
+      splitPresetIn: getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Split preset default vertical entrance target"]')).clipPath,
+      splitPresetOut: getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Split preset mirrored exit target"]')).clipPath,
+      presetFadeOpacity: Number(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Preset fade fallback target"]')).opacity),
+      presetWheelClip: document.querySelector('.stage-shell > .slide-host .slide-element[title="Preset wheel fallback target"]').style.clipPath,
+      presetWipe: (() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Preset wipe fallback target"]'); return {mask: element.style.maskImage, progress: element.style.getPropertyValue('--wipe-progress')} })(),
+      noneTransitionOpacity: Number(getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="None transition entrance target"]')).opacity),
     }
   })()`)
+  const paragraphBarnDuring = await textParagraphClip('Paragraph barn target')
+  const characterStripsDuring = await textRangeMasks('Character strips target')
+  const characterBarnDuring = paragraphMasksDuring.characterBarn
+  const paragraphRandomBarsDuring = paragraphMasksDuring.randomBars
+  const paragraphStripsDuring = paragraphMasksDuring.strips
+  const flyOffsets = paragraphMasksDuring.flyOffsets
+  const zoomInDuring = paragraphMasksDuring.zoomIn
+  const zoomOutDuring = paragraphMasksDuring.zoomOut
+  assert(zoomInDuring.visibility === 'visible' && zoomInDuring.opacity > 0.99 && zoomInDuring.scaleX > 0.05 && zoomInDuring.scaleX < 0.95 && zoomOutDuring.visibility === 'visible' && zoomOutDuring.opacity > 0.99 && zoomOutDuring.scaleX > 0.05 && zoomOutDuring.scaleX < 0.95, `Preset Zoom in/out directions must scale while visible: ${JSON.stringify({zoomInDuring, zoomOutDuring})}`)
+  const zoomAfter = await evaluate(`new Promise(resolve => setTimeout(() => { const read = title => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + ']'); const style = getComputedStyle(element); const matrix = new DOMMatrix(style.transform); return {visibility: style.visibility, opacity: Number(style.opacity), scaleX: Math.hypot(matrix.a, matrix.b)} }; resolve({zoomIn: read('Zoom preset entrance target'), zoomOut: read('Zoom preset exit target')}) }, 600))`)
+  assert(zoomAfter.zoomIn.visibility === 'visible' && zoomAfter.zoomIn.scaleX > 0.98 && zoomAfter.zoomOut.visibility === 'hidden' && zoomAfter.zoomOut.scaleX < 0.02, `Preset Zoom must retain its final entrance/exit state after playback: ${JSON.stringify(zoomAfter)}`)
+  assert(flyOffsets.length === flyDirectionCases.length && flyDirectionCases.every(([name, , , , , xSign, ySign]) => {
+    const offset = flyOffsets.find(item => item.name === name)
+    return offset && Math.sign(offset.x) === xSign && Math.sign(offset.y) === ySign
+  }), `Fly preset directions must use subtype bitflags for all eight entrance vectors and default-bottom entrance/exit vectors: ${JSON.stringify(flyOffsets)}`)
+  const shapePresetMaskStates = await evaluate(`(() => ${JSON.stringify(shapePresetCases.map(([title]) => title))}.map(title => {
+    const element = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.title === title)
+    return {title, clipPath: element?.style.clipPath || ''}
+  }))()`)
+  const shapePresetMaskByTitle = new Map(shapePresetMaskStates.map(({title, clipPath}) => [title, clipPath]))
+  for (const [title, , , , , , expectedShape, expectedDirection] of shapePresetCases) {
+    const clipPath = shapePresetMaskByTitle.get(title) || ''
+    const lineCount = (clipPath.match(/ L/g) || []).length
+    const geometryMatches = expectedShape === 'box'
+      ? expectedDirection === 'in' ? clipPath.startsWith('inset(') : clipPath.startsWith('path(evenodd,')
+      : expectedShape === 'circle' ? clipPath.includes(' A')
+        : expectedShape === 'diamond' ? lineCount === 3
+          : clipPath.includes(' H') && clipPath.includes(' V')
+    assert(geometryMatches && clipPath.startsWith('path(evenodd,') === (expectedDirection === 'out'), `Shape preset metadata must resolve the expected ${expectedShape} ${expectedDirection} mask for ${title}: ${clipPath}`)
+  }
+  const simpleFilterPresetMaskStates = await evaluate(`(() => ${JSON.stringify(simpleFilterPresetCases.map(([title]) => title))}.map(title => {
+    const element = [...document.querySelectorAll('.stage-shell > .slide-host .slide-element')].find(element => element.title === title)
+    return {title, clipPath: element?.style.clipPath || ''}
+  }))()`)
+  const simpleFilterPresetMaskByTitle = new Map(simpleFilterPresetMaskStates.map(({title, clipPath}) => [title, clipPath]))
+  for (const [title, , , , , expectedEffect] of simpleFilterPresetCases) {
+    const clipPath = simpleFilterPresetMaskByTitle.get(title) || ''
+    const pathCount = (clipPath.match(/M(?=\s*[-\d])/g) || []).length
+    assert(clipPath.startsWith('path(') && (expectedEffect === 'dissolve' ? pathCount > 1 : pathCount === 1), `Preset ${expectedEffect} metadata must use its existing object mask for ${title}: ${clipPath.slice(0, 120)}`)
+  }
   const paragraphShapeDuring = textRangeFilterDuring.paragraphShape
   const paragraphDissolveDuring = textRangeFilterDuring.paragraphDissolve
   const characterDissolveDuring = textRangeFilterDuring.characterDissolve
   const paragraphWheelDuring = textRangeFilterDuring.paragraphWheel
   const characterWedgeDuring = textRangeFilterDuring.characterWedge
+  assert(textRangeFilterDuring.presetAppear.visibility === 'visible' && textRangeFilterDuring.presetAppear.opacity === '1', `A known appear preset must remain instantaneous when its filter is unsupported: ${JSON.stringify(textRangeFilterDuring.presetAppear)}`)
+  assert(textRangeFilterDuring.noneFilterAppear.visibility === 'visible' && textRangeFilterDuring.noneFilterAppear.opacity === '1', `An explicit none filter must defer to the known appear preset instead of delaying its visibility: ${JSON.stringify(textRangeFilterDuring.noneFilterAppear)}`)
+  const splitExitInset = Number(/^inset\(([\d.]+)%/.exec(textRangeFilterDuring.splitPresetOut)?.[1])
+  assert(textRangeFilterDuring.splitPresetIn.startsWith('inset(0px') && textRangeFilterDuring.splitPresetOut.endsWith(' 0px)') && splitExitInset < 25, `Split preset metadata must use the default vertical entrance and mirror an explicit horizontal subtype for exits: ${JSON.stringify({in: textRangeFilterDuring.splitPresetIn, out: textRangeFilterDuring.splitPresetOut})}`)
+  const presetWipeProgress = Number.parseFloat(textRangeFilterDuring.presetWipe.progress)
+  assert(textRangeFilterDuring.presetFadeOpacity > 0.05 && textRangeFilterDuring.presetFadeOpacity < 0.95 && textRangeFilterDuring.presetWheelClip.startsWith('path(') && (textRangeFilterDuring.presetWheelClip.match(/M/g) || []).length === 8 && textRangeFilterDuring.presetWipe.mask.includes('to top') && presetWipeProgress > 0 && presetWipeProgress < 100, `Fade, eight-spoke wheel, and top wipe presets must use their existing renderers when filter="none": ${JSON.stringify({fade: textRangeFilterDuring.presetFadeOpacity, wheel: textRangeFilterDuring.presetWheelClip.slice(0, 100), wipe: textRangeFilterDuring.presetWipe})}`)
+  assert(textRangeSlide.warnings.filter(warning => warning.includes('unsupported object-effect filter was approximated as a fade.')).length === 1, `Only the unknown preset should use the warned fade fallback: ${JSON.stringify(textRangeSlide.warnings)}`)
+  assert(textRangeFilterDuring.noneTransitionOpacity > 0.05 && textRangeFilterDuring.noneTransitionOpacity < 0.95 && !textRangeSlide.warnings.some(warning => warning.includes('none fade object animation is not rendered')), `PowerPoint interprets transition="none" as an entrance and must render its fade: ${JSON.stringify({opacity: textRangeFilterDuring.noneTransitionOpacity, warnings: textRangeSlide.warnings})}`)
   const fallbackObjectOpacityDuring = textRangeFilterDuring.fallbackObjectOpacity
-  const paragraphBarnDuring = await textParagraphClip('Paragraph barn target')
-  await delay(450)
+  await delay(700)
   const fallbackObjectOpacityComplete = Number(await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="Unsupported filter fallback target"]')).opacity`))
+  const noneTransitionOpacityComplete = Number(await evaluate(`getComputedStyle(document.querySelector('.stage-shell > .slide-host .slide-element[title="None transition entrance target"]')).opacity`))
+  assert(noneTransitionOpacityComplete > 0.95, `A none-to-in entrance fade must reach its final state: ${noneTransitionOpacityComplete}`)
   const textRangeAfter = await textRangeRuns()
   assert(textRangeAfter[0]?.opacity > 0.3 && textRangeAfter[0]?.opacity < 0.8
     && textRangeAfter[1]?.opacity > 0.3 && textRangeAfter[1]?.opacity < 0.8
@@ -5595,7 +6452,7 @@ try {
     adjacentTransform: textRangeAfter[3]?.transform === 'none',
   }
   const summarizeMask = value => ({ isSvg: value.includes('data:image/svg+xml'), length: value.length, tail: value.slice(-64) })
-  assert(Object.values(textRangeChecks).every(Boolean), `Paragraph and character mask animations plus p:charRg transforms must affect only their targets: ${JSON.stringify({ checks: textRangeChecks, randomBars: [paragraphRandomBarsStart, paragraphRandomBarsDuring, paragraphRandomBarsComplete].map(summarizeMask), strips: [paragraphStripsStart, paragraphStripsDuring, paragraphStripsComplete].map(summarizeMask) })}`)
+  assert(Object.values(textRangeChecks).every(Boolean), `Paragraph and character mask animations plus p:charRg transforms must affect only their targets: ${JSON.stringify({ checks: textRangeChecks, paragraphBarn: [paragraphBarnStart, paragraphBarnDuring, paragraphBarnComplete], randomBars: [paragraphRandomBarsStart, paragraphRandomBarsDuring, paragraphRandomBarsComplete].map(summarizeMask), strips: [paragraphStripsStart, paragraphStripsDuring, paragraphStripsComplete].map(summarizeMask) })}`)
   const motionOnFirstCharacter = rangeMatrix(textRangeAfter[0]?.transform || '')
   const motionOnAdjacentCharacters = textRangeAfter.slice(1, 3).map(run => rangeMatrix(run.transform))
   assert(motionOnFirstCharacter && Math.abs(motionOnFirstCharacter[4]) > 20 && Math.abs(motionOnFirstCharacter[5]) > 5
@@ -5605,6 +6462,17 @@ try {
   await delay(1_000)
   const afterGroupRuns = await textRangeRuns()
   assert(afterGroupRuns[3]?.color === 'rgb(0, 0, 255)', `An afterGroup build must begin once the preceding animation group ends: ${JSON.stringify(afterGroupRuns)}`)
+  let mainSubTimeState = await state()
+  for (let attempt = 0; attempt < 4 && shape(mainSubTimeState, 'Master-relative source click target')?.visibility !== 'visible'; attempt++) {
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
+    await delay(180)
+    mainSubTimeState = await state()
+  }
+  assert(mainSubTimeState.slide?.startsWith('67 / 68') && shape(mainSubTimeState, 'Same-click master-relative target')?.visibility === 'hidden' && shape(mainSubTimeState, 'Next-click after-effect target')?.visibility === 'visible', `A sameClick p:set must run with its source click while nextClick afterEffect waits: ${JSON.stringify({slide: mainSubTimeState.slide, sameClick: shape(mainSubTimeState, 'Same-click master-relative target'), nextClick: shape(mainSubTimeState, 'Next-click after-effect target'), source: shape(mainSubTimeState, 'Master-relative source click target')})}`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))`)
+  await delay(250)
+  const mainSubTimeAfterNextClick = await state()
+  assert(shape(mainSubTimeAfterNextClick, 'Next-click after-effect target')?.visibility === 'hidden', `A nextClick afterEffect p:set must run after the next click effect completes: ${JSON.stringify({target: shape(mainSubTimeAfterNextClick, 'Next-click after-effect target'), source: shape(mainSubTimeAfterNextClick, 'Master-relative next click target')})}`)
   await evaluate(`HTMLElement.prototype.requestFullscreen = window.__decklineFullscreenOriginal; delete window.__decklineFullscreenOriginal`)
   assert(runtimeErrors.length === 0, `Browser exceptions: ${runtimeErrors.join('; ')}`)
 
@@ -5713,14 +6581,31 @@ try {
   assert(additionalConnectorPaths['Custom bound connector'] === 'M 0 0 L 833.3333 500'
     && additionalConnectorPaths['Grouped bound connector'] === 'M 0 0 L 500 400',
   `Custom and grouped connection sites must resolve through their coordinate transforms: ${JSON.stringify({paths: additionalConnectorPaths, warnings: connectorSlideState.warnings.filter(warning => /Connector|connection site/.test(warning))})}`)
-  const patternFillState = await evaluate(`(() => { const find = name => [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === name); const horizontal = find('Horizontal pattern fill'), percent = find('Percent pattern fill'), svg = find('SVG pattern fill fallback')?.querySelector('svg path'), text = find('Pattern-filled text')?.querySelector('.text-run'); const textStyle = text && getComputedStyle(text); return {horizontal: getComputedStyle(horizontal).backgroundImage, percent: getComputedStyle(percent).backgroundImage, svgFill: svg?.getAttribute('fill'), textPattern: textStyle?.backgroundImage, textPatternVariable: textStyle?.getPropertyValue('--pptx-text-pattern'), textClip: textStyle?.backgroundClip, textBackground: textStyle?.backgroundColor, textFill: textStyle?.getPropertyValue('-webkit-text-fill-color')} })()`)
+  const patternFillState = await evaluate(`(() => { const find = name => [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === name); const horizontal = find('Horizontal pattern fill'), percent = find('Percent pattern fill'), svg = find('SVG pattern fill')?.querySelector('svg path'), svgPattern = svg?.ownerSVGElement.querySelector('pattern foreignObject > div'), outline = find('Pattern outline fill'), outlinePath = outline?.querySelector('.preset-outline path'), outlinePattern = outline?.querySelector('.preset-outline pattern foreignObject > div'), connector = find('Pattern outline connector'), connectorPath = connector?.querySelector('.line-render > path, .line-render > line'), connectorPattern = connector?.querySelector('.line-render pattern foreignObject > div'), connectorMarker = connector?.querySelector('.line-render marker path'), textHost = find('Pattern-filled text'), text = textHost?.querySelector('.text-run'), textStyle = text && getComputedStyle(text), paragraphs = [...(textHost?.querySelectorAll('.text-paragraph') || [])], tabSizes = paragraphs.map(paragraph => getComputedStyle(paragraph).tabSize); return {horizontal: getComputedStyle(horizontal).backgroundImage, percent: getComputedStyle(percent).backgroundImage, svgFill: svg?.getAttribute('fill'), svgPattern: svgPattern && getComputedStyle(svgPattern).backgroundImage, outlineStroke: outlinePath?.getAttribute('stroke'), outlinePattern: outlinePattern && getComputedStyle(outlinePattern).backgroundImage, connectorStroke: connectorPath?.getAttribute('stroke'), connectorPattern: connectorPattern && getComputedStyle(connectorPattern).backgroundImage, connectorMarkerFill: connectorMarker?.getAttribute('fill'), textPattern: textStyle?.backgroundImage, textFillVariable: textStyle?.getPropertyValue('--pptx-text-fill'), textClip: textStyle?.backgroundClip, textBackground: textStyle?.backgroundColor, textFill: textStyle?.getPropertyValue('-webkit-text-fill-color'), tabSizes, text: paragraphs.map(paragraph => paragraph.textContent)} })()`)
+  const patternFillModeState = await evaluate(`(() => { const host = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === 'Pattern fill path mode'), path = host?.querySelector('.custom-geometry path'), fill = path?.getAttribute('fill') || '', id = fill.match(/#([^)'\"]+)/)?.[1], patterns = [...(path?.ownerSVGElement.querySelectorAll('pattern') || [])], pattern = patterns.find(item => item.id === id), background = pattern?.querySelector('div'), style = background && getComputedStyle(background); return {fill, pattern: style?.backgroundImage, backgroundColor: style?.backgroundColor} })()`)
   assert(patternFillState.horizontal.includes('repeating-linear-gradient') && patternFillState.percent.includes('radial-gradient')
-    && patternFillState.svgFill && !patternFillState.svgFill.includes('gradient')
+    && patternFillState.svgFill?.startsWith('url(#') && patternFillState.svgPattern?.includes('repeating-linear-gradient')
+    && patternFillState.outlineStroke?.startsWith('url(#') && patternFillState.outlinePattern?.includes('repeating-linear-gradient')
+    && patternFillState.connectorStroke?.startsWith('url(#') && patternFillState.connectorPattern?.includes('repeating-linear-gradient') && patternFillState.connectorMarkerFill?.startsWith('url(#')
     && patternFillState.textPattern.includes('repeating-linear-gradient') && patternFillState.textClip.includes('text')
     && patternFillState.textBackground === 'rgb(255, 247, 237)'
     && patternFillState.textFill === 'rgba(0, 0, 0, 0)'
-    && connectorSlideState.warnings.some(warning => warning.includes('SVG path fills fall back to a solid color')),
-  `Common DrawingML patterns must render on CSS shapes, use a visible SVG fallback, and report approximation: ${JSON.stringify(patternFillState)}`)
+    && patternFillState.text.length === 4 && patternFillState.text.every(text => text.includes('\t'))
+    && patternFillState.tabSizes[0].endsWith('px') && patternFillState.tabSizes[0] !== '8'
+    && patternFillState.tabSizes[1] === '8'
+    && patternFillState.tabSizes[2].endsWith('px') && patternFillState.tabSizes[3].endsWith('px')
+    && connectorSlideState.warnings.some(warning => warning.includes('text tab stops use browser default spacing'))
+    && patternFillModeState.fill.includes('-lighten') && patternFillModeState.pattern?.includes('repeating-linear-gradient')
+    && patternFillModeState.pattern?.includes('115, 179, 139') && patternFillModeState.backgroundColor === 'rgb(246, 254, 248)'
+    && !connectorSlideState.warnings.some(warning => warning.includes('custom-geometry path fill mode uses a solid-color fallback')),
+  `Common DrawingML patterns must render on CSS shapes, text, SVG paths, and SVG shape outlines, and preserve path-level color modifiers: ${JSON.stringify({patternFillState, patternFillModeState, patternWarnings: connectorSlideState.warnings.filter(warning => warning.includes('pattern'))})}`)
+  const tabStopLayout = await evaluate(`(() => { const host = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === 'Pattern-filled text'), paragraph = host?.querySelector('.text-paragraph'), walker = paragraph && document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT); let node = walker?.nextNode(); while (node && !node.textContent?.includes(String.fromCharCode(9))) node = walker.nextNode(); const content = node?.textContent || '', tab = content.indexOf(String.fromCharCode(9)); if (!node || tab < 0 || tab + 1 >= content.length || !paragraph) return {offset: NaN}; const range = document.createRange(); range.setStart(node, tab + 1); range.setEnd(node, tab + 2); return {offset: range.getBoundingClientRect().left - paragraph.getBoundingClientRect().left} })()`)
+  assert(Math.abs(tabStopLayout.offset - Number.parseFloat(patternFillState.tabSizes[0])) < 2, 'A regular left tab must place following text at its computed stop: ' + JSON.stringify({patternFillState, tabStopLayout}))
+  const defaultTabStopLayouts = await evaluate("(() => { const host = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.title === 'Pattern-filled text'), paragraphs = [...(host?.querySelectorAll('.text-paragraph') || [])]; return paragraphs.map(paragraph => { const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT); let node = walker.nextNode(); while (node && !node.textContent?.includes(String.fromCharCode(9))) node = walker.nextNode(); const content = node?.textContent || '', tab = content.indexOf(String.fromCharCode(9)); if (!node || tab < 0 || tab + 1 >= content.length) return NaN; const range = document.createRange(); range.setStart(node, tab + 1); range.setEnd(node, tab + 2); return range.getBoundingClientRect().left - paragraph.getBoundingClientRect().left }) })()")
+  assert(Math.abs(defaultTabStopLayouts[2] - Number.parseFloat(patternFillState.tabSizes[2])) < 2
+    && Math.abs(defaultTabStopLayouts[3] - Number.parseFloat(patternFillState.tabSizes[3])) < 2
+    && Math.abs(Number.parseFloat(patternFillState.tabSizes[3]) - Number.parseFloat(patternFillState.tabSizes[2]) * 2) < 2,
+  'Paragraph-specific and Office default tabs must align at their computed positions: ' + JSON.stringify({patternFillState, defaultTabStopLayouts}))
   assert(Object.keys(connectorPaths).length === 8
     && connectorPaths['Bent connector 2'] === 'M 0 0 L 1000 0 L 1000 1000'
     && connectorPaths['Bent connector 3'].includes('L 250 0')
@@ -5759,7 +6644,7 @@ try {
     && effectDagWarnings.some(warning => warning.includes('Multi-effect tree-ordered text effect DAGs'))
     && effectDagWarnings.some(warning => warning.includes('Nested text effect DAG containers')),
   `Unsupported effect DAG compositions must report their fallback: ${JSON.stringify(effectDagWarnings)}`)
-  const innerShadowStyles = await evaluate(`Object.fromEntries(['Shape inner effect list', 'Shape inner effect DAG', 'Unsupported polygon inner shadow', 'Direct text inner shadow', 'DAG text inner shadow'].map(name => { const host = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.dataset.elementName === name); const run = host?.querySelector('.text-run'); return [name, { boxShadow: host && getComputedStyle(host).boxShadow, textShadow: run && getComputedStyle(run).textShadow }] }))`)
+  const innerShadowStyles = await evaluate(`Object.fromEntries(['Shape inner effect list', 'Shape inner effect DAG', 'Triangle inner shadow', 'Custom geometry inner shadow', 'Unsupported preset inner shadow', 'Direct text inner shadow', 'DAG text inner shadow'].map(name => { const host = [...document.querySelectorAll('.slide-host .slide-element')].find(element => element.dataset.elementName === name); const run = host?.querySelector('.text-run'); const textFilter = run?.querySelector('filter'); const shapeSvg = host?.querySelector('.preset-outline, .custom-geometry'); const shapeFilter = shapeSvg?.querySelector('filter'); return [name, { boxShadow: host && getComputedStyle(host).boxShadow, textShadow: run && getComputedStyle(run).textShadow, filter: run && run.style.filter, filterId: textFilter?.id, filterPrimitives: textFilter?.querySelectorAll('feComposite').length, shapeFilter: shapeSvg?.style.filter, shapeFilterId: shapeFilter?.id, shapeFilterPrimitives: shapeFilter?.querySelectorAll('feComposite').length }] }))`)
   const listedShapeShadow = innerShadowStyles['Shape inner effect list'].boxShadow
   const dagShapeShadow = innerShadowStyles['Shape inner effect DAG'].boxShadow
   await jumpToFixtureSlide(15)
@@ -5868,12 +6753,22 @@ try {
   assert(listedShapeShadow?.includes('inset') && listedShapeShadow.includes('255, 255, 0')
     && dagShapeShadow?.includes('inset') && dagShapeShadow.includes('255, 255, 0')
     && dagShapeShadow.includes('rgba(18, 52, 86, 0.6)')
-    && innerShadowStyles['Unsupported polygon inner shadow'].boxShadow === 'none'
+    && innerShadowStyles['Triangle inner shadow'].shapeFilter?.includes(innerShadowStyles['Triangle inner shadow'].shapeFilterId)
+    && innerShadowStyles['Triangle inner shadow'].shapeFilterPrimitives === 2
+    && innerShadowStyles['Custom geometry inner shadow'].shapeFilter?.includes(innerShadowStyles['Custom geometry inner shadow'].shapeFilterId)
+    && innerShadowStyles['Custom geometry inner shadow'].shapeFilterPrimitives === 2
+    && !innerShadowStyles['Unsupported preset inner shadow'].shapeFilterId
     && innerShadowStyles['Direct text inner shadow'].textShadow === 'none'
     && innerShadowStyles['DAG text inner shadow'].textShadow === 'none'
-    && innerShadowWarnings.some(warning => warning.includes('inner shadows on text runs'))
-    && innerShadowWarnings.some(warning => warning.includes('non-rectangular shape geometry')),
-  `Effect-list and sibling-DAG inner shadows must render on supported shapes and explicitly skip text and polygon fallbacks: ${JSON.stringify({innerShadowStyles, warnings: innerShadowWarnings.filter(warning => warning.includes('inner shadow'))})}`)
+    && innerShadowStyles['Direct text inner shadow'].filter?.includes(innerShadowStyles['Direct text inner shadow'].filterId)
+    && innerShadowStyles['DAG text inner shadow'].filter?.includes(innerShadowStyles['DAG text inner shadow'].filterId)
+    && innerShadowStyles['Direct text inner shadow'].filterPrimitives === 2
+    && innerShadowStyles['DAG text inner shadow'].filterPrimitives === 2
+    && innerShadowWarnings.some(warning => warning.includes('text runs use SVG filters'))
+    && !innerShadowWarnings.some(warning => warning.includes('inner shadows on text runs are not supported'))
+    && innerShadowWarnings.some(warning => warning.includes('custom geometries and SVG polygon presets use SVG filters'))
+    && innerShadowWarnings.some(warning => warning.includes('preset geometries without SVG fill paths are not rendered')),
+  `Effect-list and sibling-DAG inner shadows must render on CSS and SVG shapes plus text, with approximation and unsupported-geometry warnings: ${JSON.stringify({innerShadowStyles, warnings: innerShadowWarnings.filter(warning => warning.includes('inner shadow'))})}`)
 
   const beforePendingNumberCancel = await state()
   const currentKeyboardSlide = Number(beforePendingNumberCancel.slide?.split('/')[0].trim())
@@ -5887,10 +6782,142 @@ try {
   await delay(50)
   const afterPendingNumberEnter = await state()
   assert(Number.isFinite(currentKeyboardSlide) && totalKeyboardSlides > 1
-    && afterPendingNumberEnter.slide === afterPendingNumberNavigation.slide,
-  `Arrow navigation must cancel an uncommitted slide number so a later Enter cannot jump unexpectedly: ${JSON.stringify({target: pendingKeyboardTarget, afterNavigation: afterPendingNumberNavigation.slide, afterEnter: afterPendingNumberEnter.slide})}`)
+    && (Number(afterPendingNumberEnter.slide?.split('/')[0].trim()) === Number(afterPendingNumberNavigation.slide?.split('/')[0].trim())
+      || Number(afterPendingNumberEnter.slide?.split('/')[0].trim()) === Number(afterPendingNumberNavigation.slide?.split('/')[0].trim()) + 1)
+    && Number(afterPendingNumberEnter.slide?.split('/')[0].trim()) !== pendingKeyboardTarget,
+  `Arrow navigation must cancel the slide-number buffer, leaving Enter to advance only one step or slide: ${JSON.stringify({target: pendingKeyboardTarget, afterNavigation: afterPendingNumberNavigation.slide, afterEnter: afterPendingNumberEnter.slide})}`)
+  await evaluate(`(() => { if (document.querySelector('[data-presenter-view]')) window.dispatchEvent(new KeyboardEvent('keydown', {key: 's'})); window.dispatchEvent(new KeyboardEvent('keydown', {key: '1'})); window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'})) })()`)
+  await delay(50)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 's'}))`)
+  await delay(50)
+  const beforeEnterAdvance = await evaluate(`(() => { const view = document.querySelector('[data-presenter-view]'); return {number: Number(view?.dataset.currentSlide), step: Number(view?.dataset.animationStep)} })()`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}))`)
+  await delay(50)
+  const afterEnterAdvance = await evaluate(`(() => { const view = document.querySelector('[data-presenter-view]'); return {number: Number(view?.dataset.currentSlide), step: Number(view?.dataset.animationStep)} })()`)
+  assert(beforeEnterAdvance.number !== afterEnterAdvance.number || beforeEnterAdvance.step !== afterEnterAdvance.step, 'Enter without a pending slide number must advance the animation step or slide: ' + JSON.stringify({beforeEnterAdvance, afterEnterAdvance}))
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 's'}))`)
 
-  console.log('Animation, media, presenter, and sorter verification passed: custom-geometry arcs, cached-data bar/line/area/pie/scatter/bubble and HLC/OHLC stock charts, column/line/area combo charts with primary and secondary axes, stacked line and area modes, and multi-series doughnut rings, timing, four-direction slide filters, character-range wipe and by-letter/by-word/by-shape iteration, linear/discrete font-size and opacity tavLst keyframes, linear opacity/font-size/font-weight p:tav formulas, numeric opacity attributes, text-range opacity and p:set, p:set visibility, fixed font-size, opacity, and colors, style/fill/stroke/shadow color and opacity animation, and line breaks, object blinds, checkerboard, random bars, four-direction object strips, four barn-door object filters, circle, diamond, box, plus, dissolve, wheel, wheelReverse, wedge and wipe effects, click/double-click/mouse-over/mouse-out shape triggers, fades, cut, blinds, checkerboard, comb, dissolve, wheel, wheelReverse, random-bar, strips, plus and wedge, newsflash, flash, doors, window, prism, directional p14 pan/ripple/glitter/shred/flythrough/warp/vortex/ferris/gallery/conveyor transitions, p159 morph byObject geometry and byWord/byChar text matching, random selection, cover, pull, split in/out, circle, diamond, honeycomb, paired push, zoom transitions, linked slide notes, current/next presenter view, speaker navigation, slide sorting by drag and keyboard, embedded media loading and controls, scale, rotation, RGB/HSL color, straight and cubic motion, tables, groups, controls, and ink.')
+  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !notesOnly) {
+    const hiddenArchive = await JSZip.loadAsync(await readFile(fixturePath))
+    for (const slideNumber of [1, 3]) {
+      const slidePath = `ppt/slides/slide${slideNumber}.xml`
+      const originalSlide = await hiddenArchive.file(slidePath).async('string')
+      const hiddenSlide = originalSlide.replace('<p:sld ', '<p:sld show="false" ')
+      assert(hiddenSlide !== originalSlide, `The hidden-slide fixture could not hide slide ${slideNumber}.`)
+      hiddenArchive.file(slidePath, hiddenSlide)
+    }
+    for (const slideNumber of [1, 2, 3, 4]) {
+      const slidePath = `ppt/slides/slide${slideNumber}.xml`
+      const slideXml = await hiddenArchive.file(slidePath).async('string')
+      hiddenArchive.file(slidePath, slideXml.replace(/<p:timing\b[\s\S]*?<\/p:timing>/g, ''))
+    }
+    const hiddenFixturePath = join(runtimeDir, 'hidden-slide-navigation.pptx')
+    await writeFile(hiddenFixturePath, Buffer.from(await hiddenArchive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })))
+    const hiddenFixtureName = await uploadPath(hiddenFixturePath)
+    let hiddenFixtureLoaded = false
+    for (let attempt = 0; attempt < 100; attempt++) {
+      hiddenFixtureLoaded = await evaluate(`document.querySelector('.deck-title')?.textContent === ${JSON.stringify(hiddenFixtureName)} && !document.querySelector('.loading-overlay')`)
+      if (hiddenFixtureLoaded) break
+      await delay(50)
+    }
+    const slideNumber = () => evaluate(`Number(document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber)`)
+    const waitForSlideNumber = async expected => {
+      for (let attempt = 0; attempt < 40; attempt++) {
+        if (await slideNumber() === expected) return
+        await delay(25)
+      }
+      throw new Error(`Expected slide ${expected}, got ${await slideNumber()}.`)
+    }
+    assert(hiddenFixtureLoaded && await slideNumber() === 2, 'A hidden first slide must open on the first visible slide.')
+    await evaluate(`document.querySelector('.deck-toolbar button[aria-label="Next animation step or slide"]')?.click()`)
+    await waitForSlideNumber(4)
+    const hiddenThumbnailLabel = await evaluate(`document.querySelector('.thumb-button[data-thumbnail-index="2"]')?.getAttribute('aria-label')`)
+    assert(hiddenThumbnailLabel?.includes('hidden'), 'The slide navigator must identify hidden slides while retaining direct access.')
+    await evaluate(`document.querySelector('.thumb-button[data-thumbnail-index="2"]')?.click()`)
+    await waitForSlideNumber(3)
+    await evaluate(`document.querySelector('.deck-toolbar button[aria-label="Next animation step or slide"]')?.click()`)
+    await waitForSlideNumber(4)
+    await evaluate(`document.querySelector('.deck-toolbar button[aria-label="Previous animation step or slide"]')?.click()`)
+    await waitForSlideNumber(2)
+  }
+
+  if (!inputPptx && !captureOnly && !grayscaleOnly && !strokeWidthOnly && !textOutlineRangeOnly && !themeBackgroundOnly) {
+    const showSettingsArchive = await JSZip.loadAsync(await readFile(fixturePath))
+    const presentationRelsPath = 'ppt/_rels/presentation.xml.rels'
+    const presentationRels = await showSettingsArchive.file(presentationRelsPath).async('string')
+    showSettingsArchive.file(presentationRelsPath, presentationRels.replace('</Relationships>', '<Relationship Id="rIdShowSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/presProps" Target="presProps.xml"/></Relationships>'))
+    const contentTypes = await showSettingsArchive.file('[Content_Types].xml').async('string')
+    showSettingsArchive.file('[Content_Types].xml', contentTypes.replace('</Types>', '<Override PartName="/ppt/presProps.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presProps+xml"/></Types>'))
+    showSettingsArchive.file('ppt/presProps.xml', '<?xml version="1.0"?><p:presentationPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:showPr loop="1" useTimings="0"/></p:presentationPr>')
+    const timedSlidePath = 'ppt/slides/slide24.xml'
+    const timedSlide = await showSettingsArchive.file(timedSlidePath).async('string')
+    const shortTimedSlide = timedSlide.replace('advTm="5000"', 'advTm="125"')
+    assert(shortTimedSlide !== timedSlide, 'The presentation-settings fixture could not shorten slide 24 timing.')
+    showSettingsArchive.file(timedSlidePath, shortTimedSlide)
+    for (const slideNumber of [1, 68]) {
+      const slidePath = `ppt/slides/slide${slideNumber}.xml`
+      const slideXml = await showSettingsArchive.file(slidePath).async('string')
+      const hiddenSlide = slideXml.replace('<p:sld ', '<p:sld show="false" ')
+      assert(hiddenSlide !== slideXml, `The presentation-settings fixture could not hide slide ${slideNumber}.`)
+      showSettingsArchive.file(slidePath, hiddenSlide)
+    }
+    const showSettingsFixturePath = join(runtimeDir, 'presentation-show-settings.pptx')
+    await writeFile(showSettingsFixturePath, Buffer.from(await showSettingsArchive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })))
+    const showSettingsName = await uploadPath(showSettingsFixturePath)
+    let showSettingsLoaded = false
+    for (let attempt = 0; attempt < 100; attempt++) {
+      showSettingsLoaded = await evaluate(`document.querySelector('.deck-title')?.textContent === ${JSON.stringify(showSettingsName)} && !document.querySelector('.loading-overlay')`)
+      if (showSettingsLoaded) break
+      await delay(50)
+    }
+    const settingsSlideNumber = () => evaluate(`Number(document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber)`)
+    const waitForSettingsSlide = async expected => {
+      for (let attempt = 0; attempt < 40; attempt++) {
+        if (await settingsSlideNumber() === expected) return
+        await delay(25)
+      }
+      throw new Error(`Expected presentation-settings slide ${expected}, got ${await settingsSlideNumber()}.`)
+    }
+    assert(showSettingsLoaded && await settingsSlideNumber() === 2, 'The show-settings fixture must begin on the first visible slide.')
+    await evaluate(`for (const key of ['2', '4', 'Enter']) window.dispatchEvent(new KeyboardEvent('keydown', {key}))`)
+    await waitForSettingsSlide(24)
+    await delay(400)
+    assert(await settingsSlideNumber() === 24, 'showPr useTimings="0" must suppress per-slide advTm auto-advance.')
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', {key: 'End'}))`)
+    await waitForSettingsSlide(67)
+    await evaluate(`document.querySelector('[aria-label="Next animation step or slide"]')?.click()`)
+    await waitForSettingsSlide(2)
+
+    const firstSlidePath = 'ppt/slides/slide1.xml'
+    const hiddenFirstSlide = await showSettingsArchive.file(firstSlidePath).async('string')
+    const visibleFirstSlide = hiddenFirstSlide.replace('<p:sld show="false" ', '<p:sld ')
+    assert(visibleFirstSlide !== hiddenFirstSlide, 'The animation-disabled fixture could not restore its first slide.')
+    showSettingsArchive.file(firstSlidePath, visibleFirstSlide)
+    const showProperties = await showSettingsArchive.file('ppt/presProps.xml').async('string')
+    const animationDisabledProperties = showProperties.replace('useTimings="0"', 'useTimings="0" showAnimation="0"')
+    assert(animationDisabledProperties !== showProperties, 'The animation-disabled fixture could not disable showAnimation.')
+    showSettingsArchive.file('ppt/presProps.xml', animationDisabledProperties)
+    const animationDisabledFixturePath = join(runtimeDir, 'presentation-without-animation.pptx')
+    await writeFile(animationDisabledFixturePath, Buffer.from(await showSettingsArchive.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })))
+    const animationDisabledName = await uploadPath(animationDisabledFixturePath)
+    let animationDisabledLoaded = false
+    for (let attempt = 0; attempt < 100; attempt++) {
+      animationDisabledLoaded = await evaluate(`document.querySelector('.deck-title')?.textContent === ${JSON.stringify(animationDisabledName)} && !document.querySelector('.loading-overlay')`)
+      if (animationDisabledLoaded) break
+      await delay(50)
+    }
+    const disabledAnimationState = await evaluate(`(() => {
+      const shape = document.querySelector('.stage-shell > .slide-host [title="Automatic fade"]')
+      return { slide: Number(document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber), visibility: shape && getComputedStyle(shape).visibility, opacity: shape && Number(getComputedStyle(shape).opacity) }
+    })()`)
+    assert(animationDisabledLoaded && disabledAnimationState.slide === 1 && disabledAnimationState.visibility === 'visible' && disabledAnimationState.opacity >= 0.99,
+      `showPr showAnimation="0" must render animated objects in their static state: ${JSON.stringify(disabledAnimationState)}`)
+    await evaluate(`document.querySelector('.deck-toolbar button[aria-label="Next animation step or slide"]')?.click()`)
+    await waitForSettingsSlide(2)
+    assert(await settingsSlideNumber() === 2, 'With showAnimation disabled, Next must skip animation build steps and advance to the next slide.')
+  }
+
+  console.log('Animation, media, presenter, sorter, hidden-slide navigation, and presentation show-settings verification passed: custom-geometry arcs, cached-data bar/line/area/pie/scatter/bubble and HLC/OHLC stock charts, column/line/area combo charts with primary and secondary axes, stacked line and area modes, and multi-series doughnut rings, timing, four-direction slide filters, character-range wipe and by-letter/by-word/by-shape iteration, linear/discrete font-size and opacity tavLst keyframes, linear opacity/font-size/font-weight p:tav formulas, numeric opacity attributes, text-range opacity and p:set, p:set visibility, fixed font-size, opacity, and colors, style/fill/stroke/shadow color and opacity animation, and line breaks, object blinds, checkerboard, random bars, four-direction object strips, four barn-door object filters, circle, diamond, box, plus, dissolve, wheel, wheelReverse, wedge and wipe effects, click/double-click/mouse-over/mouse-out shape triggers, fades, cut, blinds, checkerboard, comb, dissolve, wheel, wheelReverse, random-bar, strips, plus and wedge, newsflash, flash, doors, window, prism, directional p14 pan/ripple/glitter/shred/flythrough/warp/vortex/ferris/gallery/conveyor transitions, p159 morph byObject geometry and byWord/byChar text matching, random selection, cover, pull, split in/out, circle, diamond, honeycomb, paired push, zoom transitions, linked slide notes, current/next presenter view, speaker navigation, slide sorting by drag and keyboard, embedded media loading and controls, scale, rotation, RGB/HSL color, straight and cubic motion, tables, groups, controls, and ink.')
   }
   }
 } finally {

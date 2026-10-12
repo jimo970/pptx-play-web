@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { PptxSlide, PptxTransitionPlayback, PptxTriggerPlayback } from '~/utils/pptx-model'
+import type { LocaleMessageKey } from '~/composables/useLocale'
 import { registerPptxEmbeddedFonts, releasePptxFontFaces } from '~/utils/pptx-fonts'
 import { presenterChannelName, type PresenterInkStroke, type PresenterMessage, type PresenterPoint } from '~/utils/presenter-channel'
 import { useSlideTransition } from '~/composables/useSlideTransition'
 
-interface ProjectorDocument { name: string; width: number; height: number; totalSlides: number }
+const { locale, t, toggleLocale } = useLocale()
+
+interface ProjectorDocument { name: string; width: number; height: number; totalSlides: number; showAnimations: boolean; showNarration: boolean }
 
 const route = useRoute()
 const documentInfo = shallowRef<ProjectorDocument | null>(null)
@@ -21,7 +24,7 @@ const projectorStageShell = ref<HTMLElement | null>(null)
 const projectorSlideHost = ref<HTMLElement | null>(null)
 const projectorTransitionUnderlay = ref<HTMLElement | null>(null)
 const projectorFlashOverlay = ref<HTMLElement | null>(null)
-const channelError = ref('')
+const channelError = ref<LocaleMessageKey | ''>('')
 const fontWarnings = ref<string[]>([])
 const fontsReady = ref(false)
 let channel: BroadcastChannel | undefined
@@ -87,7 +90,7 @@ function isTransitionPlayback(value: unknown, target: PptxSlide): value is PptxT
 function receiveMessage(message: PresenterMessage) {
   if (message.type === 'document') {
     if (!message.name || !Number.isFinite(message.width) || !Number.isFinite(message.height) || message.width <= 0 || message.height <= 0 || !Number.isInteger(message.totalSlides)) return
-    documentInfo.value = { name: message.name, width: message.width, height: message.height, totalSlides: message.totalSlides }
+    documentInfo.value = { name: message.name, width: message.width, height: message.height, totalSlides: message.totalSlides, showAnimations: message.showAnimations !== false, showNarration: message.showNarration === true }
     fontWarnings.value = [...message.fontWarnings]
     const signature = JSON.stringify(message.embeddedFonts)
     if (signature !== fontSignature) {
@@ -191,6 +194,7 @@ function onKeydown(event: KeyboardEvent) {
   const target = event.target instanceof HTMLElement ? event.target : null
   if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'AUDIO', 'VIDEO'].includes(target.tagName) || ([' ', 'Enter'].includes(event.key) && !(event.key === 'Enter' && slideNumberInput) && Boolean(target.closest('button, a, [role="button"]'))))) return
   if (event.altKey || event.ctrlKey || event.metaKey) return
+  if (event.repeat && (event.key === 'Escape' || event.key === 'F5' || ['f', 'b', '.', 'w', ','].includes(event.key.toLowerCase()))) return
   if (/^\d$/.test(event.key)) {
     event.preventDefault()
     const maxDigits = Math.max(3, String(documentInfo.value?.totalSlides || 0).length)
@@ -240,14 +244,14 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-watch([slide, slideNumber, animationStep, blank, triggerPlayback], () => {
+watch([slide, slideNumber, animationStep, blank, triggerPlayback, fontsReady], () => {
   if (slide.value && fontsReady.value) channel?.postMessage({ type: 'rendered', slideId: slide.value.id, number: slideNumber.value, animationStep: animationStep.value, blank: blank.value, triggerCount: triggerPlayback.value.length } satisfies PresenterMessage)
 }, { flush: 'post' })
 
 onMounted(() => {
   const id = route.query.channel
   if (typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) {
-    channelError.value = 'This projector link is invalid. Open the second display from Speaker View.'
+    channelError.value = 'invalidProjectorLink'
     return
   }
   channel = new BroadcastChannel(presenterChannelName(id))
@@ -281,6 +285,8 @@ onBeforeUnmount(() => {
             :height="documentInfo.height"
             :number="slideNumber"
             :animation-step="animationStep"
+            :show-animations="documentInfo.showAnimations"
+            :show-narration="documentInfo.showNarration"
             :trigger-playback="triggerPlayback"
             @stop-all-audio="stopAllAudio"
             thumbnail
@@ -297,14 +303,16 @@ onBeforeUnmount(() => {
         </div>
         <div ref="projectorFlashOverlay" class="flash-transition-overlay" aria-hidden="true" />
       </div>
-      <div class="projector-toolbar" aria-label="Projector controls">
-        <button class="projector-fullscreen-button" @click="toggleProjectorFullscreen">Fullscreen</button>
-        <span>{{ slideCountLabel }} · ← → to navigate · B/W blank · Esc close</span>
+      <div class="projector-toolbar" :aria-label="t('projectorControls')">
+        <button class="projector-fullscreen-button" @click="toggleProjectorFullscreen">{{ t('fullscreen') }}</button>
+        <span>{{ slideCountLabel }} · {{ t('projectorKeyboardHelp') }}</span>
+        <button class="locale-toggle" :aria-label="t(locale === 'en' ? 'switchLanguageToChinese' : 'switchLanguageToEnglish')" @click="toggleLocale">{{ t(locale === 'en' ? 'switchToChinese' : 'switchToEnglish') }}</button>
+        <span v-if="locale === 'zh' && fontWarnings.length" class="warning-pill">{{ t('warningDetailsEnglish') }}</span>
         <span v-for="warning in fontWarnings" :key="warning" class="warning-pill" role="status">{{ warning }}</span>
       </div>
     </template>
-    <div v-else-if="blank" class="projector-blank" :class="`is-${blank}`" :aria-label="`${blank} screen`" />
-    <p v-else-if="channelError" class="projector-message" role="alert">{{ channelError }}</p>
-    <p v-else class="projector-message" data-projector-waiting>{{ documentInfo?.name || 'Waiting for the presenter…' }}</p>
+    <div v-else-if="blank" class="projector-blank" :class="`is-${blank}`" :aria-label="t('blankScreen', { color: t(blank) })" />
+    <p v-else-if="channelError" class="projector-message" role="alert">{{ t(channelError) }}</p>
+    <p v-else class="projector-message" data-projector-waiting>{{ documentInfo?.name || t('waitingForPresenter') }}</p>
   </main>
 </template>

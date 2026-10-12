@@ -1,0 +1,8 @@
+var SpeakerNotes_vue_vue_type_style_index_0_scoped_fb3b3e0e_inline_used_lang_default = ".speaker-notes-rich[data-v-fb3b3e0e]{color:#000;white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;padding:8px 15px 16px;font-size:14px;line-height:1.7;overflow:auto}.speaker-notes-rich p[data-v-fb3b3e0e]{min-height:1em;margin:0}.note-bullet[data-v-fb3b3e0e],.note-picture-bullet[data-v-fb3b3e0e]{margin-right:.45em;display:inline-block}.note-picture-bullet[data-v-fb3b3e0e]{-o-object-fit:contain;object-fit:contain;vertical-align:middle;width:1em;height:1em}.speaker-notes-rich button[data-v-fb3b3e0e]{font:inherit;color:inherit;white-space:inherit;cursor:pointer;background:0 0;border:0;padding:0}.speaker-notes-rich button[data-v-fb3b3e0e]:focus-visible{outline-offset:2px;outline:2px solid #0563c1}";
+
+const indexStyles_Bm7sxl_8 = [
+  SpeakerNotes_vue_vue_type_style_index_0_scoped_fb3b3e0e_inline_used_lang_default
+];
+
+export { indexStyles_Bm7sxl_8 as default };
+//# sourceMappingURL=index-styles.Bm7sxl_8.mjs.map

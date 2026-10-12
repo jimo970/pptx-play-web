@@ -17,6 +17,7 @@ function paragraphStyle(paragraph: PptxParagraph): CSSProperties {
     color: paragraph.runs[0]?.color,
     textAlign: paragraph.align,
     direction: paragraph.direction,
+    tabSize: paragraph.tabStopInterval === undefined ? undefined : `${paragraph.tabStopInterval / 12700}pt`,
     marginLeft: paragraph.marginLeft === undefined ? undefined : `${paragraph.marginLeft / 12700}pt`,
     marginRight: paragraph.marginRight === undefined ? undefined : `${paragraph.marginRight / 12700}pt`,
     textIndent: paragraph.indent === undefined ? undefined : `${paragraph.indent / 12700}pt`,
@@ -40,6 +41,9 @@ function runStyle(run: PptxRun): CSSProperties {
   const distance = (run.shadow?.distance || 0) / 12700
   return {
     color: run.color,
+    backgroundColor: run.highlightColor,
+    boxDecorationBreak: run.highlightColor ? 'clone' : undefined,
+    WebkitBoxDecorationBreak: run.highlightColor ? 'clone' : undefined,
     fontFamily: cssFontFamily(run.fontFamily),
     fontSize: run.fontSizePt === undefined ? undefined : `${run.fontSizePt}pt`,
     fontWeight: run.bold ? 'bold' : 'normal',

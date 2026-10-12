@@ -6,6 +6,8 @@ interface NumberFormatOptions {
   style?: 'decimal' | 'percent'
 }
 
+type NumberFormatCondition = { operator: '<' | '<=' | '=' | '>' | '>=' | '<>'; value: number }
+
 type FractionNumberFormat = { whole?: string; numerator: string; denominator: string; fixedDenominator?: number; maximumDenominator: number; percent: boolean }
 
 interface NumberFormatSection {
@@ -14,6 +16,9 @@ interface NumberFormatSection {
   prefix: string
   suffix: string
   scale: number
+  color?: string
+  colorIndex?: number
+  condition?: NumberFormatCondition
   scientific?: { symbol: string; sign: '+' | '-'; minimumDigits: number; integerDigits: number }
   fraction?: FractionNumberFormat
 }
@@ -21,6 +26,50 @@ interface NumberFormatSection {
 type DateFormatToken = { kind: 'literal'; value: string } | { kind: 'date'; code: 'd' | 'm' | 'y' | 'h' | 's'; length: number; elapsed?: boolean } | { kind: 'fraction'; digits: number } | { kind: 'ampm'; short: boolean }
 
 type ExcelCalendarDate = { year: number; month: number; day: number; fraction: number; fictitiousLeapDay?: boolean }
+
+export interface FormattedChartNumber {
+  text: string
+  color?: string
+}
+
+const numberFormatColors: Record<string, string> = {
+  black: '#000000',
+  blue: '#0000ff',
+  cyan: '#00ffff',
+  green: '#008000',
+  magenta: '#ff00ff',
+  red: '#ff0000',
+  white: '#ffffff',
+  yellow: '#ffff00',
+}
+
+// [Color1]–[Color56] use the legacy indexed palette entries 8–63.
+// https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.numberingformats?view=openxml-3.0.1
+const defaultIndexedColors = [
+  '000000', 'FFFFFF', 'FF0000', '00FF00', '0000FF', 'FFFF00', 'FF00FF', '00FFFF',
+  '800000', '008000', '000080', '808000', '800080', '008080', 'C0C0C0', '808080',
+  '9999FF', '993366', 'FFFFCC', 'CCFFFF', '660066', 'FF8080', '0066CC', 'CCCCFF',
+  '000080', 'FF00FF', 'FFFF00', '00FFFF', '800080', '800000', '008080', '0000FF',
+  '00CCFF', 'CCFFFF', 'CCFFCC', 'FFFF99', '99CCFF', 'FF99CC', 'CC99FF', 'FFCC99',
+  '3366FF', '33CCCC', '99CC00', 'FFCC00', 'FF9900', 'FF6600', '666699', '969696',
+  '003366', '339966', '003300', '333300', '993300', '993366', '333399', '333333',
+]
+
+function indexedColor(index: number, indexedColors?: string[]): string | undefined {
+  const color = indexedColors?.[index + 7]
+  const hex = color?.trim().replace(/^#/, '').slice(-6)
+  return hex && /^[\da-f]{6}$/i.test(hex) ? `#${hex.toLowerCase()}` : `#${defaultIndexedColors[index - 1]!.toLowerCase()}`
+}
+
+// Excel defines these eight named colors as leading section modifiers.
+// https://support.microsoft.com/en-us/excel/number-format-codes-in-excel-for-mac
+function numberFormatColor(code: string | undefined, indexedColors?: string[]): string | undefined {
+  if (!code) return undefined
+  const match = /^\[(Black|Blue|Cyan|Green|Magenta|Red|White|Yellow|Color(?:[1-9]|[1-4]\d|5[0-6]))\]/i.exec(code)
+  if (!match) return undefined
+  const colorIndex = /^Color(\d+)$/i.exec(match[1]!)
+  return colorIndex ? indexedColor(Number(colorIndex[1]), indexedColors) : numberFormatColors[match[1]!.toLowerCase()]
+}
 
 function calendarDateFromSerial(serial: number, date1904: boolean): ExcelCalendarDate | undefined {
   const serialDay = Math.floor(serial)
@@ -123,7 +172,7 @@ function parseDateFormat(formatCode: string): DateFormatToken[] | undefined {
         continue
       }
       if (/^[hms]+$/i.test(bracket)) return undefined
-      if (!/^\$(?:[^\]]*)-[0-9a-f]+$/i.test(bracket) && !/^[a-z]+$/i.test(bracket)) return undefined
+      if (!/^\$(?:[^\]]*)-[0-9a-f]+$/i.test(bracket) && !/^[a-z]+$/i.test(bracket) && !/^Color(?:[1-9]|[1-4]\d|5[0-6])$/i.test(bracket)) return undefined
       index = end + 1
       continue
     }
@@ -343,6 +392,17 @@ function formatFractionNumber(value: number, fraction: FractionNumberFormat): st
 
 function parseNumberFormatSection(code: string, index: number): NumberFormatSection | null | undefined {
   if (!code) return null
+  const colorMatch = /^\[(Black|Blue|Cyan|Green|Magenta|Red|White|Yellow|Color(?:[1-9]|[1-4]\d|5[0-6]))\]/i.exec(code)
+  const colorIndex = colorMatch ? /^Color(\d+)$/i.exec(colorMatch[1]!) : undefined
+  const color = colorMatch && !colorIndex ? numberFormatColors[colorMatch[1]!.toLowerCase()] : undefined
+  if (colorMatch) code = code.slice(colorMatch[0].length)
+  const conditionMatch = /^\[(<=|>=|<>|=|<|>)(-?\d+(?:\.\d+)?(?:[Ee][+-]?\d+)?)\]/.exec(code)
+  const conditionValue = conditionMatch ? Number(conditionMatch[2]) : undefined
+  if (conditionMatch && !Number.isFinite(conditionValue)) return undefined
+  const condition = conditionMatch
+    ? {operator: conditionMatch[1] as NumberFormatCondition['operator'], value: conditionValue!}
+    : undefined
+  if (conditionMatch) code = code.slice(conditionMatch[0].length)
   const parentheses = code.startsWith('(') && code.endsWith(')')
   if (parentheses && index !== 1) return undefined
   if (parentheses) code = code.slice(1, -1)
@@ -386,6 +446,9 @@ function parseNumberFormatSection(code: string, index: number): NumberFormatSect
       prefix,
       suffix,
       scale: 0,
+      ...(color ? {color} : {}),
+      ...(colorIndex ? {colorIndex: Number(colorIndex[1])} : {}),
+      ...(condition ? {condition} : {}),
       fraction: {whole, numerator, denominator, ...(fixedDenominator !== undefined ? {fixedDenominator} : {}), maximumDenominator: fixedDenominator === undefined ? 10 ** denominator.length - 1 : 0, percent},
     }
   }
@@ -431,8 +494,19 @@ function parseNumberFormatSection(code: string, index: number): NumberFormatSect
     prefix,
     suffix,
     scale,
+    ...(color ? {color} : {}),
+    ...(colorIndex ? {colorIndex: Number(colorIndex[1])} : {}),
+    ...(condition ? {condition} : {}),
     ...(scientific ? {scientific} : {}),
   }
+}
+
+function conditionsCoverAllValues(left: NumberFormatCondition, right: NumberFormatCondition): boolean {
+  if (left.value !== right.value) return false
+  const operators = [left.operator, right.operator]
+  return operators.includes('<=') && operators.includes('>')
+    || operators.includes('<') && operators.includes('>=')
+    || operators.includes('<>') && operators.includes('=')
 }
 
 function parseNumberFormat(formatCode: string): (NumberFormatSection | null)[] | undefined {
@@ -441,9 +515,31 @@ function parseNumberFormat(formatCode: string): (NumberFormatSection | null)[] |
 
   const sections = codes.map(parseNumberFormatSection)
 
-  return sections.some(section => section === undefined)
-    ? undefined
-    : sections as (NumberFormatSection | null)[]
+  if (sections.some(section => section === undefined)) return undefined
+  const parsedSections = sections as (NumberFormatSection | null)[]
+  const conditionalIndexes = parsedSections.flatMap((section, index) => section?.condition ? [index] : [])
+  if (!conditionalIndexes.length) return parsedSections
+  // No-fallback condition pairs are limited to complementary comparisons; other formats need an unconditional fallback.
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/17d11129-219b-4e2c-88db-45844d21e528
+  const supportedConditions = codes.length === 2
+    ? conditionalIndexes[0] === 0 && (conditionalIndexes.length === 1
+      || conditionalIndexes[1] === 1 && parsedSections[0]?.condition !== undefined && parsedSections[1]?.condition !== undefined
+        && conditionsCoverAllValues(parsedSections[0].condition, parsedSections[1].condition))
+    : codes.length === 3
+      ? conditionalIndexes.length === 2 && conditionalIndexes[0] === 0 && conditionalIndexes[1] === 1
+      : false
+  return supportedConditions && !parsedSections.some(section => section?.parentheses) ? parsedSections : undefined
+}
+
+function matchesNumberCondition(value: number, condition: NumberFormatCondition): boolean {
+  switch (condition.operator) {
+    case '<': return value < condition.value
+    case '<=': return value <= condition.value
+    case '=': return value === condition.value
+    case '>': return value > condition.value
+    case '>=': return value >= condition.value
+    case '<>': return value !== condition.value
+  }
 }
 
 export function isSupportedChartNumberFormat(formatCode: string): boolean {
@@ -478,26 +574,38 @@ function formatScientificNumber(value: number, section: NumberFormatSection): st
   return `${formatted}${exponentText}${percent}`
 }
 
-export function formatChartNumber(value: number, formatCode?: string, date1904 = false): string {
-  if (!formatCode || formatCode.toLowerCase() === 'general') return String(value)
+export function formatChartNumberWithColor(value: number, formatCode?: string, date1904 = false, indexedColors?: string[]): FormattedChartNumber {
+  if (!formatCode || formatCode.toLowerCase() === 'general') return {text: String(value)}
   const sections = splitNumberFormatSections(formatCode)
   const dateSection = sections && (value < 0 ? sections[1] : value === 0 ? sections[2] || sections[0] : sections[0])
   const dateTokens = dateSection ? parseDateFormat(dateSection) : undefined
-  if (dateTokens) return formatDateNumber(Math.abs(value), dateTokens, date1904) ?? String(value)
+  if (dateTokens) {
+    const text = formatDateNumber(Math.abs(value), dateTokens, date1904) ?? String(value)
+    const color = numberFormatColor(dateSection, indexedColors)
+    return {text, ...(color ? {color} : {})}
+  }
   const numberSections = parseNumberFormat(formatCode)
-  if (!numberSections) return String(value)
+  if (!numberSections) return {text: String(value)}
 
   let section = numberSections[0]!
   let formattedValue = value
-  if (value < 0 && numberSections.length > 1) {
-    const negative = numberSections[1]
-    if (!negative) return ''
-    section = negative
-    formattedValue = Math.abs(value)
-  } else if (value === 0 && numberSections.length > 2) {
-    const zero = numberSections[2]
-    if (!zero) return ''
-    section = zero
+  if (numberSections.some(candidate => candidate?.condition)) {
+    const matching = numberSections.slice(0, 2).find(candidate => candidate?.condition && matchesNumberCondition(value, candidate.condition))
+    const fallback = numberSections.find(candidate => candidate && !candidate.condition)
+    const selected = matching || fallback
+    if (!selected) return {text: String(value)}
+    section = selected
+  } else {
+    if (value < 0 && numberSections.length > 1) {
+      const negative = numberSections[1]
+      if (!negative) return {text: ''}
+      section = negative
+      formattedValue = Math.abs(value)
+    } else if (value === 0 && numberSections.length > 2) {
+      const zero = numberSections[2]
+      if (!zero) return {text: ''}
+      section = zero
+    }
   }
 
   let scaledValue = formattedValue
@@ -507,7 +615,13 @@ export function formatChartNumber(value: number, formatCode?: string, date1904 =
     : section.scientific
     ? formatScientificNumber(scaledValue, section)
     : new Intl.NumberFormat(undefined, section.options).format(scaledValue)
-  if (formatted === undefined) return String(value)
+  if (formatted === undefined) return {text: String(value)}
   const valueText = `${section.prefix}${formatted}${section.suffix}`
-  return section.parentheses ? `(${valueText})` : valueText
+  const text = section.parentheses ? `(${valueText})` : valueText
+  const color = section.color ?? (section.colorIndex ? indexedColor(section.colorIndex, indexedColors) : undefined)
+  return {text, ...(color ? {color} : {})}
+}
+
+export function formatChartNumber(value: number, formatCode?: string, date1904 = false, indexedColors?: string[]): string {
+  return formatChartNumberWithColor(value, formatCode, date1904, indexedColors).text
 }

@@ -1,16 +1,33 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch, type CSSProperties } from 'vue'
-import { formatChartNumber, getChartDateAxisMajorTicks } from '~/utils/chart-number-format'
+import { formatChartNumberWithColor, getChartDateAxisMajorTicks } from '~/utils/chart-number-format'
 import { paragraphEntries } from '~/utils/paragraph-bullets'
 import { hslToRgb } from '~/utils/color'
 import { characterScript, cssFontFamily, type ScriptFont } from '~/utils/text-fonts'
-import { getPptxChartStacking, presetEllipsePoint } from '~/utils/pptx'
-import type { PptxAnimation, PptxChart, PptxChartDataLabelPosition, PptxChartDataLabelStyle, PptxChartMarkerSymbol, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxHyperlink, PptxParagraph, PptxShadow, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx-model'
+import { getPptxChartStacking, isSvgPolygonGeometry, presetEllipsePoint } from '~/utils/pptx-render-utils'
+import type { PptxAnimation, PptxAnimationTriggerCondition, PptxChart, PptxChartDataLabelPosition, PptxChartDataLabelStyle, PptxChartMarkerSymbol, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxHyperlink, PptxParagraph, PptxShadow, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx-model'
 import { inverseTimingProgress, timingProgress } from '~/utils/animation-timing'
 import { barnClipPath, clipPathMaskImage, dissolveClipPath, gridTransitionClipPath, gridTransitionMaskImage, randomBarClipPath, shapeEffectClipPath, stripsClipPath, wheelClipPath } from '~/utils/transitionMasks'
+import type { LocaleMessageKey } from '~/composables/useLocale'
 
+const { t } = useLocale()
 const EMU_PER_POINT = 12_700
 const customGradientScope = `pptx-${useId()}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+const svgStrokeDashPatterns: Record<string, number[]> = {
+  dot: [1, 3], sysDot: [1, 1], dash: [4, 3], sysDash: [3, 1], lgDash: [8, 3],
+  dashDot: [4, 3, 1, 3], sysDashDot: [3, 1, 1, 1], lgDashDot: [8, 3, 1, 3],
+  lgDashDotDot: [8, 3, 1, 3, 1, 3], sysDashDotDot: [3, 1, 1, 1, 1, 1],
+}
+
+function svgStrokeDashPattern(dash: PptxElement['strokeDash'], cap?: PptxElement['strokeCap']): number[] | undefined {
+  const pattern = Array.isArray(dash) ? dash : svgStrokeDashPatterns[dash || '']
+  if (!pattern) return undefined
+  const capLength = cap === 'round' || (!Array.isArray(dash) && cap === 'square') ? 1 : 0
+  return pattern.map((length, index) => {
+    const extension = Math.min(capLength, pattern[index % 2 ? index - 1 : index]!)
+    return length + (index % 2 ? extension : -extension)
+  })
+}
 
 interface CustomSvgGradientStop { offset: string; color: string; opacity: number }
 interface CustomSvgLinearGradient {
@@ -43,14 +60,14 @@ type CustomSvgGradient = CustomSvgLinearGradient | CustomSvgRadialGradient
 
 interface ChartVisual {
   plot: { left: number; top: number; width: number; height: number }
-  ticks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
-  xTicks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
+  ticks: Array<{ value: number; label: string; color?: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
+  xTicks: Array<{ value: number; label: string; color?: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
   axisTicks: Array<{ axis: 'category' | 'value' | 'valueSecondary' | 'xValue'; axisId?: string; minor?: boolean; x1: number; y1: number; x2: number; y2: number }>
   secondaryValueAxes: Array<{
     id: string
     horizontal: boolean
     line: { x1: number; y1: number; x2: number; y2: number }
-    ticks: Array<{ value: number; label: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
+    ticks: Array<{ value: number; label: string; color?: string; showLabel: boolean; x: number; y: number; labelX: number; labelY: number; labelAnchor: string }>
     majorGridlines: boolean
     majorTickMark?: PptxChartTickMark
     minorTickMark?: PptxChartTickMark
@@ -60,15 +77,15 @@ interface ChartVisual {
   radarGrid: Array<{ d: string }>
   radarSpokes: Array<{ x1: number; y1: number; x2: number; y2: number }>
   categoryGridlines: Array<{ x1: number; y1: number; x2: number; y2: number }>
-  categories: Array<{ text: string; x: number; y: number; anchor: string }>
-  bars: Array<{ x: number; y: number; width: number; height: number; color: string; stroke?: string }>
-  areas: Array<{ d: string; color: string; opacity?: number }>
-  lines: Array<{ d: string; color: string; width?: number }>
-  markers: Array<{ x: number; y: number; color: string; radius?: number; symbol?: PptxChartMarkerSymbol }>
-  slices: Array<{ d: string; color: string }>
+  categories: Array<{ text: string; color?: string; x: number; y: number; anchor: string }>
+  bars: Array<{ x: number; y: number; width: number; height: number; color: string; stroke?: string; strokeWidth?: number; strokeDasharray?: string; strokeLinecap?: PptxElement['strokeCap'] }>
+  areas: Array<{ d: string; color: string; stroke?: string; strokeWidth?: number; strokeDasharray?: string; strokeLinecap?: PptxElement['strokeCap']; opacity?: number }>
+  lines: Array<{ d: string; color: string; width?: number; strokeDasharray?: string; strokeLinecap?: PptxElement['strokeCap'] }>
+  markers: Array<{ x: number; y: number; color: string; stroke?: string; strokeWidth?: number; strokeDasharray?: string; strokeLinecap?: PptxElement['strokeCap']; radius?: number; symbol?: PptxChartMarkerSymbol }>
+  slices: Array<{ d: string; color: string; stroke?: string; strokeWidth?: number; strokeDasharray?: string; strokeLinecap?: PptxElement['strokeCap'] }>
   legend: Array<ChartLegendKey & { text: string; x: number; y: number }>
   legendClip?: { id: string; x: number; y: number; width: number; height: number }
-  dataLabels: Array<{ text: string; lines: string[]; x: number; y: number; anchor: string; legendKey?: ChartLegendKey; style?: PptxChartDataLabelStyle }>
+  dataLabels: Array<{ text: string; lines: string[]; x: number; y: number; anchor: string; legendKey?: ChartLegendKey; leaderLine?: { d: string; color: string }; style?: PptxChartDataLabelStyle }>
   baseline: { x1: number; y1: number; x2: number; y2: number }
   valueAxisLine?: { x1: number; y1: number; x2: number; y2: number }
 }
@@ -107,7 +124,39 @@ function chartMarkerPath(marker: ChartVisual['markers'][number]) {
   return ''
 }
 
-function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
+// shortcut: uniform Catmull-Rom parameter spacing; upgrade if PowerPoint reference decks show a different curve.
+function smoothChartLinePath(points: Array<{x: number; y: number}>, smooth: boolean) {
+  const first = points[0]
+  if (!first) return ''
+
+  let path = `M ${first.x} ${first.y}`
+  for (let index = 0; index < points.length - 1; index++) {
+    const start = points[index]
+    const end = points[index + 1]
+    if (!start || !end) continue
+    if (!smooth || points.length < 3) {
+      path += ` L ${end.x} ${end.y}`
+      continue
+    }
+
+    const previous = points[Math.max(0, index - 1)] ?? start
+    const next = points[Math.min(index + 2, points.length - 1)] ?? end
+    path += ` C ${start.x + (end.x - previous.x) / 6} ${start.y + (end.y - previous.y) / 6} ${end.x - (next.x - start.x) / 6} ${end.y - (next.y - start.y) / 6} ${end.x} ${end.y}`
+  }
+  return path
+}
+
+function makeChartVisual(chart: PptxChart, elementId: string, chartFrameWidthEmu: number): ChartVisual {
+  const chartStrokeWidth = (widthEmu?: number) => widthEmu === undefined ? undefined : ((widthEmu || 9_525) * 1000 / Math.max(chartFrameWidthEmu, 1))
+  const chartStrokeStyle = (series: PptxChart['series'][number], index: number | undefined, width: number) => {
+    const dash = index === undefined ? series.strokeDash : series.pointStrokeDashes?.[index] ?? series.strokeDash
+    const cap = index === undefined ? series.strokeCap : series.pointStrokeCaps?.[index] ?? series.strokeCap
+    const pattern = svgStrokeDashPattern(dash, cap)
+    return {
+      ...(pattern ? {strokeDasharray: pattern.map(length => length * width).join(' ')} : {}),
+      ...(cap ? {strokeLinecap: cap} : {}),
+    }
+  }
   const combo = chart.series.some(series => series.chartType)
   const seriesType = (series: PptxChart['series'][number]) => series.chartType || chart.type
   const axisEntryForSeries = (series: PptxChart['series'][number]) => chart.valueAxes?.find(item => item.id === series.valueAxisId)
@@ -216,9 +265,9 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   const xUpper = chart.xAxis?.max ?? (xDataMin === xDataMax ? xDataMax + (Math.abs(xDataMax) * 0.05 || 0.5) : xDataMax)
   const categoryCount = Math.max(chart.categories.length, 1)
   const formatCategoryAxisLabel = (text: string) => {
-    if (!chart.categoryAxisNumberFormat || !text.trim()) return text
+    if (!chart.categoryAxisNumberFormat || !text.trim()) return {text}
     const value = Number(text)
-    return Number.isFinite(value) ? formatChartNumber(value, chart.categoryAxisNumberFormat, chart.date1904) : text
+    return Number.isFinite(value) ? formatChartNumberWithColor(value, chart.categoryAxisNumberFormat, chart.date1904, chart.indexedColors) : {text}
   }
   const horizontalValueAxis = chart.direction === 'horizontal'
   const valueAxisSide = chart.valueAxis?.position ?? (horizontalValueAxis ? 'b' : 'l')
@@ -333,9 +382,11 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   const ticks = tickValues.map(value => {
     const x = radar ? radarCenterX : plot.left + plot.width * axisFraction(value)
     const y = radar ? radarCenterY - radarRadiusY * axisFraction(value) : valuePosition(value)
+    const formattedLabel = formatChartNumberWithColor(value, chart.valueAxis?.numberFormat ?? (chart.grouping === 'percentStacked' ? '0%' : undefined), chart.date1904, chart.indexedColors)
     return {
       value,
-      label: formatChartNumber(value, chart.valueAxis?.numberFormat ?? (chart.grouping === 'percentStacked' ? '0%' : undefined), chart.date1904),
+      label: formattedLabel.text,
+      ...(formattedLabel.color ? {color: formattedLabel.color} : {}),
       showLabel: valueTickLabelPosition !== 'none' && !chart.valueAxis?.deleted,
       x,
       y,
@@ -365,9 +416,11 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     const labelPosition = axis.tickLabelPosition ?? 'nextTo'
     const axisTicks = axisTickValues.map(value => {
       const position = tickPosition(value)
+      const formattedLabel = formatChartNumberWithColor(value, axis.numberFormat, chart.date1904, chart.indexedColors)
       return {
         value,
-        label: formatChartNumber(value, axis.numberFormat, chart.date1904),
+        label: formattedLabel.text,
+        ...(formattedLabel.color ? {color: formattedLabel.color} : {}),
         showLabel: !axis.deleted && labelPosition !== 'none',
         x: horizontal ? position : lineCoordinate,
         y: horizontal ? lineCoordinate : position,
@@ -388,9 +441,11 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   const xTickLabelPosition = chart.xAxis?.tickLabelPosition ?? 'nextTo'
   const xTicks = xyChart ? xTickValues.map(value => {
     const x = xPosition(value)
+    const formattedLabel = formatChartNumberWithColor(value, chart.xAxis?.numberFormat, chart.date1904, chart.indexedColors)
     return {
       value,
-      label: formatChartNumber(value, chart.xAxis?.numberFormat, chart.date1904),
+      label: formattedLabel.text,
+      ...(formattedLabel.color ? {color: formattedLabel.color} : {}),
       showLabel: xTickLabelPosition !== 'none' && !chart.xAxis?.deleted,
       x,
       y: xyXAxisCrossingY,
@@ -523,7 +578,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     const flushArea = () => {
       if (upperPoints.length > 1) {
         const points = [...upperPoints, ...lowerPoints.reverse()]
-        areas.push({d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`, color: series.color})
+        areas.push({d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`, color: series.color, stroke: series.stroke ?? series.color, strokeWidth: chartStrokeWidth(series.strokeWidthEmu), ...chartStrokeStyle(series, undefined, chartStrokeWidth(series.strokeWidthEmu) ?? 1)})
       }
       upperPoints = []
       lowerPoints = []
@@ -546,7 +601,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     }
     flushArea()
   })
-  const formatValue = (value: number, series: PptxChart['series'][number], index: number) => formatChartNumber(value, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat, chart.date1904)
+  const formatValue = (value: number, series: PptxChart['series'][number], index: number) => formatChartNumberWithColor(value, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat, chart.date1904, chart.indexedColors)
   const labelPosition = (series: PptxChart['series'][number], index: number, fallback: PptxChartDataLabelPosition) => series.dataLabelPositionOverrides[index] ?? series.dataLabelPosition ?? chart.dataLabelPosition ?? fallback
   const chartLegendKey = (series: PptxChart['series'][number], index?: number): ChartLegendKey => {
     const color = index === undefined ? series.color : series.pointColors[index] || series.color
@@ -564,11 +619,12 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       ...(showLine ? {line: true} : {}),
     }
   }
-  const pushDataLabel = (text: string, x: number, y: number, anchor: string, series: PptxChart['series'][number], index: number) => {
+  const pushDataLabel = (label: ReturnType<typeof formatChartNumberWithColor>, x: number, y: number, anchor: string, series: PptxChart['series'][number], index: number, leaderLine?: string) => {
     const style = {...series.dataLabelStyle, ...series.dataLabelStyleOverrides[index]}
-    const lines = text.split(/\r?\n/)
+    if (label.color) style.color = label.color
+    const lines = label.text.split(/\r?\n/)
     const showLegendKey = series.legendKeyOverrides[index] ?? series.showLegendKey
-    dataLabels.push({ text, lines, x, y, anchor, ...(showLegendKey ? {legendKey: chartLegendKey(series, index)} : {}), ...(Object.keys(style).length ? {style} : {}) })
+    dataLabels.push({ text: label.text, lines, x, y, anchor, ...(showLegendKey ? {legendKey: chartLegendKey(series, index)} : {}), ...(leaderLine ? {leaderLine: {d: leaderLine, color: style.color || '#64748b'}} : {}), ...(Object.keys(style).length ? {style} : {}) })
   }
   const formatDataLabel = (series: PptxChart['series'][number], index: number, value: number, category: string, total?: number, bubbleSize?: number) => {
     const showValue = series.valueLabelOverrides[index] ?? series.showValueLabels
@@ -582,12 +638,16 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       showValue ? formatValue(value, series, index) : undefined,
       showCategory ? category : undefined,
       showSeries ? series.name : undefined,
-      showPercent && total ? formatChartNumber(value / total, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat ?? '0.0%', chart.date1904) : undefined,
+      showPercent && total ? formatChartNumberWithColor(value / total, series.valueNumberFormatOverrides[index] ?? series.numberFormat ?? chart.numberFormat ?? '0.0%', chart.date1904, chart.indexedColors) : undefined,
       showBubbleSize ? formatValue(bubbleSize, series, index) : undefined,
-    ].filter((part): part is string => part !== undefined)
-    if (!parts.length) return showLegendKey ? '' : undefined
+    ].filter((part): part is string | ReturnType<typeof formatChartNumberWithColor> => part !== undefined)
+    if (!parts.length) return showLegendKey ? {text: ''} : undefined
     const defaultSeparator = isPieLike && !showValue && showCategory && !showSeries && showPercent ? '\n' : ','
-    return parts.join(series.labelSeparatorOverrides[index] ?? series.labelSeparator ?? chart.labelSeparator ?? defaultSeparator)
+    const color = parts.find((part): part is ReturnType<typeof formatChartNumberWithColor> => typeof part !== 'string' && Boolean(part.color))
+    return {
+      text: parts.map(part => typeof part === 'string' ? part : part.text).join(series.labelSeparatorOverrides[index] ?? series.labelSeparator ?? chart.labelSeparator ?? defaultSeparator),
+      ...(color?.color ? {color: color.color} : {}),
+    }
   }
   if (stock) {
     const highSeries = chart.series[stock.highIndex]
@@ -611,7 +671,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         const valueY = seriesValuePosition(volumeSeries, value)
         const top = Math.min(zeroY, valueY)
         const bottom = Math.max(zeroY, valueY)
-        bars.push({x: x - volumeWidth / 2, y: top, width: volumeWidth, height: Math.max(1, bottom - top), color: volumeSeries.pointColors[index] || volumeSeries.color})
+        bars.push({x: x - volumeWidth / 2, y: top, width: volumeWidth, height: Math.max(1, bottom - top), color: volumeSeries.pointColors[index] || volumeSeries.color, stroke: volumeSeries.pointStrokes?.[index] ?? volumeSeries.stroke, strokeWidth: chartStrokeWidth(volumeSeries.pointStrokeWidthsEmu?.[index] ?? volumeSeries.strokeWidthEmu), ...chartStrokeStyle(volumeSeries, index, chartStrokeWidth(volumeSeries.pointStrokeWidthsEmu?.[index] ?? volumeSeries.strokeWidthEmu) ?? 1)})
         const label = formatDataLabel(volumeSeries, index, value, chart.categories[index] || String(index + 1))
         if (label !== undefined) {
           const position = labelPosition(volumeSeries, index, 'outEnd')
@@ -668,7 +728,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           ? chart.valueAxis?.reverse ? plot.top - 10 : plot.top + plot.height + 25
           : categoryAxisSide === 't' ? categoryAxisCrossingCoordinate - 10 : categoryAxisCrossingCoordinate + 25
       chart.categories.forEach((text, index) => {
-        if (showCategoryAxisLabel(index)) categories.push({text: formatCategoryAxisLabel(text), x: categoryX(index), y: categoryLabelY, anchor: 'middle'})
+        if (showCategoryAxisLabel(index)) categories.push({...formatCategoryAxisLabel(text), x: categoryX(index), y: categoryLabelY, anchor: 'middle'})
       })
     }
     for (const index of [...(volumeSeries && stock.volumeIndex !== undefined ? [stock.volumeIndex] : []), ...priceIndices]) {
@@ -682,7 +742,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       const flushArea = () => {
         if (upperPoints.length > 1) {
           const points = [...upperPoints, ...lowerPoints.reverse()]
-          areas.push({d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`, color: series.color})
+          areas.push({d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`, color: series.color, stroke: series.stroke ?? series.color, strokeWidth: chartStrokeWidth(series.strokeWidthEmu), ...chartStrokeStyle(series, undefined, chartStrokeWidth(series.strokeWidthEmu) ?? 1)})
         }
         upperPoints = []
         lowerPoints = []
@@ -734,7 +794,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         const x = xPosition(xValue)
         const y = valuePosition(yValue)
         const color = series.pointColors[index] || (chart.bubbleVaryColors ? chart.palette[index % chart.palette.length] || series.color : series.color)
-        markers.push({ x, y, color, radius })
+        markers.push({ x, y, color, stroke: series.pointStrokes?.[index] ?? series.stroke, strokeWidth: chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu), ...chartStrokeStyle(series, index, chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu) ?? 1), radius })
         const label = formatDataLabel(series, index, yValue, String(xValue), undefined, bubbleSize)
         if (label !== undefined) {
           const labelType = labelPosition(series, index, 'r')
@@ -748,27 +808,31 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
   } else if (scatter) {
     chart.series.forEach((series, seriesIndex) => {
       let path = ''
-      let segmentOpen = false
+      let segment: Array<{x: number; y: number}> = []
+      const flushSegment = () => {
+        path += smoothChartLinePath(segment, series.scatterSmooth === true)
+        segment = []
+      }
       const pointCount = Math.max(series.xValues?.length || 0, series.values.length)
       for (let index = 0; index < pointCount; index++) {
         const xValue = series.xValues?.[index]
         const yValue = series.values[index]
         if (xValue == null || yValue == null) {
-          segmentOpen = false
+          flushSegment()
           continue
         }
         const x = xPosition(xValue)
         const y = valuePosition(yValue)
-        if (series.scatterShowLine) {
-          path += `${segmentOpen ? ' L' : ' M'} ${x} ${y}`
-          segmentOpen = true
-        }
+        if (series.scatterShowLine) segment.push({x, y})
         const pointMarkerSymbol = series.markerSymbolOverrides?.[index] ?? series.markerSymbol
         const showMarker = pointMarkerSymbol === undefined ? series.scatterShowMarker : pointMarkerSymbol !== 'none'
         if (showMarker) markers.push({
           x,
           y,
-          color: series.color,
+          color: series.pointColors[index] || series.color,
+          stroke: series.pointStrokes?.[index] ?? series.stroke,
+          strokeWidth: chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu),
+          ...chartStrokeStyle(series, index, chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu) ?? 1),
           symbol: pointMarkerSymbol ?? 'circle',
           radius: series.markerSizeOverrides?.[index] ?? series.markerSize,
         })
@@ -780,7 +844,8 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           pushDataLabel(label, labelX, labelY, labelType === 'l' ? 'end' : labelType === 'r' ? 'start' : 'middle', series, index)
         }
       }
-      if (path) lines.push({ d: path, color: series.color })
+      flushSegment()
+      if (path) lines.push({ d: path, color: series.stroke ?? series.color, width: chartStrokeWidth(series.strokeWidthEmu), ...chartStrokeStyle(series, undefined, chartStrokeWidth(series.strokeWidthEmu) ?? 4) })
       if (!chart.legend?.hiddenEntries?.includes(series.legendIndex)) legend.push({ text: series.name, x: 88 + seriesIndex * 220, y: 530, ...chartLegendKey(series) })
     })
   } else if (chart.type === 'pie' || chart.type === 'doughnut') {
@@ -819,21 +884,35 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           : fullCircle
             ? `M ${centerX} ${centerY} L ${startX} ${startY} A ${outerRadius} ${outerRadius} 0 1 1 ${centerX - Math.cos(angle) * outerRadius} ${centerY - Math.sin(angle) * outerRadius} A ${outerRadius} ${outerRadius} 0 1 1 ${startX} ${startY} Z`
             : `M ${centerX} ${centerY} L ${startX} ${startY} A ${outerRadius} ${outerRadius} 0 ${sweep > Math.PI ? 1 : 0} 1 ${endX} ${endY} Z`
-        slices.push({ d, color: point.color })
+        const strokeWidth = chartStrokeWidth(series.pointStrokeWidthsEmu?.[point.index] ?? series.strokeWidthEmu)
+        slices.push({
+          d,
+          color: point.color,
+          stroke: series.pointStrokes?.[point.index] ?? series.stroke ?? 'white',
+          strokeWidth: strokeWidth ?? 2,
+          ...chartStrokeStyle(series, point.index, strokeWidth ?? 2),
+        })
         const label = formatDataLabel(series, point.index, point.value, point.text, total)
         if (label !== undefined) {
           const labelAngle = angle + sweep / 2
           const position = labelPosition(series, point.index, 'ctr')
+          const showLeaderLine = series.leaderLineOverrides?.[point.index] ?? series.showLeaderLines ?? false
+          const hasLeaderLine = showLeaderLine && position === 'outEnd'
           const labelRadius = doughnut
             ? position === 'outEnd' ? outerRadius * 1.12
               : position === 'inEnd' ? innerRadius + ringWidth * 0.82
                 : position === 'inBase' ? innerRadius + ringWidth * 0.18
                   : (outerRadius + innerRadius) / 2
             : radius * (position === 'outEnd' ? 1.12 : position === 'inEnd' ? 0.82 : position === 'inBase' ? 0.24 : position === 'bestFit' ? 0.62 : 0.68)
-          const x = position === 'l' ? centerX - radius * 0.75 : position === 'r' ? centerX + radius * 0.75 : centerX + Math.cos(labelAngle) * labelRadius
-          const y = position === 't' ? centerY - radius * 0.78 : position === 'b' ? centerY + radius * 0.78 : centerY + Math.sin(labelAngle) * labelRadius + 6
-          const anchor = position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
-          pushDataLabel(label, x, y, anchor, series, point.index)
+          const side = Math.cos(labelAngle) >= 0 ? 1 : -1
+          const leaderY = centerY + Math.sin(labelAngle) * outerRadius * 1.04
+          const x = hasLeaderLine ? centerX + side * outerRadius * 1.12 : position === 'l' ? centerX - radius * 0.75 : position === 'r' ? centerX + radius * 0.75 : centerX + Math.cos(labelAngle) * labelRadius
+          const y = hasLeaderLine ? leaderY + 6 : position === 't' ? centerY - radius * 0.78 : position === 'b' ? centerY + radius * 0.78 : centerY + Math.sin(labelAngle) * labelRadius + 6
+          const anchor = hasLeaderLine ? side > 0 ? 'start' : 'end' : position === 'l' ? 'end' : position === 'r' ? 'start' : 'middle'
+          const leaderLine = hasLeaderLine
+            ? `M ${centerX + Math.cos(labelAngle) * outerRadius} ${centerY + Math.sin(labelAngle) * outerRadius} L ${centerX + Math.cos(labelAngle) * outerRadius * 1.04} ${leaderY} L ${x - side * 6} ${leaderY}`
+            : undefined
+          pushDataLabel(label, x, y, anchor, series, point.index, leaderLine)
         }
         angle = endAngle
       }
@@ -863,7 +942,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         const point = radarPoint(index, 1, 22)
         const horizontal = Math.cos(point.angle)
         categories.push({
-          text: formatCategoryAxisLabel(text),
+          ...formatCategoryAxisLabel(text),
           x: point.x,
           y: point.y + (Math.sin(point.angle) > 0.55 ? 16 : Math.sin(point.angle) < -0.55 ? -8 : 5),
           anchor: horizontal > 0.25 ? 'start' : horizontal < -0.25 ? 'end' : 'middle',
@@ -880,6 +959,9 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         areas.push({
           d: `${points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')} Z`,
           color: series.color,
+          stroke: series.stroke ?? series.color,
+          strokeWidth: chartStrokeWidth(series.strokeWidthEmu),
+          ...chartStrokeStyle(series, undefined, chartStrokeWidth(series.strokeWidthEmu) ?? 1),
           opacity: 0.22,
         })
       }
@@ -890,7 +972,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
               const next = points[(index + 1) % points.length]
               return point && next ? [`M ${point.x} ${point.y} L ${next.x} ${next.y}`] : []
             }).join(' ')
-        if (path) lines.push({ d: path, color: series.color })
+        if (path) lines.push({ d: path, color: series.stroke ?? series.color, width: chartStrokeWidth(series.strokeWidthEmu), ...chartStrokeStyle(series, undefined, chartStrokeWidth(series.strokeWidthEmu) ?? 4) })
       }
       points.forEach((point, index) => {
         if (!point) return
@@ -899,7 +981,10 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         if (showMarker) markers.push({
           x: point.x,
           y: point.y,
-          color: series.color,
+          color: series.pointColors[index] || series.color,
+          stroke: series.pointStrokes?.[index] ?? series.stroke,
+          strokeWidth: chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu),
+          ...chartStrokeStyle(series, index, chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu) ?? 1),
           symbol: pointMarkerSymbol ?? 'circle',
           radius: series.markerSizeOverrides?.[index] ?? series.markerSize ?? series.radarMarkerSize ?? 5,
         })
@@ -923,6 +1008,10 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
       const groupIndex = series.chartGroupIndex ?? 0
       barSeriesByGroup.set(groupIndex, [...(barSeriesByGroup.get(groupIndex) || []), seriesIndex])
     })
+    const linePointsBySeries = new Map<number, Array<{x: number; y: number} | null>>()
+    chart.series.forEach((series, seriesIndex) => {
+      if (seriesType(series) === 'line' && series.lineShowLine !== false) linePointsBySeries.set(seriesIndex, [])
+    })
     for (let index = 0; index < categoryCount; index++) {
       const centerX = categoryX(index)
       const centerY = categoryY(index)
@@ -942,11 +1031,14 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
                 : categoryAxisSide === 't'
                   ? { x: centerX, y: categoryAxisCrossingCoordinate - 10, anchor: 'middle' }
                   : { x: centerX, y: categoryAxisCrossingCoordinate + 25, anchor: 'middle' }
-        if (showCategoryAxisLabel(index)) categories.push({ text: formatCategoryAxisLabel(chart.categories[index] || ''), ...categoryLabel })
+        if (showCategoryAxisLabel(index)) categories.push({ ...formatCategoryAxisLabel(chart.categories[index] || ''), ...categoryLabel })
       }
       chart.series.forEach((series, seriesIndex) => {
         const value = series.values[index]
-        if (value === null || value === undefined) return
+        if (value === null || value === undefined) {
+          linePointsBySeries.get(seriesIndex)?.push(null)
+          return
+        }
         const color = series.color
         const kind = seriesType(series)
         const stackedSegment = stackedSegmentFor(seriesIndex)?.[index]
@@ -955,18 +1047,16 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         if (kind === 'line') {
           const x = horizontalValueAxis ? seriesValuePosition(series, stackedSegment?.end ?? value) : centerX
           const y = horizontalValueAxis ? centerY : seriesValuePosition(series, stackedSegment?.end ?? value)
-          const previousValue = index > 0 ? series.values[index - 1] : null
-          const previousStackedSegment = stackedSegmentFor(seriesIndex)?.[index - 1]
-          const previous = previousValue == null ? undefined : horizontalValueAxis
-            ? {x: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue), y: categoryY(index - 1)}
-            : {x: categoryX(index - 1), y: seriesValuePosition(series, previousStackedSegment?.end ?? previousValue)}
-          if (series.lineShowLine !== false) lines.push({ d: previous ? `M ${previous.x} ${previous.y} L ${x} ${y}` : `M ${x} ${y}`, color })
+          linePointsBySeries.get(seriesIndex)?.push({x, y})
           const pointMarkerSymbol = series.markerSymbolOverrides?.[index] ?? series.markerSymbol
           const showMarker = pointMarkerSymbol === undefined ? series.lineShowMarker !== false : pointMarkerSymbol !== 'none'
           if (showMarker) markers.push({
             x,
             y,
-            color,
+            color: series.pointColors[index] || color,
+            stroke: series.pointStrokes?.[index] ?? series.stroke,
+            strokeWidth: chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu),
+            ...chartStrokeStyle(series, index, chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu) ?? 1),
             symbol: pointMarkerSymbol ?? 'circle',
             radius: series.markerSizeOverrides?.[index] ?? series.markerSize,
           })
@@ -1000,7 +1090,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           const zeroX = seriesValuePosition(series, Math.max(axisMinimum, Math.min(axisUpper, 0)))
           const baseX = isStacked ? seriesValuePosition(series, stackedSegment?.start ?? 0) : zeroX
           const valueX = seriesValuePosition(series, isStacked ? stackedSegment?.end ?? value : value)
-          bars.push({ x: Math.min(baseX, valueX), y: barY, width: Math.max(1, Math.abs(valueX - baseX)), height: barHeight * 0.86, color })
+          bars.push({ x: Math.min(baseX, valueX), y: barY, width: Math.max(1, Math.abs(valueX - baseX)), height: barHeight * 0.86, color: series.pointColors[index] || color, stroke: series.pointStrokes?.[index] ?? series.stroke, strokeWidth: chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu), ...chartStrokeStyle(series, index, chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu) ?? 1) })
           const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
           if (label !== undefined) {
             const position = labelPosition(series, index, isStacked ? 'ctr' : 'outEnd')
@@ -1030,7 +1120,7 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
           const baseY = isStacked ? seriesValuePosition(series, stackedSegment?.start ?? 0) : zeroY
           const valueY = seriesValuePosition(series, isStacked ? stackedSegment?.end ?? value : value)
           const barX = centerX - groupWidth / 2 + (isStacked ? 0 : barOrdinal * barWidth)
-          bars.push({ x: barX, y: Math.min(baseY, valueY), width: barWidth * 0.86, height: Math.max(1, Math.abs(valueY - baseY)), color })
+          bars.push({ x: barX, y: Math.min(baseY, valueY), width: barWidth * 0.86, height: Math.max(1, Math.abs(valueY - baseY)), color: series.pointColors[index] || color, stroke: series.pointStrokes?.[index] ?? series.stroke, strokeWidth: chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu), ...chartStrokeStyle(series, index, chartStrokeWidth(series.pointStrokeWidthsEmu?.[index] ?? series.strokeWidthEmu) ?? 1) })
           const label = formatDataLabel(series, index, value, chart.categories[index] || String(index + 1))
           if (label !== undefined) {
             const position = labelPosition(series, index, isStacked ? 'ctr' : 'outEnd')
@@ -1050,6 +1140,22 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
         }
       })
     }
+    linePointsBySeries.forEach((points, seriesIndex) => {
+      const series = chart.series[seriesIndex]
+      if (!series) return
+      let path = ''
+      let segment: Array<{x: number; y: number}> = []
+      const flushSegment = () => {
+        path += smoothChartLinePath(segment, series.lineSmooth === true)
+        segment = []
+      }
+      points.forEach(point => {
+        if (point) segment.push(point)
+        else flushSegment()
+      })
+      flushSegment()
+      if (path) lines.push({ d: path, color: series.stroke ?? series.color, width: chartStrokeWidth(series.strokeWidthEmu), ...chartStrokeStyle(series, undefined, chartStrokeWidth(series.strokeWidthEmu) ?? 4) })
+    })
     chart.series.slice(0, 12).forEach(series => {
       if (chart.legend?.hiddenEntries?.includes(series.legendIndex)) return
       legend.push({ text: series.name, x: 88 + (legend.length % 4) * 220, y: 530 + Math.floor(legend.length / 4) * 22, ...chartLegendKey(series) })
@@ -1099,9 +1205,11 @@ function makeChartVisual(chart: PptxChart, elementId: string): ChartVisual {
     const firstLabel = categories[0]!
     categories.splice(0, categories.length, ...dateAxisMajorTickValues.map(value => {
       const fraction = dateAxisFraction(value)
+      const formattedLabel = formatCategoryAxisLabel(String(value))
       return {
         ...firstLabel,
-        text: formatCategoryAxisLabel(String(value)),
+        ...formattedLabel,
+        color: formattedLabel.color,
         ...(horizontalValueAxis ? { y: plot.top + plot.height * fraction } : { x: plot.left + plot.width * fraction }),
       }
     }))
@@ -1115,10 +1223,12 @@ const props = withDefaults(defineProps<{
   height: number
   number: number
   animationStep?: number
+  showAnimations?: boolean
+  showNarration?: boolean
   thumbnail?: boolean
   playbackPreview?: boolean
   triggerPlayback?: PptxTriggerPlayback[]
-}>(), { animationStep: 0, thumbnail: false, playbackPreview: false })
+}>(), { animationStep: 0, showAnimations: true, showNarration: true, thumbnail: false, playbackPreview: false })
 const emit = defineEmits<{
   'trigger-playback': [playback: PptxTriggerPlayback[]]
   'activate-hyperlink': [hyperlink: PptxHyperlink]
@@ -1126,7 +1236,7 @@ const emit = defineEmits<{
 }>()
 
 const backgroundImageSize = ref<{ sourceUrl: string; url: string; width: number; height: number; repeatX: number; repeatY: number }>()
-const backgroundTileWarning = ref('')
+const backgroundTileWarning = ref<LocaleMessageKey | ''>('')
 watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundImage?.tile), props.slide.backgroundImage?.tile?.flip || 'none', props.slide.backgroundImage?.crop.left, props.slide.backgroundImage?.crop.top, props.slide.backgroundImage?.crop.right, props.slide.backgroundImage?.crop.bottom] as const, ([url, tiled, flip], _oldValue, onCleanup) => {
   backgroundImageSize.value = undefined
   backgroundTileWarning.value = ''
@@ -1142,7 +1252,7 @@ watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundIma
     if (generatedUrl) URL.revokeObjectURL(generatedUrl)
   })
   probe.onerror = () => {
-    if (current) backgroundTileWarning.value = 'The tiled slide background image could not be decoded.'
+    if (current) backgroundTileWarning.value = 'tiledBackgroundDecodeFailed'
   }
   probe.onload = () => {
     if (!current || probe.naturalWidth < 1 || probe.naturalHeight < 1) return
@@ -1167,9 +1277,7 @@ watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundIma
     const patternWidth = tileWidth * imageSize.repeatX
     const patternHeight = tileHeight * imageSize.repeatY
     if (patternWidth > 32_767 || patternHeight > 32_767 || patternWidth * patternHeight > 16_777_216) {
-      backgroundTileWarning.value = hasCrop
-        ? 'The tiled background crop exceeds the local canvas limit; the original image is used.'
-        : 'The tiled background flip exceeds the local canvas limit; the unflipped image is used.'
+      backgroundTileWarning.value = hasCrop ? 'tiledBackgroundCropTooLarge' : 'tiledBackgroundFlipTooLarge'
       backgroundImageSize.value = originalImageSize
       return
     }
@@ -1178,9 +1286,7 @@ watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundIma
     canvas.height = patternHeight
     const context = canvas.getContext('2d')
     if (!context) {
-      backgroundTileWarning.value = hasCrop
-        ? 'The browser could not render the tiled background crop; the original image is used.'
-        : 'The browser could not render the tiled background flip; the unflipped image is used.'
+      backgroundTileWarning.value = hasCrop ? 'tiledBackgroundCropUnsupported' : 'tiledBackgroundFlipUnsupported'
       backgroundImageSize.value = originalImageSize
       return
     }
@@ -1198,9 +1304,7 @@ watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundIma
     canvas.toBlob(blob => {
       if (!current) return
       if (!blob) {
-        backgroundTileWarning.value = hasCrop
-          ? 'The browser could not encode the tiled background crop; the original image is used.'
-          : 'The browser could not encode the tiled background flip; the unflipped image is used.'
+        backgroundTileWarning.value = hasCrop ? 'tiledBackgroundCropEncodeFailed' : 'tiledBackgroundFlipEncodeFailed'
         backgroundImageSize.value = originalImageSize
         return
       }
@@ -1244,8 +1348,9 @@ const stageWidth = ref(0)
 const autoFitDimensions = reactive(new Map<string, { width: number; height: number }>())
 const normalAutoFitScales = reactive(new Map<string, number>())
 const textEllipsisLineCounts = reactive(new Map<string, number>())
+const textAnchorCenterOffsets = new Map<string, number>()
 const elementLayoutVersion = ref(0)
-const textOverflowWarning = ref('')
+const textOverflowWarning = ref<LocaleMessageKey | ''>('')
 const animationClock = ref(0)
 const reduceMotion = ref(false)
 const invalidMediaTrimIds = ref<string[]>([])
@@ -1256,19 +1361,24 @@ const mediaFadeStates = new WeakMap<HTMLMediaElement, { baseVolume: number; appl
 const lastMediaBookmarkTimes = new WeakMap<HTMLMediaElement, number>()
 const mediaBookmarkPlaybackStarted = new WeakSet<HTMLMediaElement>()
 const mediaBookmarkTriggersByMedia = computed(() => {
-  const triggersByMedia = new Map<string, Array<{ sequenceIndex: number; timeMs: number }>>()
+  const triggersByMedia = new Map<string, Array<{ sequenceIndex: number; conditionIndex: number; timeMs: number }>>()
   props.slide.triggeredAnimations?.forEach((sequence, sequenceIndex) => {
-    const trigger = sequence.trigger
-    if (trigger.type !== 'mediaBookmark') return
-    const triggers = triggersByMedia.get(trigger.id) || []
-    triggers.push({ sequenceIndex, timeMs: trigger.timeMs })
-    triggersByMedia.set(trigger.id, triggers)
+    sequence.conditions.forEach((condition, conditionIndex) => {
+      if (condition.type !== 'mediaBookmark') return
+      const triggers = triggersByMedia.get(condition.id) || []
+      triggers.push({ sequenceIndex, conditionIndex, timeMs: condition.timeMs })
+      triggersByMedia.set(condition.id, triggers)
+    })
   })
   return triggersByMedia
 })
 const executedMediaActions = new Set<number>()
+const scheduledMediaActions = new Map<string, number>()
+const startedMediaActions = new Map<string, number>()
 const completedMediaActions = reactive(new Map<string, number>())
+const endedMediaTargets = reactive(new Map<string, number>())
 const mediaActionEndTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const exclusivePausedMedia = new Map<HTMLMediaElement, number | undefined>()
 let automaticStartedAt: number | undefined
 let stepStartedAt = new Map<number, number>()
 let mainStepEndedAt = new Map<number, number>()
@@ -1276,7 +1386,10 @@ let triggerSteps = new Map<number, number>()
 let triggerStartedAt = new Map<string, number>()
 let triggerStepEndedAt = new Map<string, number>()
 let triggerPlaybackByKey = new Map<string, PptxTriggerPlayback>()
-const firedTimingNodeTriggers = new Set<number>()
+const firedTimingNodeTriggers = new Set<string>()
+const triggerConditionDueAt = new Map<string, number>()
+const pendingTriggerConditions = new Set<string>()
+const triggerConditionKey = (sequenceIndex: number, conditionIndex: number) => `${sequenceIndex}:${conditionIndex}`
 let observer: ResizeObserver | undefined
 let autoFitFrame = 0
 let animationFrame = 0
@@ -1285,7 +1398,17 @@ let motionPreference: MediaQueryList | undefined
 let pixelRatioQuery: MediaQueryList | undefined
 const pixelRatio = ref(1)
 const scale = computed(() => stageWidth.value / Math.max(props.width, 1))
-const chartVisuals = computed(() => new Map(props.slide.elements.flatMap(element => element.chart ? [[element.id, makeChartVisual(element.chart, element.id)] as const] : [])))
+const chartVisuals = computed(() => new Map(props.slide.elements.flatMap(element => element.chart ? [[element.id, makeChartVisual(element.chart, element.id, element.width)] as const] : [])))
+const chartPatternDefinitions = computed(() => new Map(props.slide.elements.flatMap(element => {
+  if (!element.chart) return []
+  const fills = [...new Set(element.chart.series.flatMap(series => [series.color, series.stroke, ...Object.values(series.pointColors), ...Object.values(series.pointStrokes || {})]).filter((fill): fill is string => fill !== undefined && isPatternFillCss(fill)))]
+  return fills.length ? [[element.id, fills.map((fill, index) => ({ id: `${customGradientScope}-chart-pattern-${element.id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${index}`, fill }))] as const] : []
+})))
+const chartPaint = (elementId: string, fill: string | undefined) => {
+  if (!fill || !isPatternFillCss(fill)) return fill
+  const pattern = chartPatternDefinitions.value.get(elementId)?.find(item => item.fill === fill)
+  return pattern ? `url(#${pattern.id})` : fill
+}
 const chartDataLabelKeyPositions = ref(new Map<string, number>())
 let chartDataLabelResizeObserver: ResizeObserver | undefined
 const observedChartSvgs = new WeakSet<SVGSVGElement>()
@@ -1370,9 +1493,7 @@ function scheduleShapeAutoFit() {
       return
     }
     const canClampText = typeof CSS !== 'undefined' && CSS.supports('display', '-webkit-box') && CSS.supports('-webkit-line-clamp', '1')
-    textOverflowWarning.value = ellipsisFrames.length && !canClampText
-      ? 'Vertical text ellipsis is clipped because this browser does not support CSS line clamping.'
-      : ''
+    textOverflowWarning.value = ellipsisFrames.length && !canClampText ? 'textEllipsisUnsupported' : ''
     if (canClampText) {
       for (const frame of ellipsisFrames) {
         const id = frame.dataset.elementId
@@ -1440,8 +1561,49 @@ function scheduleShapeAutoFit() {
       }
     }
     if (layoutChanged) elementLayoutVersion.value++
+    void nextTick(measureTextAnchorCenterOffsets)
     if (changed) void nextTick(scheduleShapeAutoFit)
   })
+}
+
+function measureTextAnchorCenterOffsets() {
+  if (!stage.value) return
+  const elements = new Map(props.slide.elements.map(element => [element.id, element]))
+  let changed = false
+  for (const frame of stage.value.querySelectorAll<HTMLElement>('.text-frame')) {
+    const id = frame.dataset.elementId
+    const element = id ? elements.get(id) : undefined
+    if (!element?.textAnchorCenter || (element.textColumnCount ?? 1) <= 1) continue
+    const bounds = frame.querySelector<HTMLElement>('.text-bounds')
+    if (!bounds) continue
+
+    const frameRect = frame.getBoundingClientRect()
+    const frameStyle = getComputedStyle(frame)
+    const paddingLeft = Number.parseFloat(frameStyle.paddingLeft) || 0
+    const paddingRight = Number.parseFloat(frameStyle.paddingRight) || 0
+    const paddingTop = Number.parseFloat(frameStyle.paddingTop) || 0
+    const paddingBottom = Number.parseFloat(frameStyle.paddingBottom) || 0
+    const parent = frame.closest<HTMLElement>('.slide-element')
+    const transform = parent ? getComputedStyle(parent).transform : 'none'
+    const matrix = transform === 'none' ? new DOMMatrixReadOnly() : new DOMMatrixReadOnly(transform)
+    const targetX = frameRect.left + frameRect.width / 2 + matrix.a * (paddingLeft - paddingRight) / 2 + matrix.c * (paddingTop - paddingBottom) / 2
+    const targetY = frameRect.top + frameRect.height / 2 + matrix.b * (paddingLeft - paddingRight) / 2 + matrix.d * (paddingTop - paddingBottom) / 2
+    const key = `${props.slide.id}:${id}`
+    const currentOffset = textAnchorCenterOffsets.get(key) ?? 0
+    const boundsRect = bounds.getBoundingClientRect()
+    const offsetX = targetX - (boundsRect.left + boundsRect.width / 2 - matrix.a * currentOffset)
+    const offsetY = targetY - (boundsRect.top + boundsRect.height / 2 - matrix.b * currentOffset)
+    const axisScale = matrix.a * matrix.a + matrix.b * matrix.b
+    if (axisScale < 0.000001) continue
+    const nextOffset = (offsetX * matrix.a + offsetY * matrix.b) / axisScale
+    if (Math.abs(nextOffset) < 0.5) {
+      changed = textAnchorCenterOffsets.delete(key) || changed
+    } else if (Math.abs(nextOffset - currentOffset) >= 0.5) {
+      textAnchorCenterOffsets.set(key, nextOffset)
+      changed = true
+    }
+  }
+  if (changed) elementLayoutVersion.value++
 }
 
 function onFontsLoaded() {
@@ -1457,15 +1619,19 @@ const triggerKey = (sequence: number, step: number) => `${sequence}:${step}`
 const timelineEnd = (action: RenderAnimation) => action.triggerSequence !== undefined && action.triggerStep !== undefined
   ? triggerStepEndedAt.get(triggerKey(action.triggerSequence, action.triggerStep))
   : action.automatic ? undefined : mainStepEndedAt.get(action.step)
-const timelineNow = (action: RenderAnimation) => Math.min(animationClock.value, timelineEnd(action) ?? Infinity)
-const timelineStart = (action: RenderAnimation) => {
-  const startedAt = action.triggerSequence === undefined || action.triggerStep === undefined
+const timelineBaseStart = (action: RenderAnimation) => action.triggerSequence === undefined || action.triggerStep === undefined
   ? action.automatic ? automaticStartedAt : stepStartedAt.get(action.step)
   : triggerStartedAt.get(triggerKey(action.triggerSequence, action.triggerStep))
+const rawTimelineStart = (action: RenderAnimation) => {
+  const startedAt = timelineBaseStart(action)
   if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY || !action.mediaWaitForEndKeys?.length) return startedAt
   const endedAt = action.mediaWaitForEndKeys.map(key => completedMediaActions.get(key))
   if (endedAt.some(time => time === undefined)) return Infinity
   return Math.max(startedAt, ...endedAt.map(time => time! + (action.mediaWaitDelayMs || 0) - action.delayMs))
+}
+const timelineNow = (action: RenderAnimation) => {
+  const now = Math.min(animationClock.value, timelineEnd(action) ?? Infinity)
+  return timelineTimeAt(action, now)
 }
 const animationDuration = (action: PptxAnimation) => action.durationMs === 0
   ? 0
@@ -1497,6 +1663,7 @@ function iterationIndexFor(action: PptxAnimation, start: number, end: number): n
 }
 const animationsByTarget = computed(() => {
   const targets = new Map<string, RenderAnimation[]>()
+  if (!props.showAnimations) return targets
   for (const animation of props.slide.automaticAnimations || []) {
     const actions = targets.get(animation.targetId) || []
     actions.push({ ...animation, step: -1, automatic: true })
@@ -1522,11 +1689,146 @@ const animationsByTarget = computed(() => {
   return targets
 })
 const hasInteractiveMedia = computed(() => !props.thumbnail && props.slide.elements.some(element => element.kind === 'video' || element.kind === 'audio'))
+const playbackActionEnabled = (action: PptxAnimation) => (props.showAnimations || action.effect === 'media') && (props.showNarration || !action.mediaIsNarration)
 const timelineActions = computed<RenderAnimation[]>(() => [
   ...(props.slide.automaticAnimations || []).map(animation => ({ ...animation, step: -1, automatic: true })),
   ...(props.slide.animationSteps || []).flatMap((step, index) => step.map(animation => ({ ...animation, step: index, automatic: false }))),
   ...(props.slide.triggeredAnimations || []).flatMap((sequence, sequenceIndex) => sequence.steps.flatMap((step, stepIndex) => step.map(animation => ({ ...animation, step: -1, automatic: false, triggerSequence: sequenceIndex, triggerStep: stepIndex })))),
-])
+].filter(playbackActionEnabled))
+const exclusiveTimelineRanges = computed(() => {
+  const now = animationClock.value
+  const groups = new Map<string, {id: string; baseAt: number; startMs: number; endMs: number}>()
+  for (const action of timelineActions.value) {
+    const startedAt = timelineBaseStart(action)
+    if (startedAt === undefined || !Number.isFinite(startedAt)) continue
+    for (const group of action.exclusiveGroups || []) {
+      if (!groups.has(group.id) && Number.isFinite(group.startMs) && Number.isFinite(group.endMs) && group.endMs > group.startMs) {
+        groups.set(group.id, {id: group.id, baseAt: startedAt, startMs: group.startMs, endMs: group.endMs})
+      }
+    }
+  }
+  const orderedGroups = [...groups.values()].sort((a, b) => a.baseAt + a.startMs - b.baseAt - b.startMs)
+  const ranges: Array<{id: string; startAt: number; endAt: number}> = []
+  for (const group of orderedGroups) {
+    let startAt = group.baseAt + group.startMs
+    const shifted = new Set<string>()
+    while (true) {
+      let adjusted = false
+      for (const previous of ranges) {
+        if (shifted.has(previous.id) || previous.startAt >= startAt || previous.endAt <= group.baseAt) continue
+        startAt += previous.endAt - Math.max(previous.startAt, group.baseAt)
+        shifted.add(previous.id)
+        adjusted = true
+      }
+      if (!adjusted) break
+    }
+    ranges.push({id: group.id, startAt, endAt: startAt + group.endMs - group.startMs})
+  }
+  return ranges.sort((a, b) => a.startAt - b.startAt || a.endAt - b.endAt)
+})
+function timelinePauseDuration(action: RenderAnimation, at: number): number {
+  if (!Number.isFinite(at)) return 0
+  const memberships = new Set(action.exclusiveGroups?.map(group => group.id) || [])
+  const ranges = exclusiveTimelineRanges.value.filter(range => !memberships.has(range.id))
+  let paused = 0
+  let previousEnd = 0
+  for (const range of ranges) {
+    if (range.startAt >= at) break
+    const start = Math.max(previousEnd, range.startAt, 0)
+    const end = Math.min(at, range.endAt)
+    if (end > start) paused += end - start
+    previousEnd = Math.max(previousEnd, end)
+  }
+  return paused
+}
+function timelineTimeAt(action: RenderAnimation, time: number): number {
+  return Number.isFinite(time) ? time - timelinePauseDuration(action, time) : time
+}
+const timelineStart = (action: RenderAnimation) => {
+  const startedAt = rawTimelineStart(action)
+  return startedAt === undefined || !Number.isFinite(startedAt) ? startedAt : timelineTimeAt(action, startedAt)
+}
+const timelineIsPaused = (action: RenderAnimation, time: number) => {
+  const memberships = new Set(action.exclusiveGroups?.map(group => group.id) || [])
+  return exclusiveTimelineRanges.value.some(range => !memberships.has(range.id) && range.startAt <= time && time < range.endAt)
+}
+function nextExclusiveTimelineBoundary(action: RenderAnimation, time: number): number {
+  const memberships = new Set(action.exclusiveGroups?.map(group => group.id) || [])
+  let boundary = Infinity
+  for (const range of exclusiveTimelineRanges.value) {
+    if (memberships.has(range.id)) continue
+    if (range.startAt <= time && time < range.endAt) boundary = Math.min(boundary, range.endAt)
+    else if (range.startAt > time) boundary = Math.min(boundary, range.startAt)
+  }
+  return boundary
+}
+function clearMediaActionEnd(actionKey: string) {
+  const timer = mediaActionEndTimers.get(actionKey)
+  if (timer) clearTimeout(timer)
+  mediaActionEndTimers.delete(actionKey)
+}
+function scheduleMediaActionEnd(action: RenderAnimation, element: PptxElement, media: HTMLMediaElement, remainingMs: number, checkedAt = performance.now()) {
+  const actionKey = action.mediaActionKey
+  if (!actionKey) return
+  const state = {action, element, media, remainingMs, checkedAt}
+  const now = performance.now()
+  const boundary = nextExclusiveTimelineBoundary(action, now)
+  const delay = timelineIsPaused(action, now) ? boundary - now : Math.min(remainingMs, boundary - now)
+  media.dataset.mediaActionEndAt = String(now + Math.max(0, remainingMs))
+  mediaActionEndTimers.set(actionKey, setTimeout(() => {
+    const endedAt = performance.now()
+    const elapsed = endedAt - state.checkedAt
+    const paused = timelinePauseDuration(action, endedAt) - timelinePauseDuration(action, state.checkedAt)
+    state.remainingMs -= Math.max(0, elapsed - paused)
+    if (state.remainingMs > 0) {
+      scheduleMediaActionEnd(action, element, media, state.remainingMs, endedAt)
+      return
+    }
+    clearMediaActionEnd(actionKey)
+    delete media.dataset.mediaActionEndAt
+    media.pause()
+    finishTimedMedia(element)
+  }, Math.max(0, delay)))
+}
+function syncExclusiveMediaPlayback(now: number) {
+  const activeGroups = exclusiveTimelineRanges.value.filter(range => range.startAt <= now && now < range.endAt)
+  if (activeGroups.length) {
+    const activeGroupIds = new Set(activeGroups.map(group => group.id))
+    const exclusiveTargetIds = new Set(timelineActions.value
+      .filter(action => action.effect === 'media' && action.exclusiveGroups?.some(group => activeGroupIds.has(group.id)))
+      .map(action => action.targetId))
+    for (const media of stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []) {
+      if (media.ended || exclusiveTargetIds.has(media.dataset.mediaId || '')) continue
+      if (!media.paused && !exclusivePausedMedia.has(media)) {
+        const endAt = Number(media.dataset.mediaActionEndAt)
+        exclusivePausedMedia.set(media, Number.isFinite(endAt) ? endAt - now : undefined)
+      }
+      if (exclusivePausedMedia.has(media) && !media.paused) media.pause()
+    }
+    return
+  }
+  for (const [media, endRemainingMs] of exclusivePausedMedia) {
+    exclusivePausedMedia.delete(media)
+    if (!media.isConnected || media.ended || !media.paused) continue
+    if (endRemainingMs !== undefined) media.dataset.mediaActionEndAt = String(now + Math.max(0, endRemainingMs))
+    const mediaId = media.dataset.mediaId
+    void media.play().catch(error => {
+      if (error instanceof DOMException && error.name === 'NotAllowedError' && mediaId && !blockedMediaPlaybackIds.value.includes(mediaId)) {
+        blockedMediaPlaybackIds.value = [...blockedMediaPlaybackIds.value, mediaId]
+      }
+    })
+  }
+}
+const triggerSequenceHasEnabledAction = (sequence: NonNullable<PptxSlide['triggeredAnimations']>[number]) => sequence.steps.some(step => step.some(playbackActionEnabled))
+const triggerTargetIds = computed(() => {
+  const targetIds = new Set<string>()
+  if (props.thumbnail) return targetIds
+  for (const sequence of props.slide.triggeredAnimations || []) {
+    if (!triggerSequenceHasEnabledAction(sequence)) continue
+    for (const condition of sequence.conditions) if (condition.type === 'shape') targetIds.add(condition.id)
+  }
+  return targetIds
+})
 function endTimelineStep(triggerSequence: number | undefined, step: number, endedAt: number) {
   if (triggerSequence === undefined) mainStepEndedAt.set(step, endedAt)
   else triggerStepEndedAt.set(triggerKey(triggerSequence, step), endedAt)
@@ -1545,9 +1847,7 @@ function endTimelineStep(triggerSequence: number | undefined, step: number, ende
     }
     if (action.mediaActionKey) {
       completedMediaActions.set(action.mediaActionKey, endedAt)
-      const timer = mediaActionEndTimers.get(action.mediaActionKey)
-      if (timer) clearTimeout(timer)
-      mediaActionEndTimers.delete(action.mediaActionKey)
+      clearMediaActionEnd(action.mediaActionKey)
     }
   })
 }
@@ -1607,35 +1907,45 @@ function cancelTimelineUpdates() {
 function scheduleTimelineUpdate() {
   cancelTimelineUpdates()
   if (props.thumbnail && !props.playbackPreview) return
-  const nextTimingNodeTriggerAt = runTimingNodeTriggeredAnimations(animationClock.value)
   runTimedMediaActions()
   const now = animationClock.value
+  syncExclusiveMediaPlayback(now)
+  const exclusiveActive = exclusiveTimelineRanges.value.some(range => range.startAt <= now && now < range.endAt)
+  const nextTimingNodeTriggerAt = exclusiveActive ? Infinity : runTimingNodeTriggeredAnimations(now)
   if (reduceMotion.value) {
     const nextScheduledAt = timelineActions.value.reduce((next, action) => {
       if (action.effect !== 'media') return next
       const startedAt = timelineStart(action)
-      return startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY ? next : Math.min(next, startedAt + action.delayMs)
+      if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY) return next
+      return Math.min(next, now + Math.max(0, startedAt + action.delayMs - timelineNow(action)))
     }, nextTimingNodeTriggerAt)
-    if (Number.isFinite(nextScheduledAt) && nextScheduledAt > now) {
+    const nextExclusiveBoundary = exclusiveTimelineRanges.value.reduce((next, range) => {
+      const boundary = range.startAt > now ? range.startAt : range.endAt > now ? range.endAt : Infinity
+      return Math.min(next, boundary)
+    }, Infinity)
+    const nextScheduledTime = Math.min(nextScheduledAt, nextExclusiveBoundary)
+    if (Number.isFinite(nextScheduledTime) && nextScheduledTime > now) {
       animationTimer = setTimeout(() => {
         animationTimer = undefined
         animationClock.value = performance.now()
         scheduleTimelineUpdate()
-      }, Math.max(0, nextScheduledAt - now))
+      }, Math.max(0, nextScheduledTime - now))
     }
     return
   }
   let nextStart = nextTimingNodeTriggerAt
-  let hasActiveAnimation = false
+  let hasActiveAnimation = exclusiveActive
   for (const action of timelineActions.value) {
     const startedAt = timelineStart(action)
     if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY) continue
     const stoppedAt = timelineEnd(action)
-    if (stoppedAt !== undefined && stoppedAt <= now) continue
+    const actionNow = timelineNow(action)
+    const actionStop = stoppedAt === undefined ? undefined : timelineTimeAt(action, stoppedAt)
+    if (actionStop !== undefined && actionStop <= actionNow) continue
     const start = startedAt + action.delayMs
-    const end = Math.min(start + animationScheduleDuration(action), stoppedAt ?? Infinity)
-    if (start > now) nextStart = Math.min(nextStart, start)
-    else if (end > now) hasActiveAnimation = true
+    const end = Math.min(start + animationScheduleDuration(action), actionStop ?? Infinity)
+    if (start > actionNow) nextStart = Math.min(nextStart, now + start - actionNow)
+    else if (end > actionNow) hasActiveAnimation = true
   }
   const update = () => {
     animationFrame = 0
@@ -1659,9 +1969,11 @@ function beginSlideTimeline(step: number) {
   invalidMediaFadeIds.value = []
   blockedMediaPlaybackIds.value = []
   executedMediaActions.clear()
+  scheduledMediaActions.clear()
+  startedMediaActions.clear()
   completedMediaActions.clear()
-  for (const timer of mediaActionEndTimers.values()) clearTimeout(timer)
-  mediaActionEndTimers.clear()
+  endedMediaTargets.clear()
+  for (const actionKey of mediaActionEndTimers.keys()) clearMediaActionEnd(actionKey)
   automaticStartedAt = now
   stepStartedAt = new Map(Array.from({ length: step }, (_, index) => [index, Number.NEGATIVE_INFINITY]))
   mainStepEndedAt.clear()
@@ -1670,6 +1982,8 @@ function beginSlideTimeline(step: number) {
   triggerStepEndedAt.clear()
   triggerPlaybackByKey.clear()
   firedTimingNodeTriggers.clear()
+  triggerConditionDueAt.clear()
+  pendingTriggerConditions.clear()
   animationClock.value = now
   scheduleTimelineUpdate()
 }
@@ -1729,6 +2043,7 @@ watch([() => props.slide.id, () => props.animationStep], ([slideId, step], [oldS
     autoFitDimensions.clear()
     normalAutoFitScales.clear()
     textEllipsisLineCounts.clear()
+    textAnchorCenterOffsets.clear()
     beginSlideTimeline(step)
     void nextTick(scheduleShapeAutoFit)
     return
@@ -1738,10 +2053,13 @@ watch([() => props.slide.id, () => props.animationStep], ([slideId, step], [oldS
     if (step === oldStep + 1) runSlideTriggeredAnimations('onNext')
     const now = performance.now()
     const previousStep = oldStep - 1
-    if (previousStep >= 0 && !props.slide.animationSequence?.concurrent && props.slide.animationSequence?.nextAction !== 'seek') {
+    const stepSequence = previousStep >= 0 ? props.slide.animationStepSequences?.[previousStep] : undefined
+    const concurrent = stepSequence?.concurrent ?? props.slide.animationSequence?.concurrent
+    const nextAction = stepSequence?.nextAction ?? props.slide.animationSequence?.nextAction
+    if (previousStep >= 0 && !concurrent && nextAction !== 'seek') {
       endTimelineStep(undefined, previousStep, now)
     }
-    if (props.slide.animationSequence?.nextAction === 'seek' && oldStep > 0) {
+    if (nextAction === 'seek' && oldStep > 0) {
       const startedAt = stepStartedAt.get(previousStep)
       const naturalEnd = Math.max(0, ...(props.slide.animationSteps?.[previousStep] || []).map(action => action.delayMs + naturalAnimationDuration(action)))
       if (startedAt !== undefined && startedAt !== Number.NEGATIVE_INFINITY) stepStartedAt.set(previousStep, Math.min(startedAt, now - naturalEnd))
@@ -1749,8 +2067,14 @@ watch([() => props.slide.id, () => props.animationStep], ([slideId, step], [oldS
     stepStartedAt.set(oldStep, now)
   } else if (step < oldStep) {
     if (step === oldStep - 1) runSlideTriggeredAnimations('onPrev')
-    props.slide.triggeredAnimations?.forEach((sequence, index) => {
-      if (sequence.trigger.type === 'timeNode' && sequence.trigger.sourceStep !== undefined && sequence.trigger.sourceStep >= step) firedTimingNodeTriggers.delete(index)
+    props.slide.triggeredAnimations?.forEach((sequence, sequenceIndex) => {
+      sequence.conditions.forEach((condition, conditionIndex) => {
+        if (condition.type !== 'timeNode' || condition.sourceStep === undefined || condition.sourceStep < step) return
+        const key = triggerConditionKey(sequenceIndex, conditionIndex)
+        firedTimingNodeTriggers.delete(key)
+        triggerConditionDueAt.delete(key)
+        pendingTriggerConditions.delete(key)
+      })
     })
     for (const startedStep of stepStartedAt.keys()) {
       if (startedStep >= step) {
@@ -1772,12 +2096,13 @@ onUnmounted(() => {
   document.fonts.removeEventListener('loadingdone', onFontsLoaded)
   cancelAnimationFrame(autoFitFrame)
   textEllipsisLineCounts.clear()
+  textAnchorCenterOffsets.clear()
   motionPreference?.removeEventListener('change', onMotionPreferenceChange)
   cancelTimelineUpdates()
   for (const frame of mediaPlaybackFrames.values()) cancelAnimationFrame(frame)
   mediaPlaybackFrames.clear()
-  for (const timer of mediaActionEndTimers.values()) clearTimeout(timer)
-  mediaActionEndTimers.clear()
+  for (const actionKey of mediaActionEndTimers.keys()) clearMediaActionEnd(actionKey)
+  exclusivePausedMedia.clear()
 })
 
 function onMotionPreferenceChange(event: MediaQueryListEvent) {
@@ -1832,7 +2157,8 @@ function elementStyle(element: PptxElement): CSSProperties {
   const fillOn = animationOnOff(element, 'fill.on')
   const strokeOn = animationOnOff(element, 'stroke.on')
   const shadowOn = animationOnOff(element, 'shadow.on')
-  const shadowColors = shadows.map(shadow => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity'))))
+  const shadowBlurScale = element.kind === 'shape' && element.geometry === 'ellipse' ? 0.5 : 1
+  const shadowColors = shadows.map(shadow => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')), shadow.inset ? 1 : shadowBlurScale))
   const animatedFill = animationColor(element, 'fillcolor')
   const fill = animatedFill || element.fill
   const fillOpacity = animationOpacity(element, 'fill.opacity')
@@ -1872,9 +2198,7 @@ function usesSvgOutline(element: PptxElement): boolean {
 }
 
 function usesSvgPolygon(element: PptxElement): boolean {
-  if (element.kind === 'shape' && ['leftBracket', 'rightBracket', 'bracketPair', 'leftBrace', 'rightBrace', 'bracePair'].includes(element.geometry)) return true
-  if (element.kind === 'shape' && ['cube', 'plaque', 'frame', 'halfFrame', 'cornerTabs', 'plaqueTabs', 'squareTabs', 'donut', 'pie', 'chord', 'arc', 'blockArc', 'pieWedge'].includes(element.geometry)) return true
-  return element.kind === 'shape' && ['plus', 'mathMinus', 'mathEqual', 'mathPlus', 'mathDivide', 'mathMultiply', 'mathNotEqual', 'round1Rect', 'round2DiagRect', 'round2SameRect', 'snipRoundRect', 'snip1Rect', 'snip2DiagRect', 'snip2SameRect', 'homePlate', 'nonIsoscelesTrapezoid', 'heptagon', 'decagon', 'leftRightArrow', 'upDownArrow', 'upArrow', 'downArrow', 'bentUpArrow', 'quadArrow', 'leftRightUpArrow', 'rightArrow', 'leftArrow', 'notchedRightArrow', 'heart', 'lightningBolt', 'triangle', 'rtTriangle', 'diamond', 'flowChartDecision', 'flowChartSort', 'flowChartCollate', 'flowChartPunchedCard', 'flowChartOfflineStorage', 'flowChartOnlineStorage', 'flowChartPunchedTape', 'flowChartMagneticDisk', 'flowChartMagneticDrum', 'flowChartMagneticTape', 'flowChartMultidocument', 'flowChartOffpageConnector', 'flowChartDocument', 'flowChartManualInput', 'flowChartManualOperation', 'flowChartInputOutput', 'flowChartPreparation', 'flowChartTerminator', 'flowChartPredefinedProcess', 'flowChartExtract', 'flowChartMerge', 'parallelogram', 'trapezoid', 'hexagon', 'octagon', 'pentagon', 'star4', 'star5', 'star6', 'star7', 'star8', 'star10', 'star12', 'star16', 'star24', 'star32', 'dodecagon', 'chevron'].includes(element.geometry)
+  return element.kind === 'shape' && isSvgPolygonGeometry(element.geometry)
 }
 
 function presetBracketBracePaths(element: PptxElement): [string, string] {
@@ -2686,16 +3010,20 @@ function presetOutlinePath(element: PptxElement): string {
 function customGeometryFill(element: PptxElement, path: NonNullable<PptxElement['customPaths']>[number]): string {
   if (!path.fill || !animationOnOff(element, 'fill.on')) return 'none'
   const animatedFill = animationColor(element, 'fillcolor')
-  const patternColors = isPatternFillCss(element.fill) ? [...element.fill.matchAll(/#[\da-f]{6}\b|rgba?\([^)]*\)/gi)].map(match => match[0]) : []
-  const patternFallback = patternColors.filter(color => !/^rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/i.test(color)).at(-1)
   const brightness = customPathBrightness(path.fillMode)
-  if (!animatedFill && patternFallback) return applyColorOpacity(patternFallback, animationOpacity(element, 'fill.opacity'), brightness)
+  if (!animatedFill && isPatternFillCss(element.fill)) return `url(#${customGeometryPatternId(element, path.fillMode)})`
   if (!animatedFill && /^(?:linear|radial)-gradient\(/i.test(element.fill)) return `url(#${customGradientId(element, 'fill', path.fillMode)})`
   return applyColorOpacity(animatedFill || element.fill, animationOpacity(element, 'fill.opacity'), brightness)
 }
 
+function customGeometryFillOpacity(element: PptxElement, path: NonNullable<PptxElement['customPaths']>[number]): number | undefined {
+  if (!path.fill || !animationOnOff(element, 'fill.on') || animationColor(element, 'fillcolor')) return undefined
+  return isPatternFillCss(element.fill) ? animationOpacity(element, 'fill.opacity') : undefined
+}
+
 function customPathBrightness(mode: NonNullable<PptxElement['customPaths']>[number]['fillMode']): number {
   // OOXML names the modes; use LibreOffice's 20%/40% blends pending Office screenshot calibration.
+  // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.pathfillmodevalues?view=openxml-3.0.1
   // https://github.com/LibreOffice/core/blob/master/svx/source/customshapes/EnhancedCustomShape2d.cxx
   return mode ? { lighten: 0.4, lightenLess: 0.2, darken: -0.4, darkenLess: -0.2 }[mode] : 0
 }
@@ -2708,6 +3036,7 @@ function customGeometryStroke(element: PptxElement, path: NonNullable<PptxElemen
   if (!path.stroke || !animationOnOff(element, 'stroke.on')) return 'none'
   const animatedStroke = animationColor(element, 'stroke.color')
   const strokeWidth = animationStrokeWidth(element)
+  if (strokeWidth > 0 && !animatedStroke && element.strokePattern) return `url(#${customGeometryStrokePatternId(element)})`
   if (path.stroke && strokeWidth > 0 && !animatedStroke && /^(?:linear|radial)-gradient\(/i.test(element.stroke)) return `url(#${customGradientId(element, 'stroke')})`
   const stroke = applyColorOpacity(animatedStroke || element.stroke, animationOpacity(element, 'stroke.opacity'))
   return path.stroke && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient') ? stroke : 'none'
@@ -2715,6 +3044,19 @@ function customGeometryStroke(element: PptxElement, path: NonNullable<PptxElemen
 
 function customGradientId(element: PptxElement, kind: 'fill' | 'stroke', mode?: NonNullable<PptxElement['customPaths']>[number]['fillMode']): string {
   return `${customGradientScope}-${kind}-${element.id.replace(/[^a-zA-Z0-9_-]/g, '_')}${mode ? `-${mode}` : ''}`
+}
+
+function customGeometryPatternModes(element: PptxElement) {
+  if (!isPatternFillCss(element.fill)) return []
+  return [...new Set([undefined, ...(element.customPaths?.flatMap(path => path.fillMode ? [path.fillMode] : []) || [])])]
+}
+
+function customGeometryPatternId(element: PptxElement, mode?: NonNullable<PptxElement['customPaths']>[number]['fillMode']): string {
+  return `${customGradientScope}-pattern-${element.id.replace(/[^a-zA-Z0-9_-]/g, '_')}${mode ? `-${mode}` : ''}`
+}
+
+function customGeometryStrokePatternId(element: PptxElement): string {
+  return `${customGradientScope}-stroke-pattern-${element.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`
 }
 
 function customGradientFocusClipId(element: PptxElement, pathIndex: number): string {
@@ -2855,26 +3197,16 @@ function customGeometryStrokeStyle(element: PptxElement): CSSProperties {
   // DrawingML custom dash entries are length ratios of the rendered pen width.
   // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.presetlinedashvalues?view=openxml-3.0.1
   // https://www.w3.org/TR/svg-strokes/
-  const patterns: Record<string, number[]> = {
-    dot: [1, 3], sysDot: [1, 1], dash: [4, 3], sysDash: [3, 1], lgDash: [8, 3],
-    dashDot: [4, 3, 1, 3], sysDashDot: [3, 1, 1, 1], lgDashDot: [8, 3, 1, 3],
-    lgDashDotDot: [8, 3, 1, 3, 1, 3], sysDashDotDot: [3, 1, 1, 1, 1, 1],
-  }
   const strokeDash = animationStrokeDash(element)
-  const pattern = Array.isArray(strokeDash) ? strokeDash : patterns[strokeDash || '']
   const strokeWidth = animationStrokeWidth(element) * scale.value
   const cap = element.strokeCap || 'butt'
+  const pattern = svgStrokeDashPattern(strokeDash, cap)
   // Office presets include round/square caps; custom dashes include round caps only.
   // SVG adds caps; sub-width custom round dashes retain the warned pen-width dot limit.
   // https://github.com/LibreOffice/core/blob/master/oox/source/drawingml/lineproperties.cxx
-  const custom = Array.isArray(strokeDash)
-  const capLength = cap === 'round' || (!custom && cap === 'square') ? 1 : 0
   return {
-    ...(pattern ? { strokeDasharray: pattern.map((length, index) => {
-      const extension = Math.min(capLength, pattern[index % 2 ? index - 1 : index]!)
-      return `${(length + (index % 2 ? extension : -extension)) * strokeWidth}px`
-    }).join(' ') } : {}),
-    strokeOpacity: !animationColor(element, 'stroke.color') && /gradient\(/i.test(element.stroke) ? animationOpacity(element, 'stroke.opacity') : undefined,
+    ...(pattern ? { strokeDasharray: pattern.map(length => `${length * strokeWidth}px`).join(' ') } : {}),
+    strokeOpacity: !animationColor(element, 'stroke.color') && (/gradient\(/i.test(element.stroke) || Boolean(element.strokePattern)) ? animationOpacity(element, 'stroke.opacity') : undefined,
     strokeLinecap: cap,
   }
 }
@@ -2887,11 +3219,14 @@ function cssLineStyle(pattern?: PptxElement['strokeDash']): 'solid' | 'dashed' |
 
 function lineStrokeColor(element: PptxElement): string {
   if (!animationOnOff(element, 'stroke.on')) return 'transparent'
-  return applyColorOpacity(animationColor(element, 'stroke.color') || (element.stroke === 'transparent' ? '#222' : element.stroke), animationOpacity(element, 'stroke.opacity'))
+  const animatedStroke = animationColor(element, 'stroke.color')
+  if (!animatedStroke && element.strokePattern) return `url(#${customGeometryStrokePatternId(element)})`
+  return applyColorOpacity(animatedStroke || (element.stroke === 'transparent' ? '#222' : element.stroke), animationOpacity(element, 'stroke.opacity'))
 }
 
 function lineRenderStyle(element: PptxElement): CSSProperties {
-  return { width: `${Math.max(element.width * scale.value, 1)}px`, height: `${Math.max(element.height * scale.value, 1)}px`, color: lineStrokeColor(element) }
+  const stroke = animationColor(element, 'stroke.color') || (element.stroke === 'transparent' ? '#222' : element.stroke)
+  return { width: `${Math.max(element.width * scale.value, 1)}px`, height: `${Math.max(element.height * scale.value, 1)}px`, color: applyColorOpacity(stroke, animationOpacity(element, 'stroke.opacity')) }
 }
 
 function lineEndId(element: PptxElement, side: 'head' | 'tail'): string {
@@ -2996,19 +3331,67 @@ function animationLineEnd(element: PptxElement, side: 'head' | 'tail'): NonNulla
 function customGeometryStyle(element: PptxElement): CSSProperties {
   const shadows = element.shadows?.length ? element.shadows : element.shadow ? [element.shadow] : []
   const outerShadows = shadows.filter(shadow => !shadow.inset)
-  if (!outerShadows.length || !animationOnOff(element, 'shadow.on')) return {}
+  const innerShadowFilter = customGeometryInnerShadowFilterReference(element)
+  if ((!outerShadows.length && !innerShadowFilter) || !animationOnOff(element, 'shadow.on')) return {}
   return {
-    filter: outerShadows.map(shadow => `drop-shadow(${shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')))})`).join(' '),
+    filter: [
+      innerShadowFilter,
+      ...outerShadows.map(shadow => `drop-shadow(${shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')), 0.5)})`)
+    ].filter((filter): filter is string => Boolean(filter)).join(' ')
   }
 }
 
-function shadowCss(shadow: PptxShadow, color: string): string {
+function customGeometryInnerShadows(element: PptxElement): PptxShadow[] {
+  const shadows = element.shadows?.length ? element.shadows : element.shadow ? [element.shadow] : []
+  return shadows.filter(shadow => shadow.inset)
+}
+
+function customGeometryInnerShadowFilterId(element: PptxElement): string {
+  return `${customGradientScope}-inner-shadow-${element.id}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+function customGeometryInnerShadowFilterReference(element: PptxElement): string | undefined {
+  return customGeometryInnerShadows(element).length && animationOnOff(element, 'shadow.on')
+    ? `url(#${customGeometryInnerShadowFilterId(element)})`
+    : undefined
+}
+
+function customGeometryInnerShadowFilterRegion(element: PptxElement) {
+  let paddingX = 0
+  let paddingY = 0
+  for (const shadow of customGeometryInnerShadows(element)) {
+    const angle = (shadow.angle || 0) * Math.PI / 180
+    const blur = Math.max(0, shadow.blur) * 1.5
+    paddingX = Math.max(paddingX, (Math.abs(Math.cos(angle) * shadow.distance) + blur) / Math.max(1, element.width))
+    paddingY = Math.max(paddingY, (Math.abs(Math.sin(angle) * shadow.distance) + blur) / Math.max(1, element.height))
+  }
+  return {x: -paddingX, y: -paddingY, width: 1 + paddingX * 2, height: 1 + paddingY * 2}
+}
+
+function customGeometryInnerShadowDeviation(element: PptxElement, shadow: PptxShadow): string {
+  const blur = Math.max(0, shadow.blur) / 2
+  return `${blur / Math.max(1, element.width)} ${blur / Math.max(1, element.height)}`
+}
+
+function customGeometryInnerShadowOffset(element: PptxElement, shadow: PptxShadow): {dx: number; dy: number} {
+  const angle = (shadow.angle || 0) * Math.PI / 180
+  return {
+    dx: Math.cos(angle) * shadow.distance / Math.max(1, element.width),
+    dy: Math.sin(angle) * shadow.distance / Math.max(1, element.height)
+  }
+}
+
+function customGeometryInnerShadowColor(element: PptxElement, shadow: PptxShadow): string {
+  return applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity'))
+}
+
+function shadowCss(shadow: PptxShadow, color: string, blurScale = 1): string {
   const angle = (shadow.angle || 0) * Math.PI / 180
   return [
     ...(shadow.inset ? ['inset'] : []),
     Math.cos(angle) * shadow.distance * scale.value + 'px',
     Math.sin(angle) * shadow.distance * scale.value + 'px',
-    shadow.blur * scale.value + 'px',
+    shadow.blur * blurScale * scale.value + 'px',
     color
   ].join(' ')
 }
@@ -3026,9 +3409,14 @@ function imageStyle(element: PptxElement): CSSProperties {
   const hasCropAnimation = animationsByTarget.value.get(element.id)?.some(item => item.effect === 'imageCrop')
   const crop = element.imageCrop || hasCropAnimation ? imageCrop(element) : undefined
   const grayscale = element.kind === 'picture' && imageGrayscale(element)
+  const alphaInverse = element.kind === 'picture' && element.imageAlphaInverse !== undefined ? `url(#${imageAlphaInverseFilterId(element)})` : undefined
+  const effectDagAlphaInverse = element.kind === 'picture' && element.imageEffectDagAlphaInverse !== undefined ? `url(#${imageAlphaInverseFilterId(element, true)})` : undefined
+  const grayscaleFilter = grayscale ? 'grayscale(1)' : undefined
+  const imageEffects = element.imageAlphaInverseAfterGrayscale ? [grayscaleFilter, alphaInverse] : [alphaInverse, grayscaleFilter]
   const filters = [
     imageToneEnabled(element) ? `url(#${imageToneFilterId(element)})` : undefined,
-    grayscale ? 'grayscale(1)' : undefined,
+    ...imageEffects,
+    effectDagAlphaInverse,
   ].filter((filter): filter is string => Boolean(filter))
   const filter = filters.length ? filters.join(' ') : undefined
   if (!crop) return { width: '100%', height: '100%', filter }
@@ -3065,7 +3453,7 @@ function imageCrop(element: PptxElement): NonNullable<PptxElement['imageCrop']> 
 }
 
 function imageGrayscale(element: PptxElement): boolean {
-  let grayscale = false
+  let grayscale = element.imageGrayscale === true
   for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'grayscale') || []) {
     const progress = animationProgress(action)
     if (progress === null || progress < 0) continue
@@ -3107,6 +3495,10 @@ function imageToneEnabled(element: PptxElement): boolean {
 
 function imageToneFilterId(element: PptxElement): string {
   return `${customGradientScope}-image-tone-${element.id}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+function imageAlphaInverseFilterId(element: PptxElement, effectDag = false): string {
+  return (customGradientScope + '-image-alpha-inverse-' + element.id + (effectDag ? '-effect-dag' : '')).replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
 function mediaPlaybackRange(media: HTMLMediaElement, element: PptxElement) {
@@ -3197,10 +3589,18 @@ function updateMediaFadeForEvent(event: Event, element: PptxElement) {
 
 function updateMediaOnPlay(event: Event, element: PptxElement) {
   blockedMediaPlaybackIds.value = blockedMediaPlaybackIds.value.filter(id => id !== element.id)
+  let startedAction = false
+  timelineActions.value.forEach((action, index) => {
+    if (action.effect !== 'media' || !['play', 'togglePause'].includes(action.mediaCommand || '') || action.targetId !== element.id || !action.mediaActionKey || !executedMediaActions.has(index) || startedMediaActions.has(action.mediaActionKey)) return
+    startedMediaActions.set(action.mediaActionKey, performance.now())
+    startedAction = true
+  })
+  syncExclusiveMediaPlayback(performance.now())
   updateMediaPlayback(event, element)
+  if (startedAction) refreshTimeline()
 }
 
-function finishTimedMedia(element: PptxElement, refresh = true) {
+function finishTimedMedia(element: PptxElement, refresh = true, targetEnded = false) {
   const endedAt = performance.now()
   let changed = false
   const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === element.id)
@@ -3212,9 +3612,8 @@ function finishTimedMedia(element: PptxElement, refresh = true) {
   timelineActions.value.forEach((action, index) => {
     if (action.effect !== 'media' || action.targetId !== element.id || !action.mediaActionKey || !executedMediaActions.has(index)) return
     completedMediaActions.set(action.mediaActionKey, endedAt)
-    const timer = mediaActionEndTimers.get(action.mediaActionKey)
-    if (timer) clearTimeout(timer)
-    mediaActionEndTimers.delete(action.mediaActionKey)
+    if (targetEnded) endedMediaTargets.set(action.mediaActionKey, endedAt)
+    clearMediaActionEnd(action.mediaActionKey)
     changed = true
   })
   if (changed && refresh) refreshTimeline()
@@ -3225,9 +3624,11 @@ function runTimedMediaActions() {
     if (action.effect !== 'media' || !action.mediaCommand || executedMediaActions.has(index)) return
     const startedAt = timelineStart(action)
     const stoppedAt = timelineEnd(action)
-    if (stoppedAt !== undefined && startedAt !== undefined && startedAt + action.delayMs >= stoppedAt) return
-    if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY || animationClock.value < startedAt + action.delayMs) return
+    const actionNow = timelineNow(action)
+    if (stoppedAt !== undefined && startedAt !== undefined && startedAt + action.delayMs >= timelineTimeAt(action, stoppedAt)) return
+    if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY || timelineIsPaused(action, animationClock.value) || actionNow < startedAt + action.delayMs) return
     executedMediaActions.add(index)
+    if (action.mediaActionKey) scheduledMediaActions.set(action.mediaActionKey, animationClock.value)
     if (action.mediaCommand === 'stopAudio') {
       emit('stop-all-audio')
       for (const element of props.slide.elements) {
@@ -3244,6 +3645,8 @@ function runTimedMediaActions() {
     const element = props.slide.elements.find(item => item.id === action.targetId)
     const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === action.targetId)
     if (!element || !media) return
+    const startsPlayback = action.mediaCommand === 'play' || action.mediaCommand === 'togglePause' && media.paused
+    if (action.mediaActionKey && (!startsPlayback || !media.paused)) startedMediaActions.set(action.mediaActionKey, performance.now())
     if (action.mediaSlideCount) media.dataset.mediaSlideCount = String(action.mediaSlideCount)
     if (action.mediaVolume !== undefined) media.volume = action.mediaVolume
     if (action.mediaMuted !== undefined) media.muted = action.mediaMuted
@@ -3257,7 +3660,12 @@ function runTimedMediaActions() {
       else apply()
     }
     const play = () => {
-      void media.play().catch(error => {
+      void media.play().then(() => {
+        if (action.mediaActionKey && !startedMediaActions.has(action.mediaActionKey)) {
+          startedMediaActions.set(action.mediaActionKey, performance.now())
+          refreshTimeline()
+        }
+      }).catch(error => {
         if (error instanceof DOMException && error.name === 'NotAllowedError' && !blockedMediaPlaybackIds.value.includes(element.id)) {
           blockedMediaPlaybackIds.value = [...blockedMediaPlaybackIds.value, element.id]
         }
@@ -3268,12 +3676,7 @@ function runTimedMediaActions() {
       else if (media.currentTime < (element.mediaTrim?.startMs || 0) / 1000) seek((element.mediaTrim?.startMs || 0) / 1000)
       play()
       if (action.mediaActionKey && action.mediaDurationMs !== undefined) {
-        media.dataset.mediaActionEndAt = String(performance.now() + action.mediaDurationMs)
-        mediaActionEndTimers.set(action.mediaActionKey, setTimeout(() => {
-          delete media.dataset.mediaActionEndAt
-          media.pause()
-          finishTimedMedia(element)
-        }, action.mediaDurationMs))
+        scheduleMediaActionEnd(action, element, media, action.mediaDurationMs)
       }
     } else if (action.mediaCommand === 'pause') media.pause()
     else if (action.mediaCommand === 'togglePause') {
@@ -3377,7 +3780,7 @@ function animationProgress(action: RenderAnimation, iterationIndex?: number): nu
 
 function completedAnimationRepeats(action: RenderAnimation, iterationIndex?: number): number {
   const cycleDuration = action.durationMs * (action.autoReverse ? 2 : 1)
-  if (!action.rotationAccumulate || action.autoReverse || cycleDuration <= 0) return 0
+  if (!(action.rotationAccumulate || action.scaleAccumulate || action.motionAccumulate) || action.autoReverse || cycleDuration <= 0) return 0
   const totalDuration = animationDuration(action)
   const lastRepeat = Number.isFinite(totalDuration) ? Math.max(0, Math.ceil(totalDuration / cycleDuration) - 1) : Infinity
   const startedAt = timelineStart(action)
@@ -3391,22 +3794,68 @@ function completedAnimationRepeats(action: RenderAnimation, iterationIndex?: num
   return Math.min(lastRepeat, Math.max(0, Math.floor(elapsed / cycleDuration)))
 }
 
+function motionAccumulationOffset(action: RenderAnimation, iterationIndex?: number): [number, number] {
+  if (!action.motionAccumulate) return [0, 0]
+  const points = action.motionPathSamples || action.motionPath
+  const start = points?.[0]
+  const end = points?.[points.length - 1]
+  if (!start || !end) return [0, 0]
+  const repeats = completedAnimationRepeats(action, iterationIndex) * (action.reversePlayback ? -1 : 1)
+  return [(end.x - start.x) * repeats, (end.y - start.y) * repeats]
+}
+
 function animationScale(element: PptxElement): [number, number] {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'scale' && !action.paragraphRange && !action.characterRange && !action.iteration) || []
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => ['scale', 'zoom'].includes(action.effect) && !action.paragraphRange && !action.characterRange && !action.iteration) || []
   let value: [number, number] = [1, 1]
   for (const action of actions) {
     const progress = animationProgress(action)
     if (progress === -2) {
-      value = [1, 1]
+      if (action.scaleAxis === 'x') value = [1, value[1]]
+      else if (action.scaleAxis === 'y') value = [value[0], 1]
+      else value = [1, 1]
       continue
     }
-    if (progress === null || progress < 0 || !action.scaleFrom || !action.scaleTo) continue
-    value = [
-      action.scaleFrom[0] + (action.scaleTo[0] - action.scaleFrom[0]) * progress,
-      action.scaleFrom[1] + (action.scaleTo[1] - action.scaleFrom[1]) * progress,
-    ]
+    if (progress === null || progress < 0) {
+      if (action.effect === 'zoom' && action.direction === 'in' && action.scaleFrom) value = action.scaleFrom
+      continue
+    }
+    if (!action.scaleFrom || !action.scaleTo) continue
+    const animatedScale = animationScaleValue(action, progress)
+    if (action.scaleAxis === 'x') value = [animatedScale[0], value[1]]
+    else if (action.scaleAxis === 'y') value = [value[0], animatedScale[1]]
+    else value = animatedScale
   }
   return value
+}
+
+function animationScaleValue(action: RenderAnimation, progress: number, iterationIndex?: number): [number, number] {
+  const [fromX, fromY] = action.scaleFrom!
+  const [toX, toY] = action.scaleTo!
+  const completedRepeats = action.scaleAccumulate
+    ? completedAnimationRepeats(action, iterationIndex) * (action.reversePlayback ? -1 : 1)
+    : 0
+  const valueAt = (axis: 'x' | 'y', from: number, to: number) => {
+    const frames = action.scaleKeyframes
+    if (!frames?.length || action.scaleAxis !== axis) return from + (to - from) * progress
+    let low = 0
+    let high = frames.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (frames[middle]!.offset < progress) low = middle + 1
+      else high = middle
+    }
+    if (low === 0) return frames[0]!.value
+    if (low === frames.length) return frames.at(-1)!.value
+    const before = frames[low - 1]!
+    const after = frames[low]!
+    if (action.scaleKeyframeMode === 'discrete') return progress === after.offset ? after.value : before.value
+    const ratio = (progress - before.offset) / (after.offset - before.offset)
+    return before.value + (after.value - before.value) * ratio
+  }
+  return [
+    valueAt('x', fromX, toX) + (toX - fromX) * completedRepeats,
+    valueAt('y', fromY, toY) + (toY - fromY) * completedRepeats,
+  ]
 }
 
 function animationRotation(element: PptxElement): number {
@@ -3421,7 +3870,9 @@ function animationRotation(element: PptxElement): number {
     if (progress === null || progress < 0 || action.rotationFrom === undefined || action.rotationTo === undefined) continue
     const delta = action.rotationTo - action.rotationFrom
     const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action)
-    const rotation = action.rotationFrom + delta * progress + repeatOffset
+    const rotation = (action.rotationKeyframes?.length
+      ? animationKeyframeValue(action.rotationKeyframes, action.rotationKeyframeMode, progress)
+      : action.rotationFrom + delta * progress) + repeatOffset
     value = action.rotationRelative || action.rotationAdditive ? value + rotation : rotation
   }
   return value
@@ -3589,8 +4040,8 @@ function textColorAnimationStyle(element: PptxElement, paragraphIndex: number, c
   return { color: animatedRunColor(color, animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)) }
 }
 
-function runHasTextPattern(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): boolean {
-  return Boolean(run.fillPattern) && !animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd)
+function runHasTextFill(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): boolean {
+  return Boolean(run.fillPattern || run.fillGradient) && !animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd)
 }
 
 function textRangeOpacityAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
@@ -3598,7 +4049,7 @@ function textRangeOpacityAnimationStyle(element: PptxElement, paragraphIndex: nu
   return opacity === 1 ? {} : { opacity }
 }
 
-function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, run: PptxElement['paragraphs'][number]['runs'][number], fontScale = element.textFontScale ?? 1, script: ScriptFont = 'latin', separateDecorations = false): CSSProperties {
+function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, run: PptxElement['paragraphs'][number]['runs'][number], fontScale = element.textFontScale ?? 1, script: ScriptFont = 'latin', separateDecorations = false, filterKey = `${paragraphIndex}-${characterStart}-${characterEnd}`): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'fontSize') return false
     const paragraphRange = action.paragraphRange
@@ -3746,6 +4197,10 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
     : underline === undefined && lineThrough === undefined
       ? {}
       : { textDecorationLine: textDecorationLine || 'none' }
+  const filter = [
+    !textShadowChanged || textShadow !== 'none' ? textInnerShadowFilterReference(element, run, paragraphIndex, characterStart, characterEnd, filterKey) : undefined,
+    textEmbossChanged && textEmbossEnabled ? `drop-shadow(-${embossOffset}px -${embossOffset}px 0 rgba(255, 255, 255, 0.65)) drop-shadow(${embossOffset}px ${embossOffset}px 0 rgba(0, 0, 0, 0.65))` : undefined,
+  ].filter(Boolean).join(' ')
   return {
     ...(factor === 1 ? {} : { fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value * factor}px` }),
     ...(weight === undefined ? {} : { fontWeight: weight }),
@@ -3755,7 +4210,7 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
     ...(verticalAlignChanged ? { verticalAlign } : {}),
     ...(textOutlineChanged ? { WebkitTextStroke: textOutline } : {}),
     ...(textShadowChanged ? { textShadow } : {}),
-    ...(textEmbossChanged ? { filter: textEmbossEnabled ? `drop-shadow(-${embossOffset}px -${embossOffset}px 0 rgba(255, 255, 255, 0.65)) drop-shadow(${embossOffset}px ${embossOffset}px 0 rgba(0, 0, 0, 0.65))` : 'none' } : {}),
+    ...(textShadowChanged || textEmbossChanged ? { filter: filter || 'none' } : {}),
   }
 }
 
@@ -3781,14 +4236,13 @@ function textTransformAnimationStyle(element: PptxElement, paragraphIndex: numbe
     }
     if (progress === null || progress < 0) continue
     if (action.effect === 'scale' && action.scaleFrom && action.scaleTo) {
-      scaling = [
-        action.scaleFrom[0] + (action.scaleTo[0] - action.scaleFrom[0]) * progress,
-        action.scaleFrom[1] + (action.scaleTo[1] - action.scaleFrom[1]) * progress,
-      ]
+      scaling = animationScaleValue(action, progress, iterationIndexFor(action, characterStart, characterEnd))
     } else if (action.effect === 'rotation' && action.rotationFrom !== undefined && action.rotationTo !== undefined) {
       const delta = action.rotationTo - action.rotationFrom
       const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action, iterationIndexFor(action, characterStart, characterEnd))
-      const angle = action.rotationFrom + delta * progress + repeatOffset
+      const angle = (action.rotationKeyframes?.length
+        ? animationKeyframeValue(action.rotationKeyframes, action.rotationKeyframeMode, progress)
+        : action.rotationFrom + delta * progress) + repeatOffset
       rotation = action.rotationRelative || action.rotationAdditive ? rotation + angle : angle
     }
   }
@@ -3811,7 +4265,8 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
       : !action.paragraphRange && !action.characterRange && !action.iteration)) || []
   let value: [number, number] = [0, 0]
   for (const action of actions) {
-    const progress = animationProgress(action, textRange ? iterationIndexFor(action, characterStart!, characterEnd!) : undefined)
+    const iterationIndex = textRange ? iterationIndexFor(action, characterStart!, characterEnd!) : undefined
+    const progress = animationProgress(action, iterationIndex)
     if (progress === -2) {
       if (action.motionCoordinateProperty === 'ppt_x') value = [0, value[1]]
       else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], 0]
@@ -3824,7 +4279,8 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
       const from = samples[Math.floor(samplePosition)]!
       const to = samples[Math.ceil(samplePosition)]!
       const ratio = samplePosition - Math.floor(samplePosition)
-      const motion: [number, number] = [from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio]
+      const offset = motionAccumulationOffset(action, iterationIndex)
+      const motion: [number, number] = [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]]
       if (action.motionCoordinateProperty === 'ppt_x') value = [motion[0], value[1]]
       else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], motion[1]]
       else value = motion
@@ -3832,9 +4288,10 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
     }
     const path = action.motionPath
     if (progress === null || progress < 0 || !path?.length) continue
+    const offset = motionAccumulationOffset(action, iterationIndex)
     if (path.length === 1) {
       const point = path[0]
-      if (point) value = [point.x, point.y]
+      if (point) value = [point.x + offset[0], point.y + offset[1]]
       continue
     }
     const distance = (action.motionPathLength || 0) * progress
@@ -3848,12 +4305,12 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
     const from = path[low - 1], to = path[low]
     if (!from) continue
     if (!to) {
-      value = [from.x, from.y]
+      value = [from.x + offset[0], from.y + offset[1]]
       continue
     }
     const span = to.distance - from.distance
     const ratio = span ? (distance - from.distance) / span : 0
-    value = [from.x + (to.x - from.x) * ratio, from.y + (to.y - from.y) * ratio]
+    value = [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]]
   }
   return value
 }
@@ -3885,6 +4342,10 @@ function animationSlide(element: PptxElement, paragraphIndex?: number, character
       : action.slideFrom === 'right' ? [props.width * distance, 0]
         : action.slideFrom === 'top' ? [0, -props.height * distance]
           : action.slideFrom === 'bottom' ? [0, props.height * distance]
+            : action.slideFrom === 'topLeft' ? [-props.width * distance, -props.height * distance]
+              : action.slideFrom === 'topRight' ? [props.width * distance, -props.height * distance]
+                : action.slideFrom === 'bottomLeft' ? [-props.width * distance, props.height * distance]
+                  : action.slideFrom === 'bottomRight' ? [props.width * distance, props.height * distance]
             : [0, 0]
   }
   return value
@@ -3956,10 +4417,12 @@ function animationBlinds(element: PptxElement, paragraphIndex?: number, characte
   const actions = animationsByTarget.value.get(element.id)?.filter(action => {
     if (action.effect !== 'blinds') return false
     if (paragraphIndex !== undefined) {
-      return Boolean(action.paragraphRange && !action.characterRange && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
+      return Boolean(!action.iteration && action.paragraphRange && !action.characterRange && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
     }
     if (characterStart !== undefined && characterEnd !== undefined) {
-      return Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+      const overlaps = Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+      const iteratesCharacter = Boolean(action.iteration && iterationIndexFor(action, characterStart, characterEnd) !== undefined)
+      return overlaps || iteratesCharacter
     }
     return !action.characterRange && !action.paragraphRange
   }) || []
@@ -3969,7 +4432,7 @@ function animationBlinds(element: PptxElement, paragraphIndex?: number, characte
   let orientation = first.blindsOrientation
   let reset = false
   for (const action of actions) {
-    const phase = animationProgress(action)
+    const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
     if (phase === -2) {
       reset = true
       continue
@@ -4178,7 +4641,7 @@ function animationBarn(element: PptxElement, paragraphIndex?: number, characterS
 
 function animationCss(actions: RenderAnimation[] | undefined, characterStart?: number, characterEnd?: number): CSSProperties {
   if (props.thumbnail && !props.playbackPreview || !actions?.length) return {}
-  const visibilityActions = actions.filter(action => ['appear', 'fade', 'wipe', 'strips', 'barn', 'slide', 'visibility'].includes(action.effect))
+  const visibilityActions = actions.filter(action => ['appear', 'fade', 'wipe', 'strips', 'barn', 'slide', 'visibility', 'zoom'].includes(action.effect))
   const first = visibilityActions[0]
   if (!first) return {}
   let opacity = first.effect === 'visibility' || first.effect === 'wipe' || first.effect === 'strips' || first.effect === 'barn' || first.effect === 'slide' || first.direction === 'out' ? 1 : 0
@@ -4212,12 +4675,12 @@ function animationCss(actions: RenderAnimation[] | undefined, characterStart?: n
         ? progress > 0 ? 'visible' : 'hidden'
         : progress >= 1 ? 'hidden' : 'visible'
       opacity = 1
-    } else if (action.effect === 'slide') {
+    } else if (action.effect === 'slide' || action.effect === 'zoom') {
       visibility = action.direction === 'in' || progress < 1 ? 'visible' : 'hidden'
       opacity = 1
     } else {
-      const easedProgress = action.effectProgress === undefined ? 1 - (1 - progress) ** 2 : progress
-      opacity = action.direction === 'in' ? easedProgress : 1 - easedProgress
+      // p:progress defaults to a linear ramp; p:cTn timing has already shaped progress.
+      opacity = action.direction === 'in' ? progress : 1 - progress
       visibility = action.direction === 'in' || progress < 1 ? 'visible' : 'hidden'
     }
   }
@@ -4296,7 +4759,7 @@ function characterAnimationStyle(element: PptxElement, paragraphIndex: number, s
 }
 
 function hasTrigger(elementId: string) {
-  return !props.thumbnail && Boolean(props.slide.triggeredAnimations?.some(sequence => sequence.trigger.type === 'shape' && sequence.trigger.id === elementId))
+  return triggerTargetIds.value.has(elementId)
 }
 
 function triggerSequenceIsActive(index: number, sequence: NonNullable<PptxSlide['triggeredAnimations']>[number], now: number) {
@@ -4307,6 +4770,7 @@ function triggerSequenceIsActive(index: number, sequence: NonNullable<PptxSlide[
     if (startedAt === undefined || !Number.isFinite(startedAt)) return false
     if (endedAt !== undefined && now >= endedAt) return false
     return actions.some(action => {
+      if (!playbackActionEnabled(action)) return false
       const actionStart = startedAt + action.delayMs
       if (now < actionStart) return true
       if (action.effect === 'media' && action.mediaActionKey) {
@@ -4329,7 +4793,7 @@ function startTriggeredAnimations(indices: number[], startedAt = performance.now
   if (!indices.length) return
   for (const index of indices) {
     const sequence = sequences[index]
-    if (!sequence) continue
+    if (!sequence || !triggerSequenceHasEnabledAction(sequence)) continue
     const count = sequence.steps.length
     if (!count) continue
     let step = triggerSteps.get(index) || 0
@@ -4360,42 +4824,107 @@ function startTriggeredAnimations(indices: number[], startedAt = performance.now
 
 function runTimingNodeTriggeredAnimations(now: number): number {
   if (props.thumbnail || props.triggerPlayback !== undefined) return Infinity
-  const due: Array<{index: number; startedAt: number}> = []
   let next = Infinity
-  props.slide.triggeredAnimations?.forEach((sequence, index) => {
-    const trigger = sequence.trigger
-    if (trigger.type !== 'timeNode' || firedTimingNodeTriggers.has(index)) return
-    const sourceStartedAt = trigger.sourceStep === undefined ? automaticStartedAt : stepStartedAt.get(trigger.sourceStep)
-    if (sourceStartedAt === undefined || sourceStartedAt === Number.NEGATIVE_INFINITY) return
-    const sourceEndedAt = trigger.event === 'onEnd' && trigger.sourceStep !== undefined ? mainStepEndedAt.get(trigger.sourceStep) : undefined
-    const startedAt = (sourceEndedAt ?? sourceStartedAt + trigger.sourceDelayMs) + trigger.delayMs
-    if (!Number.isFinite(startedAt)) return
-    if (startedAt > now) next = Math.min(next, startedAt)
-    else {
-      firedTimingNodeTriggers.add(index)
-      due.push({index, startedAt})
-    }
+  props.slide.triggeredAnimations?.forEach((sequence, sequenceIndex) => {
+    if (!triggerSequenceHasEnabledAction(sequence)) return
+    sequence.conditions.forEach((condition, conditionIndex) => {
+      const key = triggerConditionKey(sequenceIndex, conditionIndex)
+      if (condition.type === 'timeNode' && !firedTimingNodeTriggers.has(key)) {
+        const mediaActionTrigger = condition.sourceMediaActionKey !== undefined
+        const sourceStartedAt = mediaActionTrigger ? undefined : condition.sourceStep === undefined ? automaticStartedAt : stepStartedAt.get(condition.sourceStep)
+        const mediaEventAt = mediaActionTrigger
+          ? condition.event === 'begin'
+            ? scheduledMediaActions.get(condition.sourceMediaActionKey!)
+            : condition.event === 'onBegin'
+              ? startedMediaActions.get(condition.sourceMediaActionKey!)
+              : condition.event === 'end'
+                ? completedMediaActions.get(condition.sourceMediaActionKey!)
+                : endedMediaTargets.get(condition.sourceMediaActionKey!)
+          : undefined
+        const sourceEndedAt = !mediaActionTrigger && condition.event === 'onEnd' && condition.sourceStep !== undefined ? mainStepEndedAt.get(condition.sourceStep) : undefined
+        const sourceTime = mediaActionTrigger
+          ? mediaEventAt
+          : sourceStartedAt !== undefined && sourceStartedAt !== Number.NEGATIVE_INFINITY
+            ? sourceEndedAt ?? sourceStartedAt + condition.sourceDelayMs
+            : undefined
+        if (sourceTime !== undefined) {
+          const startedAt = sourceTime + condition.delayMs
+          if (Number.isFinite(startedAt)) {
+            if (startedAt > now) next = Math.min(next, startedAt)
+            else {
+              firedTimingNodeTriggers.add(key)
+              triggerConditionDueAt.set(key, startedAt)
+              pendingTriggerConditions.add(key)
+            }
+          }
+        }
+      }
+      const dueAt = triggerConditionDueAt.get(key)
+      if (pendingTriggerConditions.has(key) && dueAt !== undefined && dueAt > now) next = Math.min(next, dueAt)
+    })
+
+    const pending = sequence.conditions.flatMap((_, conditionIndex) => {
+      const key = triggerConditionKey(sequenceIndex, conditionIndex)
+      const dueAt = triggerConditionDueAt.get(key)
+      return pendingTriggerConditions.has(key) && dueAt !== undefined && dueAt <= now ? [{conditionIndex, dueAt}] : []
+    })
+    if (!pending.length) return
+    const progress = triggerSteps.get(sequenceIndex) || 0
+    const advancing = progress > 0 && progress < sequence.steps.length
+    const conditionTimes = sequence.conditions.map((_, conditionIndex) => triggerConditionDueAt.get(triggerConditionKey(sequenceIndex, conditionIndex)))
+    const allConditionsDue = conditionTimes.every(dueAt => dueAt !== undefined && dueAt <= now)
+    if (!advancing && !allConditionsDue) return
+
+    const startedAt = advancing
+      ? Math.min(...pending.map(condition => condition.dueAt))
+      : Math.max(...conditionTimes as number[])
+    sequence.conditions.forEach((condition, conditionIndex) => {
+      const key = triggerConditionKey(sequenceIndex, conditionIndex)
+      pendingTriggerConditions.delete(key)
+      if (condition.type !== 'timeNode') triggerConditionDueAt.delete(key)
+    })
+    startTriggeredAnimations([sequenceIndex], startedAt, false)
   })
-  for (const trigger of due) startTriggeredAnimations([trigger.index], trigger.startedAt, false)
   return next
+}
+
+function satisfyTriggeredAnimationConditions(matches: (condition: PptxAnimationTriggerCondition, sequenceIndex: number, conditionIndex: number) => boolean) {
+  if (props.thumbnail || props.triggerPlayback !== undefined) return
+  const now = performance.now()
+  let matched = false
+  props.slide.triggeredAnimations?.forEach((sequence, sequenceIndex) => {
+    if (!triggerSequenceHasEnabledAction(sequence)) return
+    sequence.conditions.forEach((condition, conditionIndex) => {
+      if (!matches(condition, sequenceIndex, conditionIndex)) return
+      matched = true
+      const key = triggerConditionKey(sequenceIndex, conditionIndex)
+      if (triggerConditionDueAt.has(key)) return
+      triggerConditionDueAt.set(key, now + condition.delayMs)
+      pendingTriggerConditions.add(key)
+    })
+  })
+  if (matched) {
+    animationClock.value = now
+    scheduleTimelineUpdate()
+  }
 }
 
 function runTriggeredAnimations(event: Event, elementId: string, triggerEvent: 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut') {
   if (props.thumbnail || props.triggerPlayback !== undefined) return
   const sequences = props.slide.triggeredAnimations || []
-  const matching = sequences.flatMap((sequence, index) => sequence.trigger.type === 'shape' && sequence.trigger.id === elementId && sequence.trigger.event === triggerEvent ? [index] : [])
-  if (!matching.length) {
-    if (sequences.some(sequence => sequence.trigger.type === 'shape' && sequence.trigger.id === elementId)) event.stopPropagation()
+  const matching = sequences.some(sequence => triggerSequenceHasEnabledAction(sequence)
+    && sequence.conditions.some(condition => condition.type === 'shape' && condition.id === elementId && condition.event === triggerEvent))
+  if (!matching) {
+    if (sequences.some(sequence => triggerSequenceHasEnabledAction(sequence) && sequence.conditions.some(condition => condition.type === 'shape' && condition.id === elementId))) event.stopPropagation()
     return
   }
   if (triggerEvent === 'onClick' || triggerEvent === 'onDblClick') event.stopPropagation()
-  startTriggeredAnimations(matching)
+  satisfyTriggeredAnimationConditions(condition => condition.type === 'shape' && condition.id === elementId && condition.event === triggerEvent)
 }
 
 function runSlideTriggeredAnimations(triggerEvent: 'onNext' | 'onPrev' | 'onStopAudio') {
   if (props.thumbnail || props.triggerPlayback !== undefined) return
-  const matching = (props.slide.triggeredAnimations || []).flatMap((sequence, index) => sequence.trigger.type === 'slide' && sequence.trigger.event === triggerEvent ? [index] : [])
-  startTriggeredAnimations(matching)
+  satisfyTriggeredAnimationConditions(condition => condition.type === 'slide' && condition.event === triggerEvent)
 }
 
 function runMediaBookmarkAnimations(media: HTMLMediaElement, element: PptxElement, mayTrigger: boolean) {
@@ -4411,14 +4940,14 @@ function runMediaBookmarkAnimations(media: HTMLMediaElement, element: PptxElemen
   lastMediaBookmarkTimes.set(media, currentTime)
   if (mayTrigger && !media.paused && !media.seeking) mediaBookmarkPlaybackStarted.add(media)
   if (!mayTrigger) return
-  const matching = (mediaBookmarkTriggersByMedia.value.get(element.id) || [])
+  const matching = new Set((mediaBookmarkTriggersByMedia.value.get(element.id) || [])
     .filter(trigger => {
       const bookmarkTime = trigger.timeMs / 1000
       return (previousTime ?? 0) < bookmarkTime && currentTime >= bookmarkTime
         || startingAtBeginning && bookmarkTime === 0
     })
-    .map(trigger => trigger.sequenceIndex)
-  startTriggeredAnimations(matching)
+    .map(trigger => triggerConditionKey(trigger.sequenceIndex, trigger.conditionIndex)))
+  if (matching.size) satisfyTriggeredAnimationConditions((_, sequenceIndex, conditionIndex) => matching.has(triggerConditionKey(sequenceIndex, conditionIndex)))
 }
 
 function canActivateHyperlink(hyperlink?: PptxHyperlink): hyperlink is PptxHyperlink {
@@ -4458,8 +4987,8 @@ function onElementKeyActivate(event: Event, elementId: string, hyperlink?: PptxH
     if (event instanceof KeyboardEvent && event.key === 'Enter') onHyperlinkClick(event, hyperlink)
     return
   }
-  const sequence = props.slide.triggeredAnimations?.find(item => item.trigger.type === 'shape' && item.trigger.id === elementId)
-  runTriggeredAnimations(event, elementId, sequence?.trigger.type === 'shape' ? sequence.trigger.event : 'onClick')
+  const condition = props.slide.triggeredAnimations?.flatMap(sequence => sequence.conditions).find(item => item.type === 'shape' && item.id === elementId)
+  runTriggeredAnimations(event, elementId, condition?.type === 'shape' ? condition.event : 'onClick')
 }
 
 function usesRightToLeftColumns(element: PptxElement): boolean {
@@ -4527,6 +5056,20 @@ function textFrameStyle(element: PptxElement): CSSProperties {
   }
 }
 
+function textBoundsStyle(element: PptxElement): CSSProperties {
+  if (!element.textAnchorCenter) return { display: 'contents' }
+  const centeredOffset = textAnchorCenterOffsets.get(`${props.slide.id}:${element.id}`)
+  return {
+    display: (element.textColumnCount ?? 1) > 1 ? 'block' : 'flex',
+    flexDirection: (element.textColumnCount ?? 1) > 1 ? undefined : 'column',
+    width: 'fit-content',
+    maxWidth: '100%',
+    marginLeft: 'auto',
+    marginRight: 'auto',
+    transform: centeredOffset ? `translateX(${centeredOffset}px)` : undefined,
+  }
+}
+
 function effectiveTextFontScale(element: PptxElement): number {
   return normalAutoFitScales.get(`${props.slide.id}:${element.id}`) ?? element.textFontScale ?? 1
 }
@@ -4552,8 +5095,32 @@ function geometryStyle(element: PptxElement): CSSProperties {
 type TextSegment = { text: string; script: ScriptFont; start: number; end: number; separateDecorations?: boolean }
 
 
-function runTextShadowStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties['textShadow'] {
+// shortcut: SVG filters approximate text and irregular-shape inner shadows; calibrate against Office/WPS screenshots before claiming pixel parity.
+function textInnerShadows(run: PptxElement['paragraphs'][number]['runs'][number]): PptxShadow[] {
   const shadows = run.shadows?.length ? run.shadows : run.shadow ? [run.shadow] : []
+  return shadows.filter(shadow => shadow.inset)
+}
+
+function textInnerShadowFilterId(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, filterKey: string): string {
+  return `${customGradientScope}-text-inner-shadow-${element.id}-${filterKey}-${paragraphIndex}-${characterStart}-${characterEnd}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+}
+
+function textInnerShadowFilterReference(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number, filterKey: string): string | undefined {
+  return textInnerShadows(run).length ? `url(#${textInnerShadowFilterId(element, paragraphIndex, characterStart, characterEnd, filterKey)})` : undefined
+}
+
+function textInnerShadowOffset(shadow: PptxShadow): {dx: number; dy: number} {
+  const angle = (shadow.angle || 0) * Math.PI / 180
+  return {dx: Math.cos(angle) * shadow.distance * scale.value, dy: Math.sin(angle) * shadow.distance * scale.value}
+}
+
+function textInnerShadowColor(element: PptxElement, shadow: PptxShadow, paragraphIndex: number, characterStart: number, characterEnd: number): string {
+  const color = animationColor(element, 'shadow.color', paragraphIndex, characterStart, characterEnd) || shadow.color
+  return animatedRunColor(color, animationOpacity(element, 'shadow.opacity', paragraphIndex, characterStart, characterEnd)) || color
+}
+
+function runTextShadowStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties['textShadow'] {
+  const shadows = (run.shadows?.length ? run.shadows : run.shadow ? [run.shadow] : []).filter(shadow => !shadow.inset)
   const glows = run.glows?.length ? run.glows : run.glow ? [run.glow] : []
   const effects = shadows.map(shadow => {
     const shadowColor = animationColor(element, 'shadow.color', paragraphIndex, characterStart, characterEnd) || shadow.color
@@ -4563,10 +5130,27 @@ function runTextShadowStyle(element: PptxElement, run: PptxElement['paragraphs']
   return effects.length ? effects.join(', ') : undefined
 }
 
-function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], script: ScriptFont, fontScale: number, paragraphIndex: number, characterStart: number, characterEnd: number, separateDecorations = false): CSSProperties {
+function cssBackgroundLayerCount(background: string): number {
+  let depth = 0
+  let layers = 1
+  for (const character of background) {
+    if (character === '(') depth++
+    else if (character === ')') depth--
+    else if (character === ',' && depth === 0) layers++
+  }
+  return layers
+}
+
+function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], script: ScriptFont, fontScale: number, paragraphIndex: number, characterStart: number, characterEnd: number, separateDecorations = false, filterKey = `${paragraphIndex}-${characterStart}-${characterEnd}`): CSSProperties {
   const requestedFont = script === 'eastAsia' ? run.fontFamilyEastAsia : script === 'complexScript' ? run.fontFamilyComplexScript : run.fontFamily
   const fillOpacity = animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)
   const strokeOpacity = animationOpacity(element, 'stroke.opacity', paragraphIndex, characterStart, characterEnd)
+  const textFill = run.fillGradient ? applyColorOpacity(run.fillGradient, fillOpacity) : run.fillPattern ? applyColorOpacity(run.fillPattern, fillOpacity) : undefined
+  const highlightColor = run.highlightColor ? applyColorOpacity(run.highlightColor, fillOpacity) : undefined
+  const highlightBackground = textFill && highlightColor ? `linear-gradient(${highlightColor}, ${highlightColor}) border-box, ${textFill}` : undefined
+  const textFillClip = textFill && highlightColor
+    ? `border-box, ${Array(cssBackgroundLayerCount(textFill)).fill('text').join(', ')}`
+    : undefined
   const textDecorationLine = separateDecorations ? run.lineThrough ? 'line-through' : undefined : [run.underline ? 'underline' : undefined, run.lineThrough ? 'line-through' : undefined].filter(Boolean).join(' ')
   const textDecorationStyle = separateDecorations
     ? run.lineThroughStyle
@@ -4579,8 +5163,11 @@ function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['
     letterSpacing: run.letterSpacingPt === undefined ? undefined : `${run.letterSpacingPt * fontScale * EMU_PER_POINT * scale.value}px`,
     verticalAlign: run.baselineOffsetEm === undefined ? undefined : `${run.baselineOffsetEm}em`,
     color: animatedRunColor(run.color, fillOpacity),
-    '--pptx-text-pattern': run.fillPattern ? applyColorOpacity(run.fillPattern, fillOpacity) : undefined,
-    '--pptx-text-pattern-color': animatedRunColor(run.color, fillOpacity),
+    '--pptx-text-fill': textFill,
+    '--pptx-text-fill-color': animatedRunColor(run.color, fillOpacity),
+    '--pptx-text-highlight': highlightColor,
+    '--pptx-text-highlight-background': highlightBackground,
+    '--pptx-text-fill-clip': textFillClip,
     WebkitTextStroke: run.outlineColor !== undefined && run.outlineWidth !== undefined ? `${run.outlineWidth * scale.value}px ${animatedRunColor(run.outlineColor, strokeOpacity)}` : undefined,
     fontWeight: run.bold ? 700 : undefined,
     fontStyle: run.italic ? 'italic' : undefined,
@@ -4590,6 +5177,7 @@ function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['
     textDecorationColor: !separateDecorations && run.underline ? run.underlineColor : undefined,
     textDecorationThickness: !separateDecorations && run.underline && run.underlineThicknessEmu ? `${run.underlineThicknessEmu * scale.value}px` : undefined,
     textShadow: runTextShadowStyle(element, run, paragraphIndex, characterStart, characterEnd),
+    filter: textInnerShadowFilterReference(element, run, paragraphIndex, characterStart, characterEnd, filterKey),
   }
 }
 
@@ -4705,6 +5293,7 @@ function paragraphStyle(paragraph: PptxParagraph, fontScale = 1, lineSpaceReduct
     // Keep paragraph bidi direction separate from the multicol container's direction.
     // https://www.w3.org/TR/css-writing-modes-4/#direction
     direction: paragraph.direction ?? fallbackDirection,
+    tabSize: paragraph.tabStopInterval === undefined ? undefined : `${paragraph.tabStopInterval * scale.value}px`,
     marginLeft: paragraph.marginLeft === undefined ? undefined : `${paragraph.marginLeft * scale.value}px`,
     marginRight: paragraph.marginRight === undefined ? undefined : `${paragraph.marginRight * scale.value}px`,
     textIndent: paragraph.indent === undefined ? undefined : `${paragraph.indent * scale.value}px`,
@@ -4730,18 +5319,21 @@ function tableCellStyle(cell: PptxTableCell): CSSProperties {
 
 function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperties {
   const columnCount = cell.textColumnCount ?? 1
-  return columnCount > 1 || cell.textAutoFitDynamic ? {
-    height: rowHeight > 0 ? `${Math.max(0, rowHeight - cell.margins.top - cell.margins.bottom) * scale.value}px` : '100%',
-    boxSizing: 'border-box',
-    minHeight: 0,
-    overflow: 'hidden',
-    ...(columnCount > 1 ? {
-      columnCount,
-      columnGap: `${(cell.textColumnSpacing ?? 0) * scale.value}px`,
-      columnFill: 'auto',
-      direction: cell.textColumnsRightToLeft ? 'rtl' : undefined,
+  return {
+    ...(columnCount > 1 || cell.textAutoFitDynamic ? {
+      height: rowHeight > 0 ? `${Math.max(0, rowHeight - cell.margins.top - cell.margins.bottom) * scale.value}px` : '100%',
+      boxSizing: 'border-box',
+      minHeight: 0,
+      overflow: 'hidden',
+      ...(columnCount > 1 ? {
+        columnCount,
+        columnGap: `${(cell.textColumnSpacing ?? 0) * scale.value}px`,
+        columnFill: 'auto',
+        direction: cell.textColumnsRightToLeft ? 'rtl' : undefined,
+      } : {}),
     } : {}),
-  } : {}
+    ...(cell.textAnchorCenter ? { width: 'fit-content', maxWidth: '100%', marginLeft: 'auto', marginRight: 'auto' } : {}),
+  }
 }
 </script>
 
@@ -4752,7 +5344,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
     :class="{ 'is-thumbnail': thumbnail }"
     :style="frameStyle"
     :role="hasInteractiveMedia ? 'group' : 'img'"
-    :aria-label="`Slide ${number}`"
+    :aria-label="t('slideNumber', { number })"
   >
     <div
       v-for="element in slide.elements"
@@ -4771,7 +5363,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
       }"
       :role="canActivateHyperlink(element.hyperlink) ? 'link' : hasTrigger(element.id) ? 'button' : undefined"
       :tabindex="canActivateHyperlink(element.hyperlink) || hasTrigger(element.id) ? 0 : undefined"
-      :aria-label="element.hyperlink?.tooltip || (hasTrigger(element.id) ? `Play animation from ${element.name}` : undefined)"
+      :aria-label="element.hyperlink?.tooltip || (hasTrigger(element.id) ? t('playAnimationFrom', { name: element.name }) : undefined)"
       :data-pptx-hyperlink="canActivateHyperlink(element.hyperlink) ? JSON.stringify(element.hyperlink) : undefined"
       :style="[elementStyle(element), geometryStyle(element), animationStyle(element)]"
       :title="element.hyperlink?.tooltip || element.name"
@@ -4783,24 +5375,54 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
     >
       <svg v-if="usesSvgOutline(element)" class="preset-outline" viewBox="0 0 1000 1000" preserveAspectRatio="none" :style="usesSvgPolygon(element) ? customGeometryStyle(element) : undefined" aria-hidden="true">
         <defs>
+          <filter v-if="usesSvgPolygon(element) && customGeometryInnerShadows(element).length && animationOnOff(element, 'shadow.on')" :id="customGeometryInnerShadowFilterId(element)" v-bind="customGeometryInnerShadowFilterRegion(element)" filterUnits="objectBoundingBox" primitiveUnits="objectBoundingBox" color-interpolation-filters="sRGB">
+            <template v-for="(shadow, shadowIndex) in customGeometryInnerShadows(element)" :key="shadowIndex">
+              <feGaussianBlur in="SourceAlpha" :stdDeviation="customGeometryInnerShadowDeviation(element, shadow)" :result="'custom-inner-blur-' + shadowIndex" />
+              <feOffset :in="'custom-inner-blur-' + shadowIndex" :dx="customGeometryInnerShadowOffset(element, shadow).dx" :dy="customGeometryInnerShadowOffset(element, shadow).dy" :result="'custom-inner-offset-' + shadowIndex" />
+              <feComposite in="SourceAlpha" :in2="'custom-inner-offset-' + shadowIndex" operator="out" :result="'custom-inner-mask-' + shadowIndex" />
+              <feFlood :flood-color="customGeometryInnerShadowColor(element, shadow)" :result="'custom-inner-color-' + shadowIndex" />
+              <feComposite :in="'custom-inner-color-' + shadowIndex" :in2="'custom-inner-mask-' + shadowIndex" operator="in" :result="'custom-inner-shadow-' + shadowIndex" />
+            </template>
+            <feMerge>
+              <feMergeNode v-for="(_, shadowIndex) in customGeometryInnerShadows(element)" :key="shadowIndex" :in="'custom-inner-shadow-' + shadowIndex" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
           <template v-for="gradient in customGeometryGradients(element).filter(item => usesSvgPolygon(element) || item.id === customGradientId(element, 'stroke'))" :key="gradient.id">
             <linearGradient v-if="gradient.kind === 'linear'" :id="gradient.id" gradientUnits="userSpaceOnUse" :x1="gradient.x1" :y1="gradient.y1" :x2="gradient.x2" :y2="gradient.y2"><stop v-for="(stop, index) in gradient.stops" :key="index" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></linearGradient>
             <radialGradient v-else :id="gradient.id" gradientUnits="userSpaceOnUse" :cx="gradient.cx" :cy="gradient.cy" :r="gradient.r" :fx="gradient.fx" :fy="gradient.fy" :fr="gradient.fr" :gradientTransform="gradient.gradientTransform" :color-interpolation="gradient.colorInterpolation"><stop v-for="(stop, index) in gradient.stops" :key="index" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></radialGradient>
           </template>
+          <pattern v-for="mode in customGeometryPatternModes(element)" :key="mode || 'norm'" :id="customGeometryPatternId(element, mode)" patternUnits="userSpaceOnUse" width="1000" height="1000"><foreignObject width="1000" height="1000"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%" :style="{ background: applyColorOpacity(element.fill, 1, customPathBrightness(mode)) }" /></foreignObject></pattern>
+          <pattern v-if="element.strokePattern" :id="customGeometryStrokePatternId(element)" patternUnits="userSpaceOnUse" width="1000" height="1000"><foreignObject width="1000" height="1000"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%" :style="{ background: element.strokePattern }" /></foreignObject></pattern>
         </defs>
-        <path :d="presetOutlinePath(element)" :fill="usesSvgPolygon(element) ? customGeometryFill(element, { d: '', fill: true, stroke: true }) : 'none'" :stroke="presetOutlineDetailPaths(element).length ? 'none' : customGeometryStroke(element, { d: '', fill: false, stroke: true })" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
+        <path :d="presetOutlinePath(element)" :fill="usesSvgPolygon(element) ? customGeometryFill(element, { d: '', fill: true, stroke: true }) : 'none'" :fill-opacity="usesSvgPolygon(element) ? customGeometryFillOpacity(element, { d: '', fill: true, stroke: true }) : undefined" :stroke="presetOutlineDetailPaths(element).length ? 'none' : customGeometryStroke(element, { d: '', fill: false, stroke: true })" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
         <path v-for="(detailPath, index) in presetOutlineDetailPaths(element)" :key="index" :d="detailPath" fill="none" :stroke="customGeometryStroke(element, { d: detailPath, fill: false, stroke: true })" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
       </svg>
       <svg v-if="element.kind === 'shape' && element.customPaths?.length" class="custom-geometry" viewBox="0 0 1000 1000" preserveAspectRatio="none" :style="customGeometryStyle(element)" aria-hidden="true">
         <defs>
+          <filter v-if="customGeometryInnerShadows(element).length && animationOnOff(element, 'shadow.on')" :id="customGeometryInnerShadowFilterId(element)" v-bind="customGeometryInnerShadowFilterRegion(element)" filterUnits="objectBoundingBox" primitiveUnits="objectBoundingBox" color-interpolation-filters="sRGB">
+            <template v-for="(shadow, shadowIndex) in customGeometryInnerShadows(element)" :key="shadowIndex">
+              <feGaussianBlur in="SourceAlpha" :stdDeviation="customGeometryInnerShadowDeviation(element, shadow)" :result="'custom-inner-blur-' + shadowIndex" />
+              <feOffset :in="'custom-inner-blur-' + shadowIndex" :dx="customGeometryInnerShadowOffset(element, shadow).dx" :dy="customGeometryInnerShadowOffset(element, shadow).dy" :result="'custom-inner-offset-' + shadowIndex" />
+              <feComposite in="SourceAlpha" :in2="'custom-inner-offset-' + shadowIndex" operator="out" :result="'custom-inner-mask-' + shadowIndex" />
+              <feFlood :flood-color="customGeometryInnerShadowColor(element, shadow)" :result="'custom-inner-color-' + shadowIndex" />
+              <feComposite :in="'custom-inner-color-' + shadowIndex" :in2="'custom-inner-mask-' + shadowIndex" operator="in" :result="'custom-inner-shadow-' + shadowIndex" />
+            </template>
+            <feMerge>
+              <feMergeNode v-for="(_, shadowIndex) in customGeometryInnerShadows(element)" :key="shadowIndex" :in="'custom-inner-shadow-' + shadowIndex" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
           <template v-for="gradient in customGeometryGradients(element)" :key="gradient.id">
             <linearGradient v-if="gradient.kind === 'linear'" :id="gradient.id" gradientUnits="userSpaceOnUse" :x1="gradient.x1" :y1="gradient.y1" :x2="gradient.x2" :y2="gradient.y2"><stop v-for="(stop, stopIndex) in gradient.stops" :key="stopIndex" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></linearGradient>
             <radialGradient v-else :id="gradient.id" gradientUnits="userSpaceOnUse" :cx="gradient.cx" :cy="gradient.cy" :r="gradient.r" :fx="gradient.fx" :fy="gradient.fy" :fr="gradient.fr" :gradientTransform="gradient.gradientTransform" :color-interpolation="gradient.colorInterpolation"><stop v-for="(stop, stopIndex) in gradient.stops" :key="stopIndex" :offset="stop.offset" :stop-color="stop.color" :stop-opacity="stop.opacity" /></radialGradient>
           </template>
+          <pattern v-for="mode in customGeometryPatternModes(element)" :key="mode || 'norm'" :id="customGeometryPatternId(element, mode)" patternUnits="userSpaceOnUse" width="1000" height="1000"><foreignObject width="1000" height="1000"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%" :style="{ background: applyColorOpacity(element.fill, 1, customPathBrightness(mode)) }" /></foreignObject></pattern>
+          <pattern v-if="element.strokePattern" :id="customGeometryStrokePatternId(element)" patternUnits="userSpaceOnUse" width="1000" height="1000"><foreignObject width="1000" height="1000"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%" :style="{ background: element.strokePattern }" /></foreignObject></pattern>
           <template v-for="(path, pathIndex) in element.customPaths" :key="`focus-${pathIndex}`"><clipPath v-if="customGeometryFillFocus(element, path)" :id="customGradientFocusClipId(element, pathIndex)" clipPathUnits="userSpaceOnUse"><path :d="path.d" /></clipPath></template>
         </defs>
         <template v-for="(path, pathIndex) in element.customPaths" :key="pathIndex">
-          <path :d="path.d" :fill="customGeometryFill(element, path)" :stroke="customGeometryStroke(element, path)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
+          <path :d="path.d" :fill="customGeometryFill(element, path)" :fill-opacity="customGeometryFillOpacity(element, path)" :stroke="customGeometryStroke(element, path)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" vector-effect="non-scaling-stroke" />
           <template v-for="focus in [customGeometryFillFocus(element, path)]" :key="`focus-${pathIndex}`">
             <ellipse v-if="focus?.kind === 'ellipse'" :cx="focus.cx" :cy="focus.cy" :rx="focus.rx" :ry="focus.ry" :fill="focus.color" :clip-path="`url(#${customGradientFocusClipId(element, pathIndex)})`" />
             <rect v-else-if="focus" :x="focus.x" :y="focus.y" :width="focus.width" :height="focus.height" :fill="focus.color" :clip-path="`url(#${customGradientFocusClipId(element, pathIndex)})`" />
@@ -4808,26 +5430,27 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         </template>
       </svg>
       <div v-if="element.kind === 'video' && element.mediaUrl && !thumbnail" class="image-viewport">
-        <video class="slide-video" :data-media-id="element.id" :data-media-slide-count="mediaSlideCounts.get(element.id) || undefined" :src="element.mediaUrl" :poster="element.imageUrl" controls playsinline preload="metadata" :aria-label="element.name" :style="imageStyle(element)" @loadedmetadata="updateMediaPlayback($event, element)" @seeking="updateMediaPlayback($event, element)" @timeupdate="updateMediaPlayback($event, element)" @play="updateMediaOnPlay($event, element)" @pause="updateMediaFadeForEvent($event, element)" @ended="finishTimedMedia(element)" @click.stop @pointerdown.stop />
-        <span v-if="invalidMediaTrimIds.includes(element.id)" class="media-warning" role="status">Trim range exceeds media duration; full media is used.</span>
-        <span v-if="invalidMediaFadeIds.includes(element.id)" class="media-warning" role="status">Media fade duration exceeds the playable range; fades are ignored.</span>
-        <span v-if="blockedMediaPlaybackIds.includes(element.id)" class="media-warning" role="status">The browser blocked automatic playback; use the media controls.</span>
+        <video class="slide-video" :data-media-id="element.id" :data-media-slide-count="mediaSlideCounts.get(element.id) || undefined" :src="element.mediaUrl" :poster="element.imageUrl" controls playsinline preload="metadata" :aria-label="element.name" :style="imageStyle(element)" @loadedmetadata="updateMediaPlayback($event, element)" @seeking="updateMediaPlayback($event, element)" @timeupdate="updateMediaPlayback($event, element)" @play="updateMediaOnPlay($event, element)" @pause="updateMediaFadeForEvent($event, element)" @ended="finishTimedMedia(element, true, true)" @click.stop @pointerdown.stop />
+        <span v-if="invalidMediaTrimIds.includes(element.id)" class="media-warning" role="status">{{ t('trimRangeWarning') }}</span>
+        <span v-if="invalidMediaFadeIds.includes(element.id)" class="media-warning" role="status">{{ t('mediaFadeWarning') }}</span>
+        <span v-if="blockedMediaPlaybackIds.includes(element.id)" class="media-warning" role="status">{{ t('automaticPlaybackBlocked') }}</span>
       </div>
       <div v-else-if="element.kind === 'audio' && element.mediaUrl && !thumbnail" class="audio-viewport">
-        <audio class="slide-audio" :data-media-id="element.id" :data-media-slide-count="mediaSlideCounts.get(element.id) || undefined" :src="element.mediaUrl" controls preload="metadata" :aria-label="element.name" @loadedmetadata="updateMediaPlayback($event, element)" @seeking="updateMediaPlayback($event, element)" @timeupdate="updateMediaPlayback($event, element)" @play="updateMediaOnPlay($event, element)" @pause="updateMediaFadeForEvent($event, element)" @volumechange="updateMediaFadeForEvent($event, element)" @ended="finishTimedMedia(element)" @click.stop @pointerdown.stop />
-        <span v-if="invalidMediaTrimIds.includes(element.id)" class="media-warning" role="status">Trim range exceeds media duration; full media is used.</span>
-        <span v-if="invalidMediaFadeIds.includes(element.id)" class="media-warning" role="status">Media fade duration exceeds the playable range; fades are ignored.</span>
-        <span v-if="blockedMediaPlaybackIds.includes(element.id)" class="media-warning" role="status">The browser blocked automatic playback; use the media controls.</span>
+        <audio class="slide-audio" :data-media-id="element.id" :data-media-slide-count="mediaSlideCounts.get(element.id) || undefined" :src="element.mediaUrl" controls preload="metadata" :aria-label="element.name" @loadedmetadata="updateMediaPlayback($event, element)" @seeking="updateMediaPlayback($event, element)" @timeupdate="updateMediaPlayback($event, element)" @play="updateMediaOnPlay($event, element)" @pause="updateMediaFadeForEvent($event, element)" @volumechange="updateMediaFadeForEvent($event, element)" @ended="finishTimedMedia(element, true, true)" @click.stop @pointerdown.stop />
+        <span v-if="invalidMediaTrimIds.includes(element.id)" class="media-warning" role="status">{{ t('trimRangeWarning') }}</span>
+        <span v-if="invalidMediaFadeIds.includes(element.id)" class="media-warning" role="status">{{ t('mediaFadeWarning') }}</span>
+        <span v-if="blockedMediaPlaybackIds.includes(element.id)" class="media-warning" role="status">{{ t('automaticPlaybackBlocked') }}</span>
       </div>
       <svg v-else-if="element.kind === 'chart' && element.chart" class="slide-chart" :data-chart-type="element.chart.type" :data-radar-style="element.chart.radarStyle" viewBox="0 0 1000 600" preserveAspectRatio="none" role="img" :aria-label="element.chart.title || element.name">
         <title>{{ element.chart.title || element.name }}</title>
         <defs>
           <clipPath :id="`chart-plot-${element.id}`"><polygon :points="`${chartPlot(element.id).left},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top} ${chartPlot(element.id).left + chartPlot(element.id).width},${chartPlot(element.id).top + chartPlot(element.id).height} ${chartPlot(element.id).left},${chartPlot(element.id).top + chartPlot(element.id).height}`" /></clipPath>
           <clipPath v-if="chartVisuals.get(element.id)?.legendClip" :id="chartVisuals.get(element.id)?.legendClip?.id"><rect :x="chartVisuals.get(element.id)?.legendClip?.x" :y="chartVisuals.get(element.id)?.legendClip?.y" :width="chartVisuals.get(element.id)?.legendClip?.width" :height="chartVisuals.get(element.id)?.legendClip?.height" /></clipPath>
+          <pattern v-for="pattern in chartPatternDefinitions.get(element.id)" :key="pattern.id" :id="pattern.id" patternUnits="userSpaceOnUse" width="1000" height="600"><foreignObject width="1000" height="600"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%" :style="{ background: pattern.fill }" /></foreignObject></pattern>
         </defs>
         <text v-if="element.chart.title" x="500" y="42" text-anchor="middle" class="chart-title">{{ element.chart.title }}</text>
         <g v-if="element.chart.type === 'pie' || element.chart.type === 'doughnut'">
-          <path v-for="(slice, index) in chartVisuals.get(element.id)?.slices" :key="index" :d="slice.d" :fill="slice.color" :fill-rule="element.chart.type === 'doughnut' ? 'evenodd' : 'nonzero'" stroke="white" stroke-width="2" />
+          <path v-for="(slice, index) in chartVisuals.get(element.id)?.slices" :key="index" :d="slice.d" :fill="chartPaint(element.id, slice.color)" :fill-rule="element.chart.type === 'doughnut' ? 'evenodd' : 'nonzero'" :stroke="chartPaint(element.id, slice.stroke)" :stroke-width="slice.strokeWidth ?? 2" :stroke-dasharray="slice.strokeDasharray" :stroke-linecap="slice.strokeLinecap" />
         </g>
         <g v-else>
           <template v-if="element.chart.type === 'radar'"><path v-for="(grid, index) in chartVisuals.get(element.id)?.radarGrid" :key="`radar-grid-${index}`" class="chart-major-gridline chart-radar-gridline" :d="grid.d" fill="none" stroke="#d1d5db" stroke-width="1" /><line v-for="(spoke, index) in chartVisuals.get(element.id)?.radarSpokes" :key="`radar-spoke-${index}`" class="chart-major-gridline chart-radar-spoke" v-bind="spoke" stroke="#d1d5db" stroke-width="1" /></template>
@@ -4837,28 +5460,29 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
             <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-grid-${axis.id}`"><line v-if="!axis.deleted && axis.majorGridlines" v-for="(tick, index) in axis.ticks" :key="index" class="chart-major-gridline chart-secondary-gridline" :x1="axis.horizontal ? tick.x : chartPlot(element.id).left" :x2="axis.horizontal ? tick.x : chartPlot(element.id).left + chartPlot(element.id).width" :y1="axis.horizontal ? chartPlot(element.id).top : tick.y" :y2="axis.horizontal ? chartPlot(element.id).top + chartPlot(element.id).height : tick.y" stroke="#d1d5db" stroke-width="1" /></template>
             <template v-if="['scatter', 'bubble'].includes(element.chart.type) && !element.chart.xAxis?.deleted && element.chart.xAxis?.majorGridlines"><line v-for="(tick, index) in chartVisuals.get(element.id)?.xTicks" :key="`x-grid-${index}`" class="chart-major-gridline chart-x-gridline" :x1="tick.x" :x2="tick.x" :y1="chartPlot(element.id).top" :y2="chartPlot(element.id).top + chartPlot(element.id).height" stroke="#d1d5db" stroke-width="1" /></template>
           </template>
-          <template v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-value-axis-label">{{ tick.label }}</text></template>
-          <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-tick-${axis.id}`"><template v-for="(tick, index) in axis.ticks" :key="index"><text v-if="tick.showLabel" :data-axis-id="axis.id" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-value-axis-label chart-secondary-value-axis-label">{{ tick.label }}</text></template></template>
-          <template v-for="(tick, index) in chartVisuals.get(element.id)?.xTicks" :key="`x-tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" class="chart-label chart-x-value-axis-label">{{ tick.label }}</text></template>
+          <template v-for="(tick, index) in chartVisuals.get(element.id)?.ticks" :key="`tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" :style="{ fill: tick.color }" class="chart-label chart-value-axis-label">{{ tick.label }}</text></template>
+          <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-tick-${axis.id}`"><template v-for="(tick, index) in axis.ticks" :key="index"><text v-if="tick.showLabel" :data-axis-id="axis.id" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" :style="{ fill: tick.color }" class="chart-label chart-value-axis-label chart-secondary-value-axis-label">{{ tick.label }}</text></template></template>
+          <template v-for="(tick, index) in chartVisuals.get(element.id)?.xTicks" :key="`x-tick-${index}`"><text v-if="tick.showLabel" :x="tick.labelX" :y="tick.labelY" :text-anchor="tick.labelAnchor" :style="{ fill: tick.color }" class="chart-label chart-x-value-axis-label">{{ tick.label }}</text></template>
           <line v-for="(tick, index) in chartVisuals.get(element.id)?.axisTicks" :key="`axis-tick-${index}`" :class="tick.minor ? 'chart-axis-minor-tick' : 'chart-axis-tick'" :data-axis="tick.axis" :x1="tick.x1" :y1="tick.y1" :x2="tick.x2" :y2="tick.y2" stroke="#64748b" :stroke-width="tick.minor ? 1 : 1.5" />
           <g :clip-path="`url(#chart-plot-${element.id})`">
             <line v-if="element.chart.type !== 'radar' && (['scatter', 'bubble'].includes(element.chart.type) ? !element.chart.xAxis?.deleted : !element.chart.categoryAxisDeleted) && chartVisuals.get(element.id)?.baseline" class="chart-category-axis-line" :class="{ 'chart-x-axis-line': ['scatter', 'bubble'].includes(element.chart.type) }" :data-axis="['scatter', 'bubble'].includes(element.chart.type) ? 'xValue' : 'category'" :x1="chartVisuals.get(element.id)?.baseline.x1" :y1="chartVisuals.get(element.id)?.baseline.y1" :x2="chartVisuals.get(element.id)?.baseline.x2" :y2="chartVisuals.get(element.id)?.baseline.y2" stroke="#64748b" stroke-width="2" />
             <line v-if="!element.chart.valueAxis?.deleted && chartVisuals.get(element.id)?.valueAxisLine" class="chart-value-axis-line" :x1="chartVisuals.get(element.id)?.valueAxisLine?.x1" :y1="chartVisuals.get(element.id)?.valueAxisLine?.y1" :x2="chartVisuals.get(element.id)?.valueAxisLine?.x2" :y2="chartVisuals.get(element.id)?.valueAxisLine?.y2" stroke="#64748b" stroke-width="2" />
             <template v-for="axis in chartVisuals.get(element.id)?.secondaryValueAxes" :key="`secondary-axis-${axis.id}`"><line v-if="!axis.deleted" class="chart-value-axis-line chart-secondary-value-axis-line" :data-axis-id="axis.id" :x1="axis.line.x1" :y1="axis.line.y1" :x2="axis.line.x2" :y2="axis.line.y2" stroke="#64748b" stroke-width="2" /></template>
-            <path v-for="(area, index) in chartVisuals.get(element.id)?.areas" :key="`area-${index}`" class="chart-area" :d="area.d" :fill="area.color" :fill-opacity="area.opacity ?? 1" :stroke="area.color" stroke-width="1" />
-            <rect v-for="(bar, index) in chartVisuals.get(element.id)?.bars" :key="`bar-${index}`" class="chart-bar" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" :fill="bar.color" :stroke="bar.stroke" stroke-width="1" />
-            <path v-for="(line, index) in chartVisuals.get(element.id)?.lines" :key="`line-${index}`" class="chart-series-line" :d="line.d" fill="none" :stroke="line.color" :stroke-width="line.width ?? 4" stroke-linecap="round" />
+            <path v-for="(area, index) in chartVisuals.get(element.id)?.areas" :key="`area-${index}`" class="chart-area" :d="area.d" :fill="chartPaint(element.id, area.color)" :fill-opacity="area.opacity ?? 1" :stroke="chartPaint(element.id, area.stroke)" :stroke-width="area.strokeWidth ?? 1" :stroke-dasharray="area.strokeDasharray" :stroke-linecap="area.strokeLinecap" />
+            <rect v-for="(bar, index) in chartVisuals.get(element.id)?.bars" :key="`bar-${index}`" class="chart-bar" :x="bar.x" :y="bar.y" :width="bar.width" :height="bar.height" :fill="chartPaint(element.id, bar.color)" :stroke="chartPaint(element.id, bar.stroke)" :stroke-width="bar.strokeWidth ?? 1" :stroke-dasharray="bar.strokeDasharray" :stroke-linecap="bar.strokeLinecap" />
+            <path v-for="(line, index) in chartVisuals.get(element.id)?.lines" :key="`line-${index}`" class="chart-series-line" :d="line.d" fill="none" :stroke="chartPaint(element.id, line.color)" :stroke-width="line.width ?? 4" :stroke-dasharray="line.strokeDasharray" :stroke-linecap="line.strokeLinecap ?? 'round'" />
             <template v-for="(marker, index) in chartVisuals.get(element.id)?.markers" :key="`marker-${index}`">
-              <circle v-if="!chartMarkerPath(marker)" class="chart-line-marker" :class="{ 'chart-bubble-marker': element.chart.type === 'bubble' }" :data-marker-shape="marker.symbol ?? 'circle'" :data-x="marker.x" :data-y="marker.y" :data-radius="marker.radius ?? 5" :cx="marker.x" :cy="marker.y" :r="marker.symbol === 'dot' ? (marker.radius ?? 5) * 0.45 : marker.radius ?? 5" :fill="marker.color" />
-              <path v-else class="chart-line-marker" :data-marker-shape="marker.symbol" :data-x="marker.x" :data-y="marker.y" :data-radius="marker.radius ?? 5" :d="chartMarkerPath(marker)" :fill="marker.color" />
+              <circle v-if="!chartMarkerPath(marker)" class="chart-line-marker" :class="{ 'chart-bubble-marker': element.chart.type === 'bubble' }" :data-marker-shape="marker.symbol ?? 'circle'" :data-x="marker.x" :data-y="marker.y" :data-radius="marker.radius ?? 5" :cx="marker.x" :cy="marker.y" :r="marker.symbol === 'dot' ? (marker.radius ?? 5) * 0.45 : marker.radius ?? 5" :fill="chartPaint(element.id, marker.color)" :stroke="chartPaint(element.id, marker.stroke)" :stroke-width="marker.strokeWidth ?? 1" :stroke-dasharray="marker.strokeDasharray" :stroke-linecap="marker.strokeLinecap" />
+              <path v-else class="chart-line-marker" :data-marker-shape="marker.symbol" :data-x="marker.x" :data-y="marker.y" :data-radius="marker.radius ?? 5" :d="chartMarkerPath(marker)" :fill="chartPaint(element.id, marker.color)" :stroke="chartPaint(element.id, marker.stroke)" :stroke-width="marker.strokeWidth ?? 1" :stroke-dasharray="marker.strokeDasharray" :stroke-linecap="marker.strokeLinecap" />
             </template>
           </g>
-          <text v-for="(label, index) in chartVisuals.get(element.id)?.categories" :key="`category-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" class="chart-label chart-category-label">{{ label.text }}</text>
+          <text v-for="(label, index) in chartVisuals.get(element.id)?.categories" :key="`category-${index}`" :x="label.x" :y="label.y" :text-anchor="label.anchor" :style="{ fill: label.color }" class="chart-label chart-category-label">{{ label.text }}</text>
         </g>
         <g v-for="(label, index) in chartVisuals.get(element.id)?.dataLabels" :key="`data-label-${index}`">
-          <g v-if="label.legendKey" :data-key-id="chartDataLabelKeyId(element.id, index)" :fill="label.legendKey.color" class="chart-data-label-key">
+          <path v-if="label.leaderLine" :d="label.leaderLine.d" :stroke="label.leaderLine.color" fill="none" stroke-width="1" class="chart-data-label-leader-line" />
+          <g v-if="label.legendKey" :data-key-id="chartDataLabelKeyId(element.id, index)" :fill="chartPaint(element.id, label.legendKey.color)" class="chart-data-label-key">
             <rect v-if="!label.legendKey.markerChart" :x="chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18" :y="label.y - 12" width="12" height="12" class="chart-data-label-key-swatch" />
-            <path v-if="label.legendKey.line" :d="`M ${chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18} ${label.y - 6} H ${(chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 12}`" fill="none" :stroke="label.legendKey.color" stroke-width="2" stroke-linecap="round" class="chart-data-label-key-line" />
+            <path v-if="label.legendKey.line" :d="`M ${chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18} ${label.y - 6} H ${(chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 12}`" fill="none" :stroke="chartPaint(element.id, label.legendKey.color)" stroke-width="2" stroke-linecap="round" class="chart-data-label-key-line" />
             <template v-if="label.legendKey.symbol">
               <circle v-if="!chartMarkerPath({x: (chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 6, y: label.y - 6, color: label.legendKey.color, radius: 4, symbol: label.legendKey.symbol})" :cx="(chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 6" :cy="label.y - 6" :r="label.legendKey.symbol === 'dot' ? 1.8 : 4" class="chart-data-label-key-marker" :data-marker-shape="label.legendKey.symbol" />
               <path v-else :d="chartMarkerPath({x: (chartDataLabelKeyPositions.get(chartDataLabelKeyId(element.id, index)) ?? label.x - 18) + 6, y: label.y - 6, color: label.legendKey.color, radius: 4, symbol: label.legendKey.symbol})" class="chart-data-label-key-marker" :data-marker-shape="label.legendKey.symbol" />
@@ -4868,9 +5492,9 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         </g>
         <g class="chart-legend-group" :clip-path="chartVisuals.get(element.id)?.legendClip ? `url(#${chartVisuals.get(element.id)?.legendClip?.id})` : undefined">
           <g v-for="(entry, index) in chartVisuals.get(element.id)?.legend" :key="`legend-${index}`">
-            <g :fill="entry.color" class="chart-legend-key" :data-symbol="entry.symbol">
+            <g :fill="chartPaint(element.id, entry.color)" class="chart-legend-key" :data-symbol="entry.symbol">
               <rect v-if="!entry.markerChart" :x="entry.x" :y="entry.y - 12" width="12" height="12" />
-              <path v-if="entry.line" :d="`M ${entry.x} ${entry.y - 6} H ${entry.x + 12}`" fill="none" :stroke="entry.color" stroke-width="2" stroke-linecap="round" class="chart-legend-key-line" />
+              <path v-if="entry.line" :d="`M ${entry.x} ${entry.y - 6} H ${entry.x + 12}`" fill="none" :stroke="chartPaint(element.id, entry.color)" stroke-width="2" stroke-linecap="round" class="chart-legend-key-line" />
               <template v-if="entry.symbol">
                 <circle v-if="!chartMarkerPath({x: entry.x + 6, y: entry.y - 6, color: entry.color, radius: 4, symbol: entry.symbol})" :cx="entry.x + 6" :cy="entry.y - 6" :r="entry.symbol === 'dot' ? 1.8 : 4" class="chart-legend-key-marker" :data-marker-shape="entry.symbol" />
                 <path v-else :d="chartMarkerPath({x: entry.x + 6, y: entry.y - 6, color: entry.color, radius: 4, symbol: entry.symbol})" class="chart-legend-key-marker" :data-marker-shape="entry.symbol" />
@@ -4881,6 +5505,20 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         </g>
       </svg>
       <div v-else-if="(element.kind === 'picture' || element.kind === 'video') && element.imageUrl" class="image-viewport" aria-hidden="true">
+        <svg v-if="element.kind === 'picture' && (element.imageAlphaInverse !== undefined || element.imageEffectDagAlphaInverse !== undefined)" class="image-tone-defs image-alpha-inverse-defs" aria-hidden="true" width="0" height="0">
+          <defs>
+            <template v-for="(alphaInverse, index) in [element.imageAlphaInverse, element.imageEffectDagAlphaInverse]" :key="index">
+              <filter v-if="alphaInverse !== undefined" :id="imageAlphaInverseFilterId(element, index === 1)" class="image-alpha-inverse-filter" color-interpolation-filters="sRGB">
+                <feComponentTransfer>
+                  <feFuncR v-if="alphaInverse" type="linear" slope="0" :intercept="alphaInverse[0]" />
+                  <feFuncG v-if="alphaInverse" type="linear" slope="0" :intercept="alphaInverse[1]" />
+                  <feFuncB v-if="alphaInverse" type="linear" slope="0" :intercept="alphaInverse[2]" />
+                  <feFuncA type="table" tableValues="1 0" />
+                </feComponentTransfer>
+              </filter>
+            </template>
+          </defs>
+        </svg>
         <svg v-for="tone in (imageToneEnabled(element) ? [imageTone(element)] : [])" :key="element.id" class="image-tone-defs" aria-hidden="true" width="0" height="0">
           <defs>
             <filter :id="imageToneFilterId(element)" class="image-tone-filter" color-interpolation-filters="sRGB">
@@ -4918,7 +5556,38 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
                     <img v-if="entry.paragraph.bullet?.kind === 'image' && entry.paragraph.bullet.url" class="paragraph-picture-bullet" :src="entry.paragraph.bullet.url" :style="paragraphBulletStyle(entry.paragraph)" alt="" aria-hidden="true">
                     <span v-else-if="entry.marker" class="paragraph-marker" :style="paragraphBulletStyle(entry.paragraph)" aria-hidden="true">{{ entry.marker }}</span>
                     <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
-                      <component v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-pattern-fill': !segment.separateDecorations && runHasTextPattern(element, run, paragraphIndex, segment.start, segment.end) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), paragraphIndex, segment.start, segment.end, segment.separateDecorations), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRunAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), segment.script, segment.separateDecorations), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]"><span v-if="segment.separateDecorations" class="text-run-underline" :class="{ 'text-run-pattern-fill': runHasTextPattern(element, run, paragraphIndex, segment.start, segment.end) }" :style="textUnderlineStyle(run)">{{ segment.text }}</span><template v-else>{{ segment.text }}</template></component>
+                      <component
+                        v-for="(segment, segmentIndex) in runSegments(run, element, paragraphIndex, runIndex)"
+                        :key="segmentIndex"
+                        :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'"
+                        :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined"
+                        :title="run.hyperlink?.tooltip"
+                        :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined"
+                        :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-fill': !segment.separateDecorations && runHasTextFill(element, run, paragraphIndex, segment.start, segment.end), 'text-run-highlight': Boolean(run.highlightColor) }]"
+                        :data-char-start="segment.start"
+                        :data-char-end="segment.end"
+                        :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), paragraphIndex, segment.start, segment.end, segment.separateDecorations, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRunAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), segment.script, segment.separateDecorations, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]"
+                      >
+                        <svg v-if="textInnerShadows(run).length" class="text-run-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
+                          <defs>
+                            <filter :id="textInnerShadowFilterId(element, paragraphIndex, segment.start, segment.end, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex)" x="-10%" y="-10%" width="120%" height="120%" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+                              <template v-for="(shadow, shadowIndex) in textInnerShadows(run)" :key="shadowIndex">
+                                <feGaussianBlur in="SourceAlpha" :stdDeviation="Math.max(0, shadow.blur * scale / 2)" :result="'inner-blur-' + shadowIndex" />
+                                <feOffset :in="'inner-blur-' + shadowIndex" :dx="textInnerShadowOffset(shadow).dx" :dy="textInnerShadowOffset(shadow).dy" :result="'inner-offset-' + shadowIndex" />
+                                <feComposite in="SourceAlpha" :in2="'inner-offset-' + shadowIndex" operator="out" :result="'inner-mask-' + shadowIndex" />
+                                <feFlood :flood-color="textInnerShadowColor(element, shadow, paragraphIndex, segment.start, segment.end)" :result="'inner-color-' + shadowIndex" />
+                                <feComposite :in="'inner-color-' + shadowIndex" :in2="'inner-mask-' + shadowIndex" operator="in" :result="'inner-shadow-' + shadowIndex" />
+                              </template>
+                              <feMerge>
+                                <feMergeNode v-for="(_, shadowIndex) in textInnerShadows(run)" :key="shadowIndex" :in="'inner-shadow-' + shadowIndex" />
+                                <feMergeNode in="SourceGraphic" />
+                              </feMerge>
+                            </filter>
+                          </defs>
+                        </svg>
+                        <span v-if="segment.separateDecorations" class="text-run-underline" :class="{ 'text-run-fill': runHasTextFill(element, run, paragraphIndex, segment.start, segment.end), 'text-run-highlight': Boolean(run.highlightColor) }" :style="textUnderlineStyle(run)">{{ segment.text }}</span>
+                        <template v-else>{{ segment.text }}</template>
+                      </component>
                     </template>
                   </div>
                 </div>
@@ -4927,36 +5596,70 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
           </tr>
         </tbody>
       </table>
-      <span v-else-if="element.kind === 'placeholder'">{{ element.mediaType ? 'Media unavailable' : 'Image unavailable' }}</span>
+      <span v-else-if="element.kind === 'placeholder'">{{ t(element.mediaType ? 'mediaUnavailable' : 'imageUnavailable') }}</span>
       <div v-if="element.paragraphs.length" class="text-frame" :data-element-id="element.id" :data-autofit="element.textAutoFit === 'shape' ? 'shape' : element.textAutoFitDynamic ? 'normal' : undefined" :data-text-overflow="supportsTextVerticalEllipsis(element) ? 'ellipsis' : undefined" :style="textFrameStyle(element)">
-        <div
-          v-for="(entry, index) in paragraphEntries(element.paragraphs)"
-          :key="index"
-          class="text-paragraph"
-          :style="[paragraphStyle(entry.paragraph, effectiveTextFontScale(element), element.textLineSpacingReduction, usesRightToLeftColumns(element) ? 'ltr' : undefined), paragraphAnimationStyle(element, index)]"
-        >
-          <img v-if="entry.paragraph.bullet?.kind === 'image' && entry.paragraph.bullet.url" class="paragraph-picture-bullet" :src="entry.paragraph.bullet.url" :style="paragraphBulletStyle(entry.paragraph)" alt="" aria-hidden="true">
-          <span v-else-if="entry.marker" class="paragraph-marker" :style="paragraphBulletStyle(entry.paragraph)" aria-hidden="true">{{ entry.marker }}</span>
-          <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
-            <component v-for="(segment, segmentIndex) in runSegments(run, element, index, runIndex)" :key="segmentIndex" :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'" :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined" :title="run.hyperlink?.tooltip" :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined" :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-pattern-fill': !segment.separateDecorations && runHasTextPattern(element, run, index, segment.start, segment.end) }]" :data-char-start="segment.start" :data-char-end="segment.end" :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element), index, segment.start, segment.end, segment.separateDecorations), textColorAnimationStyle(element, index, segment.start, segment.end), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, index, segment.start, segment.end), textRunAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element), segment.script, segment.separateDecorations), textTransformAnimationStyle(element, index, segment.start, segment.end)]"><span v-if="segment.separateDecorations" class="text-run-underline" :class="{ 'text-run-pattern-fill': runHasTextPattern(element, run, index, segment.start, segment.end) }" :style="textUnderlineStyle(run)">{{ segment.text }}</span><template v-else>{{ segment.text }}</template></component>
-          </template>
+        <div class="text-bounds" :style="textBoundsStyle(element)">
+          <div
+            v-for="(entry, index) in paragraphEntries(element.paragraphs)"
+            :key="index"
+            class="text-paragraph"
+            :style="[paragraphStyle(entry.paragraph, effectiveTextFontScale(element), element.textLineSpacingReduction, usesRightToLeftColumns(element) ? 'ltr' : undefined), paragraphAnimationStyle(element, index)]"
+          >
+            <img v-if="entry.paragraph.bullet?.kind === 'image' && entry.paragraph.bullet.url" class="paragraph-picture-bullet" :src="entry.paragraph.bullet.url" :style="paragraphBulletStyle(entry.paragraph)" alt="" aria-hidden="true">
+            <span v-else-if="entry.marker" class="paragraph-marker" :style="paragraphBulletStyle(entry.paragraph)" aria-hidden="true">{{ entry.marker }}</span>
+            <template v-for="(run, runIndex) in entry.paragraph.runs" :key="runIndex">
+              <component
+                v-for="(segment, segmentIndex) in runSegments(run, element, index, runIndex)"
+                :key="segmentIndex"
+                :is="canActivateHyperlink(run.hyperlink) ? 'a' : 'span'"
+                :href="canActivateHyperlink(run.hyperlink) ? hyperlinkHref(run.hyperlink) : undefined"
+                :title="run.hyperlink?.tooltip"
+                :data-pptx-hyperlink="canActivateHyperlink(run.hyperlink) ? JSON.stringify(run.hyperlink) : undefined"
+                :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-fill': !segment.separateDecorations && runHasTextFill(element, run, index, segment.start, segment.end), 'text-run-highlight': Boolean(run.highlightColor) }]"
+                :data-char-start="segment.start"
+                :data-char-end="segment.end"
+                :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element), index, segment.start, segment.end, segment.separateDecorations, 'text-' + runIndex), textColorAnimationStyle(element, index, segment.start, segment.end), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, index, segment.start, segment.end), textRunAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element), segment.script, segment.separateDecorations, 'text-' + runIndex), textTransformAnimationStyle(element, index, segment.start, segment.end)]"
+              >
+                <svg v-if="textInnerShadows(run).length" class="text-run-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
+                  <defs>
+                    <filter :id="textInnerShadowFilterId(element, index, segment.start, segment.end, 'text-' + runIndex)" x="-10%" y="-10%" width="120%" height="120%" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+                      <template v-for="(shadow, shadowIndex) in textInnerShadows(run)" :key="shadowIndex">
+                        <feGaussianBlur in="SourceAlpha" :stdDeviation="Math.max(0, shadow.blur * scale / 2)" :result="'inner-blur-' + shadowIndex" />
+                        <feOffset :in="'inner-blur-' + shadowIndex" :dx="textInnerShadowOffset(shadow).dx" :dy="textInnerShadowOffset(shadow).dy" :result="'inner-offset-' + shadowIndex" />
+                        <feComposite in="SourceAlpha" :in2="'inner-offset-' + shadowIndex" operator="out" :result="'inner-mask-' + shadowIndex" />
+                        <feFlood :flood-color="textInnerShadowColor(element, shadow, index, segment.start, segment.end)" :result="'inner-color-' + shadowIndex" />
+                        <feComposite :in="'inner-color-' + shadowIndex" :in2="'inner-mask-' + shadowIndex" operator="in" :result="'inner-shadow-' + shadowIndex" />
+                      </template>
+                      <feMerge>
+                        <feMergeNode v-for="(_, shadowIndex) in textInnerShadows(run)" :key="shadowIndex" :in="'inner-shadow-' + shadowIndex" />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
+                  </defs>
+                </svg>
+                  <span v-if="segment.separateDecorations" class="text-run-underline" :class="{ 'text-run-fill': runHasTextFill(element, run, index, segment.start, segment.end), 'text-run-highlight': Boolean(run.highlightColor) }" :style="textUnderlineStyle(run)">{{ segment.text }}</span>
+                <template v-else>{{ segment.text }}</template>
+              </component>
+            </template>
+          </div>
         </div>
       </div>
       <svg v-if="element.kind === 'line'" class="line-render" :style="lineRenderStyle(element)" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
         <defs>
+          <pattern v-if="element.strokePattern" :id="customGeometryStrokePatternId(element)" patternUnits="userSpaceOnUse" width="1000" height="1000"><foreignObject width="1000" height="1000"><div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%" :style="{ background: element.strokePattern }" /></foreignObject></pattern>
           <marker v-if="animationLineEnd(element, 'head').type !== 'none'" :id="lineEndId(element, 'head')" :markerWidth="lineEndMarkerSize(element, 'head').width" :markerHeight="lineEndMarkerSize(element, 'head').height" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="strokeWidth" orient="auto-start-reverse">
-            <path :d="lineEndPath(animationLineEnd(element, 'head').type)" :fill="lineEndUsesStroke(animationLineEnd(element, 'head').type) ? 'none' : 'currentColor'" :stroke="lineEndUsesStroke(animationLineEnd(element, 'head').type) ? 'currentColor' : 'none'" />
+            <path :d="lineEndPath(animationLineEnd(element, 'head').type)" :fill="lineEndUsesStroke(animationLineEnd(element, 'head').type) ? 'none' : lineStrokeColor(element)" :stroke="lineEndUsesStroke(animationLineEnd(element, 'head').type) ? lineStrokeColor(element) : 'none'" />
           </marker>
           <marker v-if="animationLineEnd(element, 'tail').type !== 'none'" :id="lineEndId(element, 'tail')" :markerWidth="lineEndMarkerSize(element, 'tail').width" :markerHeight="lineEndMarkerSize(element, 'tail').height" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="strokeWidth" orient="auto">
-            <path :d="lineEndPath(animationLineEnd(element, 'tail').type)" :fill="lineEndUsesStroke(animationLineEnd(element, 'tail').type) ? 'none' : 'currentColor'" :stroke="lineEndUsesStroke(animationLineEnd(element, 'tail').type) ? 'currentColor' : 'none'" />
+            <path :d="lineEndPath(animationLineEnd(element, 'tail').type)" :fill="lineEndUsesStroke(animationLineEnd(element, 'tail').type) ? 'none' : lineStrokeColor(element)" :stroke="lineEndUsesStroke(animationLineEnd(element, 'tail').type) ? lineStrokeColor(element) : 'none'" />
           </marker>
         </defs>
         <path v-if="element.linePath" :d="element.linePath" fill="none" :stroke="lineStrokeColor(element)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
         <line v-else x1="0" :y1="element.geometry === 'lineInv' ? 1000 : 0" :x2="element.width > 0 ? 1000 : 0" :y2="element.height > 0 ? (element.geometry === 'lineInv' ? 0 : 1000) : 0" :stroke="lineStrokeColor(element)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
       </svg>
     </div>
-    <span v-if="backgroundTileWarning" class="media-warning" role="status">{{ backgroundTileWarning }}</span>
-    <span v-if="textOverflowWarning && (!thumbnail || playbackPreview)" class="media-warning" role="status">{{ textOverflowWarning }}</span>
+    <span v-if="backgroundTileWarning" class="media-warning" role="status">{{ t(backgroundTileWarning) }}</span>
+    <span v-if="textOverflowWarning && (!thumbnail || playbackPreview)" class="media-warning" role="status">{{ t(textOverflowWarning) }}</span>
   </div>
 </template>
 
@@ -4979,9 +5682,12 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
 .slide-table { width: 100%; height: 100%; border-collapse: collapse; table-layout: fixed; }
 .slide-table td { box-sizing: border-box; overflow: hidden; }
 .text-run-break { white-space: pre; }
-.text-run-pattern-fill { color: var(--pptx-text-pattern-color, currentColor); }
+.text-run-filter-defs { position: absolute; width: 0; height: 0; overflow: visible; pointer-events: none; }
+.text-run-fill { color: var(--pptx-text-fill-color, currentColor); }
+.text-run-highlight { background-color: var(--pptx-text-highlight); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 @supports (background-clip: text) or (-webkit-background-clip: text) {
-  .text-run-pattern-fill { background: var(--pptx-text-pattern); background-clip: text; -webkit-background-clip: text; color: transparent !important; -webkit-text-fill-color: transparent; }
+  .text-run-fill { background: var(--pptx-text-fill); background-clip: text; -webkit-background-clip: text; color: transparent !important; -webkit-text-fill-color: transparent; }
+  .text-run-fill.text-run-highlight { background: var(--pptx-text-highlight-background); background-clip: var(--pptx-text-fill-clip); -webkit-background-clip: var(--pptx-text-fill-clip); }
 }
 .paragraph-marker { display: inline-block; width: 1em; margin-left: -1em; margin-right: .45em; text-align: right; white-space: pre; }
 .paragraph-picture-bullet { display: inline-block; width: 1em; height: 1em; margin-left: -1em; margin-right: .45em; object-fit: contain; vertical-align: middle; }

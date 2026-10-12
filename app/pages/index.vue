@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import type { PptxDocument, PptxHyperlink, PptxSlide, PptxTransitionPlayback, PptxTriggerPlayback } from '~/utils/pptx-model'
+import type { LocaleMessageKey } from '~/composables/useLocale'
 import { disposePptxDocument, parsePptxInWorker, stopPptxParserWorker } from '~/utils/pptx-parser-client'
 import { presenterChannelName, type PresenterMessage } from '~/utils/presenter-channel'
 import { useSlideTransition } from '~/composables/useSlideTransition'
+
+const { locale, t, toggleLocale, translateError } = useLocale()
 
 const fileInput = ref<HTMLInputElement | null>(null)
 let fileLoadGeneration = 0
@@ -20,7 +23,7 @@ const readingNotesOpen = ref(false)
 const presenterElapsedSeconds = ref(0)
 const projectorConnected = ref(false)
 const projectorOpen = ref(false)
-const projectorError = ref('')
+const projectorError = ref<LocaleMessageKey | ''>('')
 const projectorAcknowledgement = ref<{ slideId: string; number: number; animationStep: number; blank: 'black' | 'white' | null; triggerCount: number } | null>(null)
 const triggerPlayback = shallowRef<PptxTriggerPlayback[]>([])
 const transitionPlayback = shallowRef<PptxTransitionPlayback | null>(null)
@@ -78,6 +81,21 @@ let pinchStartZoom = 1
 let wasPinching = false
 let panStart: { pointerId: number; x: number; y: number; offsetX: number; offsetY: number; moved: boolean } | undefined
 const currentSlide = computed(() => deck.value?.slides[currentIndex.value] || null)
+const shownSlideIndices = computed(() => (deck.value?.slides || []).reduce<number[]>((indices, slide, index) => {
+  if (!slide.hidden) indices.push(index)
+  return indices
+}, []))
+const firstShownSlideIndex = computed(() => shownSlideIndices.value[0] ?? 0)
+const lastShownSlideIndex = computed(() => shownSlideIndices.value[shownSlideIndices.value.length - 1] ?? Math.max(0, (deck.value?.slides.length || 1) - 1))
+const nextShownSlideIndex = computed(() => shownSlideIndices.value.find(index => index > currentIndex.value)
+  ?? (deck.value?.showSettings?.loop ? shownSlideIndices.value[0] : undefined))
+const previousShownSlideIndex = computed(() => {
+  const indices = shownSlideIndices.value
+  for (let offset = indices.length - 1; offset >= 0; offset--) {
+    if (indices[offset]! < currentIndex.value) return indices[offset]
+  }
+  return undefined
+})
 const thumbnailSlides = computed(() => deck.value?.slides.slice(thumbnailStart.value, thumbnailEnd.value).map((slide, offset) => ({ slide, index: thumbnailStart.value + offset })) || [])
 const thumbnailCount = computed(() => deck.value?.slides.length || 0)
 const thumbnailBeforeStyle = computed(() => thumbnailAxis.value === 'vertical'
@@ -91,7 +109,9 @@ const sorterPageSize = 48
 const sorterSlides = computed(() => deck.value?.slides.slice(sorterPageStart.value, sorterPageStart.value + sorterPageSize).map((slide, offset) => ({ slide, index: sorterPageStart.value + offset })) || [])
 const sorterPageEnd = computed(() => Math.min(sorterPageStart.value + sorterPageSize, deck.value?.slides.length || 0))
 const currentNumber = computed(() => deck.value ? currentIndex.value + 1 : 0)
-const animationCount = computed(() => currentSlide.value?.animationSteps?.length || 0)
+const showAnimations = computed(() => deck.value?.showSettings?.showAnimation !== false)
+const showNarration = computed(() => deck.value?.showSettings?.showNarration === true)
+const animationCount = computed(() => showAnimations.value ? currentSlide.value?.animationSteps?.length || 0 : 0)
 const progress = computed(() => deck.value ? (currentNumber.value / deck.value.slides.length) * 100 : 0)
 const currentInk = computed(() => currentSlide.value ? inkBySlide.value[currentSlide.value.id] || [] : [])
 const presenterTime = computed(() => `${String(Math.floor(presenterElapsedSeconds.value / 60)).padStart(2, '0')}:${String(presenterElapsedSeconds.value % 60).padStart(2, '0')}`)
@@ -268,7 +288,7 @@ function postProjectorMessage(message: PresenterMessage) {
   try {
     projectorChannel?.postMessage(message)
   } catch {
-    projectorError.value = 'The current slide could not be sent to the second display.'
+    projectorError.value = 'projectorSendFailed'
   }
 }
 
@@ -280,6 +300,8 @@ function sendProjectorDocument() {
   postProjectorMessage({
     type: 'document', name: deck.value.name, width: deck.value.width, height: deck.value.height,
     totalSlides: deck.value.slides.length,
+    showAnimations: showAnimations.value,
+    showNarration: showNarration.value,
     embeddedFonts: deck.value.embeddedFonts,
     fontWarnings: deck.value.warnings.filter(warning => /embedded font/i.test(warning)),
   })
@@ -347,7 +369,7 @@ function openProjectorWindow() {
   if (!deck.value) return
   projectorError.value = ''
   if (!('BroadcastChannel' in window)) {
-    projectorError.value = 'This browser does not support synchronized second displays.'
+    projectorError.value = 'projectorNotSupported'
     return
   }
   if (!projectorChannel) {
@@ -362,7 +384,7 @@ function openProjectorWindow() {
     projectorWindow = window.open(url.href, `deckline-projector-${projectorChannelId}`, 'popup,width=1280,height=720')
     if (!projectorWindow) {
       projectorOpen.value = false
-      projectorError.value = 'The browser blocked the projector window. Allow pop-ups for this site and try again.'
+      projectorError.value = 'projectorPopupBlocked'
       return
     }
     projectorOpen.value = true
@@ -505,9 +527,9 @@ async function loadFile(file?: File) {
     }
     clearDocument()
     deck.value = nextDocument
-    currentIndex.value = 0
+    currentIndex.value = firstShownSlideIndex.value
   } catch (error) {
-    if (generation === fileLoadGeneration) errorMessage.value = error instanceof Error ? error.message : 'The presentation could not be opened.'
+    if (generation === fileLoadGeneration) errorMessage.value = error instanceof Error ? error.message : ''
   } finally {
     if (generation === fileLoadGeneration) {
       isLoading.value = false
@@ -525,25 +547,30 @@ function clearSlideNumberInput() {
 function previousSlide() {
   clearSlideNumberInput()
   if (animationStep.value > 0) {
-    if (currentSlide.value?.animationSequence?.rewindsOnPrevious === false) return
+    const stepSequence = currentSlide.value?.animationStepSequences?.[animationStep.value - 1]
+    if (currentSlide.value?.animationSequence?.rewindsOnPrevious === false && stepSequence?.rewindsOnPrevious !== true) return
     // withEffect/afterEffect groups are folded into their preceding click step, matching skipTimed's prior-step boundary.
     animationStep.value--
   }
-  else if (deck.value && currentIndex.value > 0) {
-    currentIndex.value--
-    animationStep.value = deck.value.slides[currentIndex.value]?.animationSteps?.length || 0
+  else if (deck.value && previousShownSlideIndex.value !== undefined) {
+    currentIndex.value = previousShownSlideIndex.value
+    animationStep.value = animationCount.value
   }
 }
 
 function nextSlide() {
   clearSlideNumberInput()
   if (animationStep.value < animationCount.value) {
-    if (currentSlide.value?.animationSequence?.advancesOnNext === false) return
+    const stepSequence = currentSlide.value?.animationStepSequences?.[animationStep.value - 1]
+    if (stepSequence?.advancesOnNext === false || (currentSlide.value?.animationSequence?.advancesOnNext === false && stepSequence?.advancesOnNext !== true)) return
     animationStep.value++
   }
-  else if (deck.value && currentIndex.value < deck.value.slides.length - 1) {
-    currentIndex.value++
+  else if (deck.value && nextShownSlideIndex.value !== undefined) {
+    const nextIndex = nextShownSlideIndex.value
+    const repeatedSlide = currentIndex.value === nextIndex
+    currentIndex.value = nextIndex
     animationStep.value = 0
+    if (repeatedSlide) scheduleSlideAdvance()
   }
 }
 
@@ -553,13 +580,19 @@ function goToSlide(index: number) {
   animationStep.value = 0
 }
 
+function goToFirstSlide() {
+  clearSlideNumberInput()
+  currentIndex.value = firstShownSlideIndex.value
+  animationStep.value = 0
+}
+
 function goToLastSlide() {
   clearSlideNumberInput()
   const slides = deck.value?.slides
   if (!slides?.length) return
-  const index = slides.length - 1
+  const index = lastShownSlideIndex.value
   currentIndex.value = index
-  animationStep.value = slides[index]?.animationSteps?.length || 0
+  animationStep.value = animationCount.value
 }
 
 function activateHyperlink(hyperlink: PptxHyperlink) {
@@ -580,10 +613,10 @@ function activateHyperlink(hyperlink: PptxHyperlink) {
   if (hyperlink.kind === 'slide') {
     targetIndex = deck.value.slides.findIndex(slide => slide.packagePath === hyperlink.targetPath)
   } else {
-    targetIndex = hyperlink.jump === 'firstslide' ? 0
-      : hyperlink.jump === 'lastslide' ? deck.value.slides.length - 1
-        : hyperlink.jump === 'nextslide' ? currentIndex.value + 1
-          : hyperlink.jump === 'previousslide' ? currentIndex.value - 1
+    targetIndex = hyperlink.jump === 'firstslide' ? firstShownSlideIndex.value
+      : hyperlink.jump === 'lastslide' ? lastShownSlideIndex.value
+        : hyperlink.jump === 'nextslide' ? nextShownSlideIndex.value ?? -1
+          : hyperlink.jump === 'previousslide' ? previousShownSlideIndex.value ?? -1
             : (hyperlink.slideNumber || 0) - 1
   }
   if (targetIndex >= 0 && targetIndex < deck.value.slides.length) goToSlide(targetIndex)
@@ -659,6 +692,7 @@ function onKeydown(event: KeyboardEvent) {
   if (!deck.value) return
   const target = event.target instanceof HTMLElement ? event.target : null
   if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'AUDIO', 'VIDEO'].includes(target.tagName) || ([' ', 'Enter'].includes(event.key) && !(event.key === 'Enter' && slideNumberInput.value) && Boolean(target.closest('button, a, [role="button"]'))))) return
+  if (event.repeat && (event.key === 'Escape' || event.key === 'F5' || ['f', 's', 'g', 'b', '.', 'w', ','].includes(event.key.toLowerCase()))) return
   if (event.key === 'F5' && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
     event.preventDefault()
     togglePresenterView()
@@ -705,21 +739,20 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault()
     const delta = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1
     reorderSlide(currentIndex.value, currentIndex.value + delta)
-  } else if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].includes(event.key)) {
+  } else if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(event.key)) {
     event.preventDefault(); nextSlide()
   } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key)) {
     event.preventDefault(); previousSlide()
   } else if (event.key === 'Home') {
     event.preventDefault()
-    goToSlide(0)
+    goToFirstSlide()
   } else if (event.key === 'End') {
     event.preventDefault()
     goToLastSlide()
   } else if (event.key === 'F5') {
     event.preventDefault()
     if (!event.shiftKey) {
-      currentIndex.value = 0
-      animationStep.value = 0
+      goToFirstSlide()
     }
     if (!document.fullscreenElement && stageShell.value) void stageShell.value.requestFullscreen().catch(() => {})
   } else if (event.key.toLowerCase() === 'f') {
@@ -766,6 +799,7 @@ function onPointerDown(event: PointerEvent) {
 
 function onPointerMove(event: PointerEvent) {
   if (event.pointerType !== 'touch' || !touchPoints.has(event.pointerId)) return
+  const previousTouch = touchPoints.get(event.pointerId)!
   touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY })
   if (touchPoints.size === 1 && panStart?.pointerId === event.pointerId) {
     const deltaX = event.clientX - panStart.x
@@ -775,8 +809,16 @@ function onPointerMove(event: PointerEvent) {
     return
   }
   if (touchPoints.size < 2 || !pinchStartDistance) return
-  const [first, second] = [...touchPoints.values()]
-  setZoom(pinchStartZoom * Math.hypot(second!.x - first!.x, second!.y - first!.y) / pinchStartDistance)
+  const [firstEntry, secondEntry] = [...touchPoints.entries()]
+  if (!firstEntry || !secondEntry) return
+  const first = firstEntry[1]
+  const second = secondEntry[1]
+  const other = event.pointerId === firstEntry[0] ? second : first
+  const previousCenterX = (previousTouch.x + other.x) / 2
+  const previousCenterY = (previousTouch.y + other.y) / 2
+  const centerX = (first.x + second.x) / 2
+  const centerY = (first.y + second.y) / 2
+  setZoomAt(pinchStartZoom * Math.hypot(second.x - first.x, second.y - first.y) / pinchStartDistance, previousCenterX, previousCenterY, centerX, centerY)
 }
 
 function onPointerUp(event: PointerEvent, allowSwipe = true) {
@@ -822,7 +864,7 @@ function onPointerCancel(event: PointerEvent) {
 function onWheel(event: WheelEvent) {
   if (!deck.value || Math.abs(event.deltaY) < 12) return
   if (event.ctrlKey) {
-    setZoom(zoom.value + (event.deltaY < 0 ? .1 : -.1))
+    setZoomAt(zoom.value + (event.deltaY < 0 ? .1 : -.1), event.clientX, event.clientY, event.clientX, event.clientY)
     return
   }
   if (performance.now() - lastWheelAt < 350) return
@@ -833,8 +875,23 @@ function onWheel(event: WheelEvent) {
 }
 
 function setZoom(value: number) {
-  zoom.value = Math.min(3, Math.max(.5, Math.round(value * 100) / 100))
-  setZoomPan(zoomPan.value.x, zoomPan.value.y)
+  const bounds = stageShell.value?.getBoundingClientRect()
+  const centerX = bounds ? bounds.left + bounds.width / 2 : 0
+  const centerY = bounds ? bounds.top + bounds.height / 2 : 0
+  setZoomAt(value, centerX, centerY, centerX, centerY)
+}
+
+function setZoomAt(value: number, fromX: number, fromY: number, toX: number, toY: number) {
+  const previousZoom = zoom.value
+  const nextZoom = Math.min(3, Math.max(.5, Math.round(value * 100) / 100))
+  const bounds = stageShell.value?.getBoundingClientRect()
+  const centerX = bounds ? bounds.left + bounds.width / 2 : 0
+  const centerY = bounds ? bounds.top + bounds.height / 2 : 0
+  const scale = nextZoom / previousZoom
+  const panX = toX - centerX - scale * (fromX - centerX - zoomPan.value.x)
+  const panY = toY - centerY - scale * (fromY - centerY - zoomPan.value.y)
+  zoom.value = nextZoom
+  setZoomPan(panX, panY)
 }
 
 function setZoomPan(x: number, y: number) {
@@ -959,9 +1016,10 @@ function onStageHyperlinkKeyActivate(event: KeyboardEvent) {
 function scheduleSlideAdvance() {
   if (slideAdvanceTimer) clearTimeout(slideAdvanceTimer)
   slideAdvanceTimer = undefined
+  if (deck.value?.showSettings?.useTimings === false) return
   const slide = currentSlide.value
   const delayMs = slide?.advanceAfterMs
-  if (!slide || delayMs === undefined || currentIndex.value >= (deck.value?.slides.length || 0) - 1) return
+  if (!slide || delayMs === undefined || nextShownSlideIndex.value === undefined) return
   const slideIndex = currentIndex.value
   const dueAt = Date.now() + delayMs
   const advance = () => {
@@ -1027,18 +1085,21 @@ onBeforeUnmount(() => {
 <template>
   <main class="app-shell" :class="{ 'is-reading-view': readingView }">
     <header class="topbar">
-      <div class="brand" aria-label="Deckline PPTX Player">
+      <div class="brand" :aria-label="t('brandAria')">
         <span class="brand-mark">D</span>
         <span class="brand-name">deckline</span>
-        <span class="brand-label">PPTX PLAYER</span>
+        <span class="brand-label">{{ t('brandLabel') }}</span>
       </div>
-      <div class="topbar-status"><span class="status-dot" />LOCAL SESSION · FILES STAY ON DEVICE</div>
+      <div class="topbar-actions">
+        <div class="topbar-status"><span class="status-dot" />{{ t('localSession') }}</div>
+        <button class="locale-toggle" :aria-label="t(locale === 'en' ? 'switchLanguageToChinese' : 'switchLanguageToEnglish')" @click="toggleLocale">{{ t(locale === 'en' ? 'switchToChinese' : 'switchToEnglish') }}</button>
+      </div>
     </header>
 
     <div class="workspace" :inert="presenterView || sorterView">
-      <aside class="deck-sidebar" aria-label="Slide list">
+      <aside class="deck-sidebar" :aria-label="t('slideList')">
         <div class="sidebar-head">
-          <span class="sidebar-title">Slides</span>
+          <span class="sidebar-title">{{ t('slides') }}</span>
           <span class="slide-count">{{ deck ? String(deck.slides.length).padStart(2, '0') : '00' }}</span>
         </div>
         <div v-if="deck" ref="thumbnailList" class="thumb-list" @scroll="scheduleThumbnailUpdate">
@@ -1051,38 +1112,38 @@ onBeforeUnmount(() => {
             :data-thumbnail-index="index"
             :class="{ 'is-active': currentIndex === index }"
             :aria-current="currentIndex === index ? 'page' : undefined"
-            :aria-label="`Go to slide ${index + 1}`"
+            :aria-label="t(slide.hidden ? 'goToHiddenSlide' : 'goToSlide', { number: index + 1 })"
             @click="goToSlide(index)"
           >
             <div class="thumb-preview">
               <SlideStage :slide="slide" :width="deck.width" :height="deck.height" :number="index + 1" thumbnail />
             </div>
-            <div class="thumb-meta"><span>SLIDE</span><span>{{ String(index + 1).padStart(2, '0') }}</span></div>
+            <div class="thumb-meta"><span>{{ t(slide.hidden ? 'hidden' : 'slide') }}</span><span>{{ String(index + 1).padStart(2, '0') }}</span></div>
           </button>
           <div v-if="thumbnailEnd < thumbnailCount" class="thumb-virtual-spacer" :style="thumbnailAfterStyle" aria-hidden="true" />
         </div>
-        <div v-else class="side-empty">Your slide thumbnails will appear here after you open a presentation.</div>
-        <div class="sidebar-footer">POWERED BY OOXML · BROWSER ONLY</div>
+        <div v-else class="side-empty">{{ t('slideThumbnailsHint') }}</div>
+        <div class="sidebar-footer">{{ t('poweredBy') }}</div>
       </aside>
 
-      <section class="player-column" aria-label="Presentation player">
+      <section class="player-column" :aria-label="t('presentationPlayer')">
         <div class="deck-toolbar">
           <span class="file-icon">▤</span>
           <div class="deck-title-block">
-            <div class="deck-title">{{ deck?.name || 'No presentation open' }}</div>
-            <div class="deck-subtitle">{{ deck ? `${deck.slides.length} SLIDES · READY TO PRESENT` : 'OPEN A POWERPOINT FILE TO BEGIN' }}</div>
+            <div class="deck-title">{{ deck?.name || t('noPresentationOpen') }}</div>
+            <div class="deck-subtitle">{{ deck ? t('slidesReady', { count: deck.slides.length }) : t('openPowerPointToBegin') }}</div>
           </div>
           <div class="tool-separator" />
-          <button class="icon-button" :disabled="!deck || (currentIndex === 0 && animationStep === 0)" aria-label="Previous animation step or slide" title="Previous animation step or slide" @click="previousSlide">‹</button>
-          <button class="icon-button" :disabled="!deck || (currentIndex === (deck?.slides.length || 0) - 1 && animationStep >= animationCount)" aria-label="Next animation step or slide" title="Next animation step or slide" @click="nextSlide">›</button>
-          <button class="text-button" :disabled="!deck" title="Fullscreen (F)" @click="toggleFullscreen">⛶ <span>Present</span></button>
-          <button ref="sorterTrigger" class="tool-mode-button" data-tool="sorter" :disabled="!deck" aria-label="Open slide sorter" title="Slide sorter (G)" @click="toggleSorterView">sort</button>
-          <button ref="presenterTrigger" class="tool-mode-button" data-tool="speaker" :disabled="!deck" aria-label="Open speaker view" title="Speaker view (S)" @click="togglePresenterView">speaker</button>
-          <button ref="readingTrigger" class="tool-mode-button" data-tool="reading" :disabled="!deck" aria-label="Open reading view" title="Reading view" @click="toggleReadingView">read</button>
-          <button v-for="tool in (['pointer', 'pen', 'highlighter', 'laser'] as const)" :key="tool" class="tool-mode-button" :class="{ 'is-active': activeTool === tool }" :data-tool="tool" :disabled="!deck" @click="activeTool = tool">{{ tool }}</button>
-          <button class="tool-mode-button" :disabled="!deck || !currentInk.length" data-tool="clear" @click="clearInk">clear</button>
+          <button class="icon-button" :disabled="!deck || (animationStep === 0 && previousShownSlideIndex === undefined)" :aria-label="t('previousStep')" :title="t('previousStep')" @click="previousSlide">‹</button>
+          <button class="icon-button" :disabled="!deck || (animationStep >= animationCount && nextShownSlideIndex === undefined)" :aria-label="t('nextStep')" :title="t('nextStep')" @click="nextSlide">›</button>
+          <button class="text-button" :disabled="!deck" :title="t('fullscreenF')" @click="toggleFullscreen">⛶ <span>{{ t('present') }}</span></button>
+          <button ref="sorterTrigger" class="tool-mode-button" data-tool="sorter" :disabled="!deck" :aria-label="t('openSlideSorter')" :title="t('slideSorterShortcut')" @click="toggleSorterView">{{ t('slideSorter') }}</button>
+          <button ref="presenterTrigger" class="tool-mode-button" data-tool="speaker" :disabled="!deck" :aria-label="t('openSpeakerView')" :title="t('speakerViewShortcut')" @click="togglePresenterView">{{ t('speakerView') }}</button>
+          <button ref="readingTrigger" class="tool-mode-button" data-tool="reading" :disabled="!deck" :aria-label="t('openReadingView')" :title="t('readingView')" @click="toggleReadingView">{{ t('reading') }}</button>
+          <button v-for="tool in (['pointer', 'pen', 'highlighter', 'laser'] as const)" :key="tool" class="tool-mode-button" :class="{ 'is-active': activeTool === tool }" :data-tool="tool" :disabled="!deck" :aria-label="t(tool)" @click="activeTool = tool">{{ t(tool) }}</button>
+          <button class="tool-mode-button" :disabled="!deck || !currentInk.length" data-tool="clear" :aria-label="t('clearAnnotations')" @click="clearInk">{{ t('clear') }}</button>
           <div class="tool-separator" />
-          <button class="primary-button" :disabled="isLoading" @click="openPicker">{{ isLoading ? 'Reading…' : deck ? 'Open another' : 'Open PPTX' }}</button>
+          <button class="primary-button" :disabled="isLoading" @click="openPicker">{{ isLoading ? t('readingFile') : deck ? t('openAnother') : t('openPptx') }}</button>
           <input ref="fileInput" class="visually-hidden" type="file" tabindex="-1" aria-hidden="true" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation" @change="loadFile(($event.target as HTMLInputElement).files?.[0])">
         </div>
 
@@ -1105,15 +1166,15 @@ onBeforeUnmount(() => {
           <div class="stage-grid" />
           <div ref="transitionUnderlay" class="slide-transition-underlay" :class="{ 'is-pulling': currentSlide?.transition?.effect === 'pull', 'is-splitting-in': currentSlide?.transition?.effect === 'split' && currentSlide.transition.direction === 'in' }" aria-hidden="true" />
           <div ref="continuingMediaHost" class="continuing-media-host" />
-          <div v-if="isDragging" class="upload-overlay">DROP YOUR PRESENTATION</div>
+          <div v-if="isDragging" class="upload-overlay">{{ t('dropPresentation') }}</div>
             <div v-if="currentSlide && deck" ref="stageSlideHost" class="slide-host" :data-slide-number="currentNumber" :data-transition-effect="currentSlide.transition?.effect" :data-transition-preset="currentSlide.transition?.presetName" :style="{ '--slide-ratio': String(deck.width / deck.height), translate: zoomPan.x + 'px ' + zoomPan.y + 'px', transform: 'scale(' + zoom + ')' }">
-            <SlideStage :key="deckGeneration + '-' + currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" @trigger-playback="triggerPlayback = $event" @activate-hyperlink="activateHyperlink" @stop-all-audio="stopAllAudio" />
+            <SlideStage :key="deckGeneration + '-' + currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" :show-animations="showAnimations" :show-narration="showNarration" @trigger-playback="triggerPlayback = $event" @activate-hyperlink="activateHyperlink" @stop-all-audio="stopAllAudio" />
             <svg
               class="ink-layer"
               :class="{ 'is-active': activeTool !== 'pointer' }"
               :viewBox="`0 0 ${deck.width} ${deck.height}`"
               preserveAspectRatio="none"
-              aria-label="Presentation annotation layer"
+              :aria-label="t('annotationLayer')"
               @pointerdown.stop.prevent="onInkPointerDown"
               @pointermove.stop.prevent="onInkPointerMove"
               @pointerup.stop.prevent="onInkPointerUp"
@@ -1128,99 +1189,108 @@ onBeforeUnmount(() => {
           </div>
           <div v-else-if="!errorMessage" class="empty-state">
             <div class="empty-art"><span class="empty-art-back" /><span class="empty-art-front" /></div>
-            <div class="empty-kicker">A quieter way to present</div>
-            <h1>Your deck, in the room.</h1>
-            <p>Open a PowerPoint file and step through your slides. The presentation is read locally in your browser.</p>
-            <button class="primary-button" :disabled="isLoading" @click.stop="openPicker">{{ isLoading ? 'Reading presentation…' : 'Choose a .pptx file' }}</button>
-            <div class="drop-hint">OR DROP A FILE ANYWHERE IN THIS WINDOW</div>
+            <div class="empty-kicker">{{ t('quieterWay') }}</div>
+            <h1>{{ t('deckInRoom') }}</h1>
+            <p>{{ t('localPresentationDescription') }}</p>
+            <button class="primary-button" :disabled="isLoading" @click.stop="openPicker">{{ isLoading ? t('readingPresentation') : t('choosePptx') }}</button>
+            <div class="drop-hint">{{ t('dropFileAnywhere') }}</div>
           </div>
           <div v-if="screenOverlay" class="screen-overlay" :class="`is-${screenOverlay}`" @click.stop="screenOverlay = null" />
           <div v-if="slideNumberInput" class="slide-number-input" aria-live="polite">{{ slideNumberInput }}</div>
           <div v-if="contextMenu" class="presentation-menu" :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }" role="menu" @click.stop>
-            <button role="menuitem" :disabled="currentIndex === 0 && animationStep === 0" @click="previousSlide(); contextMenu = null">Previous</button>
-            <button role="menuitem" :disabled="currentIndex === (deck?.slides.length || 0) - 1 && animationStep >= animationCount" @click="nextSlide(); contextMenu = null">Next</button>
-            <button role="menuitem" @click="screenOverlay = 'black'; contextMenu = null">Black screen</button>
-            <button role="menuitem" @click="screenOverlay = 'white'; contextMenu = null">White screen</button>
+            <button role="menuitem" :disabled="animationStep === 0 && previousShownSlideIndex === undefined" @click="previousSlide(); contextMenu = null">{{ t('previous') }}</button>
+            <button role="menuitem" :disabled="animationStep >= animationCount && nextShownSlideIndex === undefined" @click="nextSlide(); contextMenu = null">{{ t('next') }}</button>
+            <button role="menuitem" @click="screenOverlay = 'black'; contextMenu = null">{{ t('blackScreen') }}</button>
+            <button role="menuitem" @click="screenOverlay = 'white'; contextMenu = null">{{ t('whiteScreen') }}</button>
           </div>
           <div v-if="errorMessage" class="error-card" role="alert">
-            <strong>Couldn’t open this presentation</strong>{{ errorMessage }}
+            <strong>{{ t('cannotOpenPresentation') }}</strong>{{ translateError(errorMessage) }}
           </div>
-          <div v-if="deck?.warnings.length" class="warning-strip" aria-label="Rendering limitations">
-            <span v-for="warning in deck.warnings" :key="warning" class="warning-pill">{{ warning }}</span>
-          </div>
+          <details v-if="deck?.warnings.length" class="warning-panel" @click.stop>
+            <summary>{{ t('renderingLimitations', { count: deck.warnings.length }) }}</summary>
+            <p v-if="locale === 'zh'" class="warning-detail-note">{{ t('warningDetailsEnglish') }}</p>
+            <ul class="warning-list">
+              <li v-for="warning in deck.warnings" :key="warning">{{ warning }}</li>
+            </ul>
+          </details>
           <div v-if="deck" class="progress-track" aria-hidden="true"><div class="progress-value" :style="{ width: `${progress}%` }" /></div>
         </div>
 
         <div class="player-controls">
-          <button class="icon-button" :disabled="!deck || (currentIndex === 0 && animationStep === 0)" aria-label="Previous animation step or slide" @click="previousSlide">←</button>
+          <button class="icon-button" :disabled="!deck || (animationStep === 0 && previousShownSlideIndex === undefined)" :aria-label="t('previousStep')" @click="previousSlide">←</button>
           <div class="slide-position"><strong>{{ String(currentNumber).padStart(2, '0') }}</strong> / {{ String(deck?.slides.length || 0).padStart(2, '0') }}</div>
-          <button class="icon-button" :disabled="!deck || (currentIndex === (deck?.slides.length || 0) - 1 && animationStep >= animationCount)" aria-label="Next animation step or slide" @click="nextSlide">→</button>
-          <button class="zoom-button" :disabled="!deck || zoom <= .5" aria-label="Zoom out" @click="setZoom(zoom - .25)">−</button>
+          <button class="icon-button" :disabled="!deck || (animationStep >= animationCount && nextShownSlideIndex === undefined)" :aria-label="t('nextStep')" @click="nextSlide">→</button>
+          <button class="zoom-button" :disabled="!deck || zoom <= .5" :aria-label="t('zoomOut')" @click="setZoom(zoom - .25)">−</button>
           <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
-          <button class="zoom-button" :disabled="!deck || zoom >= 3" aria-label="Zoom in" @click="setZoom(zoom + .25)">+</button>
-          <span class="shortcut-hint">ARROWS · F5 START · SHIFT+F5 CURRENT · F FULLSCREEN</span>
-          <button v-if="readingView" class="reading-control-button" data-reading-notes :aria-expanded="readingNotesOpen" :aria-controls="readingNotesOpen ? 'reading-notes' : undefined" @click="readingNotesOpen = !readingNotesOpen">{{ readingNotesOpen ? 'Hide notes' : 'Notes' }}</button>
-          <button v-if="readingView" ref="readingExit" class="reading-control-button" data-reading-exit @click="toggleReadingView">Back to player</button>
+          <button class="zoom-button" :disabled="!deck || zoom >= 3" :aria-label="t('zoomIn')" @click="setZoom(zoom + .25)">+</button>
+          <span class="shortcut-hint">{{ t('keyboardShortcuts') }}</span>
+          <button v-if="readingView" class="reading-control-button" data-reading-notes :aria-expanded="readingNotesOpen" :aria-controls="readingNotesOpen ? 'reading-notes' : undefined" @click="readingNotesOpen = !readingNotesOpen">{{ readingNotesOpen ? t('hideNotes') : t('notes') }}</button>
+          <button v-if="readingView" ref="readingExit" class="reading-control-button" data-reading-exit @click="toggleReadingView">{{ t('backToPlayer') }}</button>
+          <button v-if="readingView" class="locale-toggle" :aria-label="t(locale === 'en' ? 'switchLanguageToChinese' : 'switchLanguageToEnglish')" @click="toggleLocale">{{ t(locale === 'en' ? 'switchToChinese' : 'switchToEnglish') }}</button>
         </div>
-        <aside v-if="readingView && readingNotesOpen && currentSlide" id="reading-notes" class="reading-notes-panel" data-reading-notes-panel aria-label="Speaker notes">
-          <header><strong>Speaker notes</strong><button aria-label="Hide speaker notes" @click="readingNotesOpen = false">×</button></header>
+        <aside v-if="readingView && readingNotesOpen && currentSlide" id="reading-notes" class="reading-notes-panel" data-reading-notes-panel :aria-label="t('speakerNotes')">
+          <header><strong>{{ t('speakerNotes') }}</strong><button :aria-label="t('hideSpeakerNotes')" @click="readingNotesOpen = false">×</button></header>
           <SpeakerNotes v-if="currentSlide.speakerNoteParagraphs?.length" :paragraphs="currentSlide.speakerNoteParagraphs" @activate-hyperlink="activateHyperlink" />
           <p v-else-if="currentSlide.speakerNotes" class="reading-notes-plain">{{ currentSlide.speakerNotes }}</p>
-          <p v-else class="reading-notes-plain">No speaker notes on this slide.</p>
+          <p v-else class="reading-notes-plain">{{ t('noSpeakerNotes') }}</p>
         </aside>
       </section>
     </div>
-    <div v-if="presenterView && deck && currentSlide" class="presenter-view" data-presenter-view :data-current-slide="currentNumber" :data-animation-step="animationStep" role="dialog" aria-modal="true" aria-label="Speaker view">
+    <div v-if="presenterView && deck && currentSlide" class="presenter-view" data-presenter-view :data-current-slide="currentNumber" :data-animation-step="animationStep" role="dialog" aria-modal="true" :aria-label="t('speakerView')">
       <header class="presenter-header">
-        <div><strong>{{ deck.name }}</strong><span> SPEAKER VIEW</span></div>
+        <div><strong>{{ deck.name }}</strong><span> {{ t('speakerView').toUpperCase() }}</span></div>
         <div class="presenter-header-actions">
-          <span class="presenter-clock" aria-label="Elapsed time">{{ presenterTime }}</span>
-          <span class="presenter-display-status" :data-projector-connected="projectorConnected" :data-projector-number="projectorAcknowledgement?.number ?? 0" :data-projector-step="projectorAcknowledgement?.animationStep ?? -1" :data-projector-blank="projectorAcknowledgement?.blank || ''" :data-projector-trigger-count="projectorAcknowledgement?.triggerCount ?? -1">{{ projectorConnected ? 'SECOND DISPLAY CONNECTED' : 'SECOND DISPLAY CLOSED' }}</span>
-          <button class="text-button" data-open-projector @click="openProjectorWindow">{{ projectorOpen ? 'Focus display' : 'Open second display' }}</button>
-          <span v-if="projectorError" class="projector-error" data-projector-error role="alert">{{ projectorError }}</span>
-          <button v-if="projectorOpen" class="text-button" data-close-projector @click="closeProjectorWindow">Close display</button>
-          <button ref="presenterExit" class="text-button" data-presenter-exit @click="togglePresenterView">Exit <kbd>Esc</kbd></button>
+          <span class="presenter-clock" :aria-label="t('elapsedTime')">{{ presenterTime }}</span>
+          <span class="presenter-display-status" :data-projector-connected="projectorConnected" :data-projector-number="projectorAcknowledgement?.number ?? 0" :data-projector-step="projectorAcknowledgement?.animationStep ?? -1" :data-projector-blank="projectorAcknowledgement?.blank || ''" :data-projector-trigger-count="projectorAcknowledgement?.triggerCount ?? -1">{{ projectorConnected ? t('secondDisplayConnected') : t('secondDisplayClosed') }}</span>
+          <button class="text-button" data-open-projector @click="openProjectorWindow">{{ projectorOpen ? t('focusDisplay') : t('openSecondDisplay') }}</button>
+          <span v-if="projectorError" class="projector-error" data-projector-error role="alert">{{ t(projectorError) }}</span>
+          <button v-if="projectorOpen" class="text-button" data-close-projector @click="closeProjectorWindow">{{ t('closeDisplay') }}</button>
+          <button class="locale-toggle" :aria-label="t(locale === 'en' ? 'switchLanguageToChinese' : 'switchLanguageToEnglish')" @click="toggleLocale">{{ t(locale === 'en' ? 'switchToChinese' : 'switchToEnglish') }}</button>
+          <button ref="presenterExit" class="text-button" data-presenter-exit @click="togglePresenterView">{{ t('exit') }} <kbd>Esc</kbd></button>
         </div>
       </header>
       <div class="presenter-grid">
-        <section class="presenter-current-panel" aria-label="Current slide">
-          <div class="presenter-panel-title"><span>Current</span><span>{{ currentNumber }} / {{ deck.slides.length }}</span></div>
+        <section class="presenter-current-panel" :aria-label="t('current') + ' ' + t('slides').toLowerCase()">
+          <div class="presenter-panel-title"><span>{{ t('current') }}</span><span>{{ currentNumber }} / {{ deck.slides.length }}</span></div>
           <div class="presenter-current-frame">
             <div ref="presenterStageShell" class="slide-transition-shell presenter-transition-shell">
               <div ref="presenterTransitionUnderlay" class="slide-transition-underlay" :class="{ 'is-pulling': currentSlide?.transition?.effect === 'pull', 'is-splitting-in': currentSlide?.transition?.effect === 'split' && currentSlide.transition.direction === 'in' }" aria-hidden="true" />
               <div ref="presenterSlideHost" class="slide-host" :data-slide-number="currentNumber" :style="{ '--slide-ratio': String(deck.width / deck.height) }">
-                <SlideStage class="presenter-large-slide" :style="{ '--slide-ratio': String(deck.width / deck.height) }" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" :trigger-playback="triggerPlayback" thumbnail playback-preview />
+                <SlideStage class="presenter-large-slide" :style="{ '--slide-ratio': String(deck.width / deck.height) }" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" :show-animations="showAnimations" :show-narration="showNarration" :trigger-playback="triggerPlayback" thumbnail playback-preview />
               </div>
               <div ref="presenterFlashOverlay" class="flash-transition-overlay" aria-hidden="true" />
             </div>
           </div>
         </section>
         <aside class="presenter-side-panel">
-          <section class="presenter-next-panel" aria-label="Next slide">
-            <div class="presenter-panel-title"><span>Next</span><span>{{ currentIndex < deck.slides.length - 1 ? `${currentIndex + 2} / ${deck.slides.length}` : 'End of deck' }}</span></div>
-            <div v-if="deck.slides[currentIndex + 1]" class="presenter-next-frame">
-              <SlideStage class="presenter-next-slide" :slide="deck.slides[currentIndex + 1]!" :width="deck.width" :height="deck.height" :number="currentIndex + 2" thumbnail />
+          <section class="presenter-next-panel" :aria-label="t('next') + ' ' + t('slides').toLowerCase()">
+            <div class="presenter-panel-title"><span>{{ t('next') }}</span><span>{{ nextShownSlideIndex !== undefined ? `${nextShownSlideIndex + 1} / ${deck.slides.length}` : t('endOfDeck') }}</span></div>
+            <div v-if="nextShownSlideIndex !== undefined" class="presenter-next-frame">
+              <SlideStage class="presenter-next-slide" :slide="deck.slides[nextShownSlideIndex]!" :width="deck.width" :height="deck.height" :number="nextShownSlideIndex + 1" thumbnail />
             </div>
-            <div v-else class="presenter-end-card">This is the final slide.</div>
+            <div v-else class="presenter-end-card">{{ t('finalSlide') }}</div>
           </section>
-          <section class="presenter-notes-panel" aria-label="Speaker notes">
-            <div class="presenter-panel-title"><span>Speaker notes</span></div>
+          <section class="presenter-notes-panel" :aria-label="t('speakerNotes')">
+            <div class="presenter-panel-title"><span>{{ t('speakerNotes') }}</span></div>
             <SpeakerNotes v-if="currentSlide.speakerNoteParagraphs?.length" :paragraphs="currentSlide.speakerNoteParagraphs" @activate-hyperlink="activateHyperlink" />
             <p v-else-if="currentSlide.speakerNotes" data-presenter-notes>{{ currentSlide.speakerNotes }}</p>
-            <p v-else class="presenter-no-notes" data-presenter-notes>No speaker notes on this slide.</p>
+            <p v-else class="presenter-no-notes" data-presenter-notes>{{ t('noSpeakerNotes') }}</p>
           </section>
         </aside>
       </div>
       <footer class="presenter-footer">
-        <button class="text-button" :disabled="currentIndex === 0 && animationStep === 0" @click="previousSlide">← Previous</button>
-        <span>Arrow keys navigate · S toggles speaker view · {{ presenterTime }}</span>
-        <button class="text-button" :disabled="currentIndex === deck.slides.length - 1 && animationStep >= animationCount" @click="nextSlide">Next →</button>
+        <button class="text-button" :disabled="animationStep === 0 && previousShownSlideIndex === undefined" @click="previousSlide">{{ t('previousSlide') }}</button>
+        <span>{{ t('presenterKeyboardHelp', { time: presenterTime }) }}</span>
+        <button class="text-button" :disabled="animationStep >= animationCount && nextShownSlideIndex === undefined" @click="nextSlide">{{ t('nextSlide') }}</button>
       </footer>
     </div>
-    <div v-if="sorterView && deck" class="sorter-view" data-sorter-view role="dialog" aria-modal="true" aria-label="Slide sorter">
+    <div v-if="sorterView && deck" class="sorter-view" data-sorter-view role="dialog" aria-modal="true" :aria-label="t('slideSorter')">
       <header class="sorter-header">
-        <div><strong>Slide sorter</strong><span>{{ sorterPageStart + 1 }}–{{ sorterPageEnd }} / {{ deck.slides.length }}</span></div>
-        <button ref="sorterExit" class="text-button" data-sorter-exit @click="toggleSorterView">Close <kbd>Esc</kbd></button>
+        <div><strong>{{ t('slideSorter') }}</strong><span>{{ sorterPageStart + 1 }}–{{ sorterPageEnd }} / {{ deck.slides.length }}</span></div>
+        <div class="presenter-header-actions">
+          <button class="locale-toggle" :aria-label="t(locale === 'en' ? 'switchLanguageToChinese' : 'switchLanguageToEnglish')" @click="toggleLocale">{{ t(locale === 'en' ? 'switchToChinese' : 'switchToEnglish') }}</button>
+          <button ref="sorterExit" class="text-button" data-sorter-exit @click="toggleSorterView">{{ t('close') }} <kbd>Esc</kbd></button>
+        </div>
       </header>
       <div class="sorter-grid" role="list">
         <article
@@ -1236,16 +1306,16 @@ onBeforeUnmount(() => {
           @drop.stop="dropSlide($event, index)"
           @dragend="draggedSlideIndex = null"
         >
-          <button class="sorter-slide-button" :aria-label="`Go to slide ${index + 1}: ${slide.name}`" @click="goToSlide(index); toggleSorterView()">
+          <button class="sorter-slide-button" :aria-label="`${t(slide.hidden ? 'goToHiddenSlide' : 'goToSlide', { number: index + 1 })}: ${slide.name}`" @click="goToSlide(index); toggleSorterView()">
             <div class="sorter-preview" :style="{ aspectRatio: `${deck.width} / ${deck.height}` }"><SlideStage :slide="slide" :width="deck.width" :height="deck.height" :number="index + 1" thumbnail /></div>
-            <div class="sorter-meta"><span>{{ String(index + 1).padStart(2, '0') }}</span><span>{{ slide.name }}</span></div>
+            <div class="sorter-meta"><span>{{ String(index + 1).padStart(2, '0') }}</span><span>{{ slide.hidden ? t('hidden') + ' · ' : '' }}{{ slide.name }}</span></div>
           </button>
         </article>
       </div>
       <footer class="sorter-footer">
-        <button class="text-button" :disabled="sorterPageStart === 0" @click="stepSorterPage(-1)">← Previous group</button>
-        <span>Drag to reorder in this group · Select a slide, then use Alt + arrow keys to move it</span>
-        <button class="text-button" :disabled="sorterPageEnd >= deck.slides.length" @click="stepSorterPage(1)">Next group →</button>
+        <button class="text-button" :disabled="sorterPageStart === 0" @click="stepSorterPage(-1)">{{ t('previousGroup') }}</button>
+        <span>{{ t('reorderSlidesHint') }}</span>
+        <button class="text-button" :disabled="sorterPageEnd >= deck.slides.length" @click="stepSorterPage(1)">{{ t('nextGroup') }}</button>
       </footer>
     </div>
   </main>

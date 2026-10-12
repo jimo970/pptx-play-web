@@ -7,7 +7,7 @@ export interface PresenterInkStroke { tool: 'pen' | 'highlighter'; points: strin
 
 export type PresenterMessage =
   | { type: 'ready' }
-  | { type: 'document'; name: string; width: number; height: number; totalSlides: number; embeddedFonts: PptxEmbeddedFontFace[]; fontWarnings: string[] }
+  | { type: 'document'; name: string; width: number; height: number; totalSlides: number; showAnimations: boolean; showNarration: boolean; embeddedFonts: PptxEmbeddedFontFace[]; fontWarnings: string[] }
   | { type: 'slide'; slide: PptxSlide; number: number; animationStep: number; blank: 'black' | 'white' | null; triggerPlayback: PptxTriggerPlayback[]; transitionPlayback: PptxTransitionPlayback | null; ink: PresenterInkStroke[]; draftStroke: PresenterInkStroke | null; laserPoint: PresenterPoint | null }
   | { type: 'state'; animationStep: number; blank: 'black' | 'white' | null; triggerPlayback: PptxTriggerPlayback[] }
   | { type: 'ink-start'; slideId: string; stroke: PresenterInkStroke }
