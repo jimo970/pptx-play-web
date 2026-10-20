@@ -6245,7 +6245,9 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                     ? Number.isFinite(parsedEffectProgress) && parsedEffectProgress >= 0 && parsedEffectProgress <= 1
                         ? parsedEffectProgress
                         : undefined
-                    : undefined
+                    // A cut filter changes visibility instantaneously; keep the authored duration
+                    // for sequence scheduling while holding the visual effect at its end state.
+                    : filter === 'cut' ? 1 : undefined
                 if (effectProgressNode && effectProgress === undefined) {
                     warnings.add('An object-effect progress override must be a single float from 0 to 1; the timed progress was used instead.')
                 }
