@@ -8,6 +8,7 @@
     "preview": "nuxt preview",
     "typecheck": "nuxt typecheck",
     "verify:animation": "node scripts/verify-animation.mjs",
+    "verify:office-animation-playback": "node scripts/verify-office-animation-playback.mjs",
     "verify:chart-number-format": "node scripts/verify-chart-number-format.mjs",
     "verify:narration": "node scripts/verify-animation.mjs --narration-only",
     "verify:pptx-input-errors": "node scripts/verify-pptx-input-errors.mjs"
@@ -18,6 +19,7 @@
     "nuxt": "^4.5.2"
   },
   "devDependencies": {
+    "@nuxtjs/i18n": "^10.6.0",
     "typescript": "^5.9.3",
     "vue-tsc": "^3.3.11"
   }

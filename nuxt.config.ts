@@ -1,7 +1,18 @@
 export default defineNuxtConfig({
     compatibilityDate: '2026-09-30',
+    modules: ['@nuxtjs/i18n'],
     css: ['~/assets/css/main.css'],
     devtools: {enabled: false},
+    i18n: {
+        defaultLocale: 'en',
+        detectBrowserLanguage: false,
+        locales: [
+            {code: 'en', language: 'en-US', name: 'English'},
+            {code: 'zh', language: 'zh-CN', name: '中文'}
+        ],
+        strategy: 'no_prefix',
+        vueI18n: './i18n.config.ts'
+    },
 
     hooks: {
         'build:manifest'(manifest) {

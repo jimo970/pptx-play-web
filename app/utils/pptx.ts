@@ -1,12 +1,15 @@
 import JSZip from 'jszip'
 import presetShapeDefinitionsUrl from './preset-shape-definitions.xml?url'
 import { normalizePptxError, validatePptxFile } from './pptx-input'
-import {inverseTimingProgress, type TimingCurve} from './animation-timing'
+import {inverseTimingProgress, parseAnimationSpeed, parseTimingFilter, type TimingCurve} from './animation-timing'
+import {animationGeometryVariables, evaluateAnimationFormula as evaluateMotionFormula, sampleAnimationFormula} from './animation-formula'
+import {createTextIterationSegmenter, textIterationLocale, textIterationRanges} from './text-iteration'
 import {getChartDateAxisMajorTicks, isSupportedChartNumberFormat} from './chart-number-format'
 import {hslToRgb} from './color'
 import {getPptxChartStacking, isSvgPolygonGeometry, presetEllipsePoint} from './pptx-render-utils'
 import type {
     AnimationOnOffProperty,
+    AnimationShadowOffsetProperty,
     AnimatedLineArrow,
     AnimatedLineArrowProperty,
     AnimatedLineArrowSize,
@@ -46,9 +49,13 @@ import type {
 
 // ponytail: cap animated strokes at about 10,500 CSS px before stage scaling; raise only for real decks that need wider strokes.
 const MAX_ANIMATED_STROKE_WIDTH_EMU = 100_000_000
+const MAX_ANIMATED_SHADOW_OFFSET_EMU = 100_000_000
 const FLY_PRESET_DIRECTIONS = new Map<number, NonNullable<PptxAnimation['slideFrom']>>([
     [1, 'top'], [2, 'right'], [4, 'bottom'], [8, 'left'],
     [9, 'topLeft'], [3, 'topRight'], [12, 'bottomLeft'], [6, 'bottomRight']
+])
+const PEEK_PRESET_DIRECTIONS = new Map<number, NonNullable<PptxAnimation['slideFrom']>>([
+    [1, 'top'], [2, 'right'], [4, 'bottom'], [8, 'left']
 ])
 // Split is PowerPoint effect 16; subtype directions follow the supplied OOXML parser reference.
 // https://learn.microsoft.com/en-us/office/vba/api/powerpoint.msoanimeffect
@@ -61,6 +68,46 @@ const SPLIT_PRESET_DIRECTIONS = new Map<number, {orientation: NonNullable<PptxAn
 const SHAPE_ANIMATION_PRESET_IDS = new Map<number, NonNullable<PptxAnimation['shapeFilter']>>([
     [4, 'box'], [6, 'circle'], [8, 'diamond'], [13, 'plus']
 ])
+// presetSubtype is effect-specific serialized metadata, not the MsoAnimDirection enum.
+// These canonical tuples are used when animEffect.filter is absent or unsupported.
+const PRESET_BLINDS_ORIENTATIONS = new Map<number, NonNullable<PptxAnimation['blindsOrientation']>>([[10, 'horizontal']])
+const PRESET_CHECKER_ORIENTATIONS = new Map<number, NonNullable<PptxAnimation['checkerOrientation']>>([[6, 'horz']])
+const PRESET_RANDOM_BAR_ORIENTATIONS = new Map<number, NonNullable<PptxAnimation['randomBarOrientation']>>([[10, 'horizontal']])
+const PRESET_STRIPS_DIRECTIONS = new Map<number, NonNullable<PptxAnimation['stripsDirection']>>([[12, 'rd']])
+
+function presetVariantOrDefault<T>(subtype: number | undefined, rawSubtype: string, wasSpecified: boolean, variants: Map<number, T>, defaultValue: T, presetName: string, warnings: Set<string>): T {
+    if (!wasSpecified || subtype === 0) return defaultValue
+    const variant = subtype === undefined ? undefined : variants.get(subtype)
+    if (variant !== undefined) return variant
+    const subtypeIssue = subtype === undefined ? 'is invalid' : 'is unsupported'
+    warnings.add(`The ${presetName} preset subtype "${rawSubtype}" ${subtypeIssue} without a filter string; its default direction was used.`)
+    return defaultValue
+}
+
+const ANIMATION_ATTRIBUTE_NAMES = new Map([
+    'ppt_x', 'ppt_y', 'ppt_w', 'ppt_h', 'ScaleX', 'ScaleY',
+    'style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline',
+    'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow',
+    'style.textEffectEmboss', 'style.visibility', 'style.rotation', 'style.opacity', 'style.color',
+    'imageData.chromakey', 'imageData.grayscale', 'imageData.cropLeft', 'imageData.cropTop', 'imageData.cropRight',
+    'imageData.cropBottom', 'imageData.gain', 'imageData.blacklevel', 'imageData.blackleve', 'imageData.gamma',
+    'fill.on', 'fill.opacity', 'fillcolor', 'stroke.on', 'stroke.dashstyle', 'stroke.startArrow', 'stroke.endArrow',
+    'stroke.startArrowWidth', 'stroke.endArrowWidth', 'stroke.startArrowLength', 'stroke.endArrowLength',
+    'stroke.opacity', 'stroke.weight', 'stroke.color', 'shadow.on', 'shadow.opacity', 'shadow.color',
+    'shadow.offset.x', 'shadow.offset.y'
+].map(name => [name.toLowerCase(), name]))
+// Generic p:anim uses the same renderer for Office's ppt_r/r angle attributes.
+// Formula evaluation still exposes #ppt_r and #r as the original property baselines.
+// https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/be583d68-11d7-43c2-a300-8ef2ffac7841
+ANIMATION_ATTRIBUTE_NAMES.set('ppt_r', 'style.rotation')
+ANIMATION_ATTRIBUTE_NAMES.set('r', 'style.rotation')
+ANIMATION_ATTRIBUTE_NAMES.set('fill.color', 'fillcolor')
+
+function normalizeAnimationAttributeName(value: string | null | undefined): string | undefined {
+    const name = value?.trim()
+    if (!name) return undefined
+    return ANIMATION_ATTRIBUTE_NAMES.get(name.toLowerCase()) || name
+}
 
 // The raw OOXML subtype mapping follows the supplied parser reference; Microsoft's Open XML API exposes this attribute as an integer.
 function getShapePresetDirection(transition: 'in' | 'out', subtype?: number): 'in' | 'out' {
@@ -963,6 +1010,27 @@ function readColor(node: Element | undefined, theme: Record<string, string>): st
 }
 
 function animationColorChannels(node: Element | undefined, theme: Record<string, string>, colorSpace: 'rgb' | 'hsl'): [number, number, number, number] | undefined {
+    if (node?.localName === 'hsl') {
+        // PresentationML p:hsl values are relative HSL offsets, unlike DrawingML a:hslClr colors.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.hslcolor?view=openxml-3.0.1
+        const rawHue = node.getAttribute('h')?.trim()
+        const hue = rawHue && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:deg)?$/i.test(rawHue)
+            ? Number(rawHue.replace(/deg$/i, '')) / (rawHue.toLowerCase().endsWith('deg') ? 360 : 21_600_000)
+            : Number.NaN
+        const saturation = percentageValue(node.getAttribute('s'))
+        const lightness = percentageValue(node.getAttribute('l'))
+        if (colorSpace !== 'hsl' || !Number.isFinite(hue) || saturation === undefined || lightness === undefined) return undefined
+        return [hue, saturation, lightness, 1]
+    }
+    if (node?.localName === 'rgb') {
+        // PresentationML p:rgb stores relative channel offsets as fixed percentages.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.rgbcolor?view=openxml-3.0.1
+        const red = percentageValue(node.getAttribute('r'))
+        const green = percentageValue(node.getAttribute('g'))
+        const blue = percentageValue(node.getAttribute('b'))
+        if (colorSpace !== 'rgb' || red === undefined || green === undefined || blue === undefined) return undefined
+        return [red * 255, green * 255, blue * 255, 1]
+    }
     const css = readColor(node, theme)
     if (!css) return undefined
     const hex = /^#([0-9a-f]{6})$/i.exec(css)
@@ -975,6 +1043,69 @@ function animationColorChannels(node: Element | undefined, theme: Record<string,
     if (!channels || colorSpace === 'rgb') return channels
     const [hue, saturation, lightness] = rgbToHsl(channels[0], channels[1], channels[2])
     return [hue, saturation, lightness, channels[3]]
+}
+
+type AnimationColorSpace = 'rgb' | 'hsl'
+type AnimationColorValue = {colorSpace: AnimationColorSpace; channels: [number, number, number, number]}
+
+// p:anim color strings use rgb(...), hsl(...), and RGB/ARGB hex forms.
+// https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
+function parseAnimationColorString(value: string | null | undefined): AnimationColorValue | undefined {
+    const input = value?.trim()
+    if (!input || input.length > 128) return undefined
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(input)?.[1]
+    if (hex) {
+        const byte = (value: string) => Number.parseInt(value, 16)
+        const nibble = (value: string) => Number.parseInt(value, 16) * 16
+        const channels = hex.length === 3
+            ? [nibble(hex[0]!), nibble(hex[1]!), nibble(hex[2]!), 1]
+            : hex.length === 4
+              ? [nibble(hex[1]!), nibble(hex[2]!), nibble(hex[3]!), nibble(hex[0]!) / 255]
+              : hex.length === 6
+                ? [byte(hex.slice(0, 2)), byte(hex.slice(2, 4)), byte(hex.slice(4, 6)), 1]
+                : [byte(hex.slice(2, 4)), byte(hex.slice(4, 6)), byte(hex.slice(6, 8)), byte(hex.slice(0, 2)) / 255]
+        return {colorSpace: 'rgb', channels: channels as [number, number, number, number]}
+    }
+
+    const match = /^(rgb|hsl)\(\s*([^()]*)\s*\)$/i.exec(input)
+    if (!match) return undefined
+    const colorSpace = match[1]!.toLowerCase() as AnimationColorSpace
+    const values = match[2]!.split(',').map(part => part.trim())
+    if (values.length !== 3 && values.length !== 4) return undefined
+    const parseChannel = (raw: string, maximum: number): number | undefined => {
+        const isPercentage = raw.endsWith('%')
+        const numericValue = (isPercentage ? raw.slice(0, -1) : raw).trim()
+        if (!numericValue) return undefined
+        const numeric = Number(numericValue)
+        if (!Number.isFinite(numeric) || numeric < 0 || numeric > (isPercentage ? 100 : maximum)) return undefined
+        return isPercentage ? numeric * maximum / 100 : numeric
+    }
+    const maximum = 255
+    const redOrHue = parseChannel(values[0]!, maximum)
+    const greenOrSaturation = parseChannel(values[1]!, maximum)
+    const blueOrLightness = parseChannel(values[2]!, maximum)
+    const alpha = values.length === 4 ? parseChannel(values[3]!, maximum) : maximum
+    if (redOrHue === undefined || greenOrSaturation === undefined || blueOrLightness === undefined || alpha === undefined) return undefined
+    const channels: [number, number, number, number] = colorSpace === 'hsl'
+        ? [redOrHue / maximum, greenOrSaturation / maximum, blueOrLightness / maximum, alpha / maximum]
+        : [redOrHue, greenOrSaturation, blueOrLightness, alpha / maximum]
+    return {colorSpace, channels}
+}
+
+function animationColorValueInSpace(color: AnimationColorValue, colorSpace: AnimationColorSpace): [number, number, number, number] {
+    if (color.colorSpace === colorSpace) return [...color.channels]
+    const [first, second, third, alpha] = color.channels
+    if (colorSpace === 'hsl') {
+        const [hue, saturation, lightness] = rgbToHsl(first, second, third)
+        return [hue, saturation, lightness, alpha]
+    }
+    const [red, green, blue] = hslToRgb(first, second, third)
+    return [red, green, blue, alpha]
+}
+
+function animationColorStringChannels(value: string | null | undefined, colorSpace: AnimationColorSpace): [number, number, number, number] | undefined {
+    const color = parseAnimationColorString(value)
+    return color ? animationColorValueInSpace(color, colorSpace) : undefined
 }
 
 function parsedShadow(shadow: Element, theme: Record<string, string>, warnings: Set<string>, inset = false): PptxShadow {
@@ -4794,6 +4925,60 @@ function mediaMime(path: string): string | undefined {
     )[ext || '']
 }
 
+async function transitionAudioUrlFor(target: string, zip: JSZip, urls: string[], cache: Map<string, string>): Promise<string | undefined> {
+    const cached = cache.get(target)
+    if (cached) return cached
+    const media = zip.file(target)
+    const mime = mediaMime(target)
+    if (!media || !mime?.startsWith('audio/')) return undefined
+    try {
+        const blob = await media.async('blob')
+        const url = URL.createObjectURL(new Blob([blob], {type: mime}))
+        cache.set(target, url)
+        urls.push(url)
+        return url
+    } catch {
+        return undefined
+    }
+}
+
+async function parseTransitionSoundActions(transition: Element, rels: Map<string, PptxRelationship>, zip: JSZip, warnings: Set<string>, urls: string[], assetUrlCache: Map<string, string>): Promise<NonNullable<NonNullable<PptxSlide['transition']>['soundActions']>> {
+    const actions: NonNullable<NonNullable<PptxSlide['transition']>['soundActions']> = []
+    for (const soundAction of children(transition, 'sndAc').flatMap(action => children(action))) {
+        if (soundAction.localName === 'endSnd') {
+            actions.push({type: 'end'})
+            continue
+        }
+        if (soundAction.localName !== 'stSnd') continue
+        const sound = child(soundAction, 'snd')
+        const relationshipId = namespacedAttr(sound, 'embed')
+        if (!relationshipId) {
+            const linkId = namespacedAttr(sound, 'link')
+            warnings.add(linkId && rels.get(linkId)?.external ? 'An external transition sound was skipped; only embedded audio is supported.' : 'A transition sound without an embedded audio relationship was skipped.')
+            continue
+        }
+        const relation = rels.get(relationshipId)
+        if (!relation || relation.external) {
+            warnings.add('A transition sound relationship could not be resolved to embedded audio.')
+            continue
+        }
+        const mime = mediaMime(relation.target)
+        if (!mime?.startsWith('audio/')) {
+            warnings.add('A transition sound has an unsupported or invalid audio file type.')
+            continue
+        }
+        const url = await transitionAudioUrlFor(relation.target, zip, urls, assetUrlCache)
+        if (!url) {
+            warnings.add('An embedded transition sound file could not be found.')
+            continue
+        }
+        const rawLoop = soundAction.getAttribute('loop')?.trim().toLowerCase()
+        if (rawLoop !== undefined && !['0', '1', 'false', 'true'].includes(rawLoop)) warnings.add('A transition sound has an invalid loop value; looping was disabled.')
+        actions.push({type: 'start', url, loop: rawLoop === '1' || rawLoop === 'true'})
+    }
+    return actions
+}
+
 function mediaTimeOffsetMs(value: string | null): number | undefined {
     // MS-PPTX ST_UniversalTimeOffset: h/min/s/ms/µs/ns suffixes; an omitted unit means milliseconds.
     if (value === null) return 0
@@ -4804,10 +4989,10 @@ function mediaTimeOffsetMs(value: string | null): number | undefined {
     return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : undefined
 }
 
-function selectedTransition(slideRoot: Element, warnings: Set<string>): {transition: Element; durationSource: Element} | undefined {
-    let transition = child(slideRoot, 'transition')
+function selectedTransitionOnRoot(root: Element, warnings: Set<string>): {transition: Element; durationSource: Element} | undefined {
+    let transition = child(root, 'transition')
     if (transition) return {transition, durationSource: transition}
-    for (const alternate of children(slideRoot, 'AlternateContent')) {
+    for (const alternate of children(root, 'AlternateContent')) {
         const choices = children(alternate, 'Choice')
         const choiceTransitions = choices.map(choice => ({choice, transition: child(choice, 'transition')})).filter((candidate): candidate is {choice: Element; transition: Element} => Boolean(candidate.transition))
         transition = child(child(alternate, 'Fallback'), 'transition')
@@ -4824,7 +5009,7 @@ function selectedTransition(slideRoot: Element, warnings: Set<string>): {transit
             .map(candidate => candidate.transition)
             .find(candidate => {
                 const effect = children(candidate).find(node => !['extLst', 'sndAc', 'sound'].includes(node.localName))
-                return !!effect && SUPPORTED_TRANSITIONS.has(effect.localName)
+                return effect ? SUPPORTED_TRANSITIONS.has(effect.localName) : children(candidate, 'sndAc').length > 0
             })
         if (selectedChoice) return {transition: selectedChoice, durationSource: selectedChoice}
         const durationSource = choiceTransitions.map(candidate => candidate.transition).find(candidate => candidate.hasAttributeNS(POWERPOINT_2010_NS, 'dur')) || transition
@@ -4834,8 +5019,18 @@ function selectedTransition(slideRoot: Element, warnings: Set<string>): {transit
     return undefined
 }
 
-function parseSlideAdvance(slideRoot: Element, warnings: Set<string>): Pick<PptxSlide, 'advanceOnClick' | 'advanceAfterMs'> {
-    const transition = selectedTransition(slideRoot, warnings)?.transition
+function selectedTransition(slideRoot: Element, warnings: Set<string>, layoutRoot?: Element, masterRoot?: Element): ({transition: Element; durationSource: Element; sourceRoot: Element}) | undefined {
+    // Slide-local transition data overrides its layout, which overrides the slide master.
+    for (const sourceRoot of [slideRoot, layoutRoot, masterRoot]) {
+        if (!sourceRoot) continue
+        const selection = selectedTransitionOnRoot(sourceRoot, warnings)
+        if (selection) return {...selection, sourceRoot}
+    }
+    return undefined
+}
+
+function parseSlideAdvance(slideRoot: Element, warnings: Set<string>, layoutRoot?: Element, masterRoot?: Element): Pick<PptxSlide, 'advanceOnClick' | 'advanceAfterMs'> {
+    const transition = selectedTransition(slideRoot, warnings, layoutRoot, masterRoot)?.transition
     if (!transition) return {}
     const advanceOnClick = transition.getAttribute('advClick')?.toLowerCase()
     if (advanceOnClick !== undefined && !['1', '0', 'true', 'false'].includes(advanceOnClick)) {
@@ -4878,12 +5073,14 @@ function parseSlideHidden(slideRoot: Element, warnings: Set<string>): boolean | 
     return undefined
 }
 
-function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['transition'] {
-    const selection = selectedTransition(slideRoot, warnings)
+async function parseTransition(slideRoot: Element, warnings: Set<string>, rels: Map<string, PptxRelationship>, zip: JSZip, urls: string[], assetUrlCache: Map<string, string>, layoutRoot?: Element, layoutRels?: Map<string, PptxRelationship>, masterRoot?: Element, masterRels?: Map<string, PptxRelationship>): Promise<PptxSlide['transition']> {
+    const selection = selectedTransition(slideRoot, warnings, layoutRoot, masterRoot)
     if (!selection) return undefined
     const {transition, durationSource} = selection
+    const transitionRels = selection.sourceRoot === layoutRoot ? layoutRels || rels : selection.sourceRoot === masterRoot ? masterRels || rels : rels
+    const soundActions = await parseTransitionSoundActions(transition, transitionRels, zip, warnings, urls, assetUrlCache)
     const effectNode = children(transition).find(node => !['extLst', 'sndAc', 'sound'].includes(node.localName))
-    if (!effectNode) return undefined
+    if (!effectNode) return soundActions.length ? {effect: 'cut', direction: 'l', durationMs: 0, soundActions} : undefined
     const effectName = effectNode.localName
     const throughBlackValue = effectNode.getAttribute('thruBlk')?.toLowerCase()
     const throughBlack = ['fade', 'cut', 'reveal'].includes(effectName) && ['1', 'true'].includes(throughBlackValue || '')
@@ -4943,8 +5140,10 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
               : 'fade'
     if (effectName === 'prstTrans' && !presetName) warnings.add(`The p15:prstTrans preset "${rawPresetName || '(missing)'}" is invalid; the transition falls back to fade.`)
     else if (effect !== effectName && effectName !== 'prstTrans') warnings.add(`The ${effectName} slide transition falls back to fade.`)
-    const speed = transition.getAttribute('spd')?.trim()
-    if (speed !== undefined && !['fast', 'med', 'slow'].includes(speed)) warnings.add(`The slide transition speed "${speed}" is invalid; it was ignored.`)
+    // ECMA-376 CT_SlideTransition declares spd default="fast"; invalid values fall back to that default.
+    const rawSpeed = transition.getAttribute('spd')?.trim()
+    const speed = rawSpeed && ['fast', 'med', 'slow'].includes(rawSpeed) ? rawSpeed : 'fast'
+    if (rawSpeed !== undefined && speed !== rawSpeed) warnings.add(`The slide transition speed "${rawSpeed}" is invalid; it was ignored.`)
     // Office stores the extension duration on mc:Choice even when this player renders mc:Fallback.
     // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-pptx/99b95b35-568a-4652-9cba-df3d1175952f
     const durationValue = (durationSource || transition).getAttributeNS(POWERPOINT_2010_NS, 'dur')
@@ -5054,8 +5253,8 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
     if (effect === 'morph' && rawMorphOption !== 'byObject' && rawMorphOption !== 'byWord' && rawMorphOption !== 'byChar') {
         warnings.add('The morph option is missing or invalid; byObject was used.')
     }
-    // The renderer rotates the full slide plane; Office's isContent=true separates background and content.
-    if (isContent) warnings.add('The prism isContent flag requests separate background and content planes; this player rotates them together.')
+    // Keep the Prism moving on the content plane and crossfade the separate slide backgrounds.
+    if (isContent) warnings.add('The prism isContent flag uses a separate content prism with a background crossfade; Office rendering may differ.')
     return {
         effect,
         morphOption,
@@ -5072,168 +5271,54 @@ function parseTransition(slideRoot: Element, warnings: Set<string>): PptxSlide['
         isInverted,
         isContent,
         throughBlack,
+        ...(soundActions.length ? {soundActions} : {}),
         // ponytail: cap explicit transitions at one minute; raise this if real Office decks demonstrate longer playback needs.
         // Default speed timings were read from PowerPoint's SlideShowTransition.Speed and Duration properties.
         durationMs: explicitDuration !== undefined && Number.isFinite(explicitDuration) && explicitDuration >= 0 ? Math.min(explicitDuration, 60_000) : speed === 'fast' ? 500 : speed === 'slow' ? 1000 : 750
     }
 }
 
-function evaluateMotionFormula(formula: string, variables: Record<string, number>): number | undefined {
-    const tokens: string[] = []
-    const tokenizer = /#[A-Za-z][A-Za-z0-9_.]*|\$|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[A-Za-z][A-Za-z0-9_]*|[()+\-*/%^,]/gy
-    let scan = 0
-    while (scan < formula.length) {
-        if (/\s/.test(formula[scan] || '')) {
-            scan++
-            continue
-        }
-        tokenizer.lastIndex = scan
-        const match = tokenizer.exec(formula)
-        if (!match) return undefined
-        tokens.push(match[0])
-        if (tokens.length > 512) return undefined
-        scan = tokenizer.lastIndex
-    }
-
-    const functions: Record<string, (...args: number[]) => number> = {
-        abs: Math.abs,
-        acos: Math.acos,
-        asin: Math.asin,
-        atan: Math.atan,
-        ceil: Math.ceil,
-        cos: Math.cos,
-        cosh: Math.cosh,
-        deg: value => (value * 180) / Math.PI,
-        exp: Math.exp,
-        floor: Math.floor,
-        ln: Math.log,
-        max: Math.max,
-        min: Math.min,
-        rad: value => (value * Math.PI) / 180,
-        rand: maximum => maximum < 0 ? Number.NaN : Math.random() * maximum,
-        sin: Math.sin,
-        sinh: Math.sinh,
-        sqrt: Math.sqrt,
-        tan: Math.tan,
-        tanh: Math.tanh
-    }
-    let cursor = 0
-    const finite = (value: number | undefined): value is number => value !== undefined && Number.isFinite(value)
-    const formulaValue = (): number | undefined => {
-        let value = term()
-        while (value !== undefined && (tokens[cursor] === '+' || tokens[cursor] === '-')) {
-            const operator = tokens[cursor++]
-            const right = term()
-            if (right === undefined) return undefined
-            value = operator === '+' ? value + right : value - right
-            if (!Number.isFinite(value)) return undefined
-        }
-        return value
-    }
-    const factor = (depth: number): number | undefined => {
-        if (depth > 255) return undefined
-        const token = tokens[cursor++]
-        if (token === undefined) return undefined
-        if (token === '+' || token === '-') {
-            const value = factor(depth + 1)
-            return value === undefined ? undefined : token === '-' ? -value : value
-        }
-        if (token === '(') {
-            const value = formulaValue()
-            if (!finite(value) || tokens[cursor++] !== ')') return undefined
-            return value
-        }
-        if (token.startsWith('#')) return variables[token.slice(1)]
-        if (token === '$') return variables.$
-        if (token === 'pi') return Math.PI
-        if (token === 'e') return Math.E
-        const numeric = Number(token)
-        if (Number.isFinite(numeric)) return numeric
-        const fn = functions[token]
-        if (!fn || tokens[cursor++] !== '(') return undefined
-        const first = formulaValue()
-        if (!finite(first)) return undefined
-        let args = [first]
-        if (token === 'max' || token === 'min') {
-            if (tokens[cursor++] !== ',') return undefined
-            const second = formulaValue()
-            if (!finite(second)) return undefined
-            args.push(second)
-        }
-        if (tokens[cursor++] !== ')') return undefined
-        const result = fn(...args)
-        return Number.isFinite(result) ? result : undefined
-    }
-    const power = (): number | undefined => {
-        let value = factor(0)
-        while (value !== undefined && tokens[cursor] === '^') {
-            cursor++
-            const right = factor(0)
-            if (right === undefined) return undefined
-            value = value ** right
-            if (!Number.isFinite(value)) return undefined
-        }
-        return value
-    }
-    const term = (): number | undefined => {
-        let value = power()
-        while (value !== undefined && (tokens[cursor] === '*' || tokens[cursor] === '/' || tokens[cursor] === '%')) {
-            const operator = tokens[cursor++]
-            const right = power()
-            if (right === undefined) return undefined
-            value = operator === '*' ? value * right : operator === '/' ? value / right : value % right
-            if (!Number.isFinite(value)) return undefined
-        }
-        return value
-    }
-
-    const value = formulaValue()
-    return finite(value) && cursor === tokens.length ? value : undefined
-}
 
 function sampleNumericAnimationFormula(
     keyframes: Array<{offset: number; value: number; formula?: string}>,
     durationMs: number,
-    property: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity' | 'style.fontSize' | 'style.fontWeight' | 'style.rotation' | 'stroke.weight' | 'ppt_x' | 'ppt_y' | 'ScaleX' | 'ScaleY',
+    property: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity' | 'style.fontSize' | 'style.fontWeight' | 'style.rotation' | 'stroke.weight' | 'shadow.offset.x' | 'shadow.offset.y' | 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h' | 'ScaleX' | 'ScaleY',
     element: PptxElement,
     slideWidth: number,
     slideHeight: number,
-    keyframeMode: 'lin' | 'discrete' = 'lin'
+    keyframeMode: 'lin' | 'discrete' = 'lin',
+    fontWeightBaseline?: number,
+    randomSeed?: number
 ): Array<{offset: number; value: number}> | undefined {
-    // shortcut: rand() samples are fixed during parsing; move formula evaluation into playback when repeats must reroll.
-    const sampleCount = Math.min(900, Math.max(60, Math.ceil(durationMs / 1000 * 60)))
+    const geometry = animationGeometryVariables(element, slideWidth, slideHeight)
     const isPosition = property === 'ppt_x' || property === 'ppt_y'
     const isRotation = property === 'style.rotation'
-    const minimum = property === 'style.fontWeight' ? 1 : property === 'style.fontSize' ? Number.MIN_VALUE : isPosition || isRotation ? -2_147_483_647 : 0
-    const maximum = property === 'style.fontWeight' ? 1000 : property === 'style.fontSize' ? 100 : property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : isPosition ? 100 : isRotation ? 2_147_483_647 : property === 'ScaleX' || property === 'ScaleY' ? 10 : 1
-    const samples: Array<{offset: number; value: number}> = []
-    for (let index = 0; index <= sampleCount; index++) {
-        const progress = index / sampleCount
-        const rightIndex = keyframes.findIndex(frame => frame.offset >= progress)
-        const left = rightIndex < 0
-            ? keyframes.at(-1)!
-            : keyframes[Math.max(0, rightIndex - (keyframes[rightIndex]!.offset === progress ? 0 : 1))]!
-        const right = rightIndex < 0 ? left : keyframes[rightIndex]!
-        const formula = keyframes.filter(frame => frame.offset <= progress && frame.formula !== undefined).at(-1)?.formula
-        const ratio = right.offset === left.offset ? 0 : (progress - left.offset) / (right.offset - left.offset)
-        const baseValue = keyframeMode === 'discrete' ? left.value : left.value + (right.value - left.value) * Math.max(0, Math.min(1, ratio))
-        const value = formula
-            ? evaluateMotionFormula(formula, {
-                  ppt_x: element.x / slideWidth,
-                  ppt_y: element.y / slideHeight,
-                  ppt_w: element.width / slideWidth,
-                  ppt_h: element.height / slideHeight,
-                  ScaleX: 1,
-                  ScaleY: 1,
-                  ...(isRotation ? {ppt_r: baseValue, r: baseValue} : {}),
-                  [property]: baseValue,
-                  $: progress
-              })
-            : baseValue
-        if (value === undefined || value < minimum || value > maximum) return undefined
-        samples.push({offset: progress, value})
+    const dimensionBaseline = property === 'ppt_w' ? geometry.ppt_w : property === 'ppt_h' ? geometry.ppt_h : undefined
+    const maximum = property === 'style.fontWeight' ? 1000 : property === 'style.fontSize' ? 100 : property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : property === 'shadow.offset.x' || property === 'shadow.offset.y' ? MAX_ANIMATED_SHADOW_OFFSET_EMU : isPosition ? 100 : isRotation ? 2_147_483_647 : dimensionBaseline !== undefined ? dimensionBaseline * 10 : property === 'ScaleX' || property === 'ScaleY' ? 10 : 1
+    const minimum = property === 'style.fontWeight' ? 1 : isPosition ? -100 : isRotation ? -2_147_483_647 : dimensionBaseline !== undefined || property === 'shadow.offset.x' || property === 'shadow.offset.y' ? -maximum : 0
+    const weights = new Set(element.paragraphs.flatMap(paragraph => paragraph.runs.map(run => run.bold ? 700 : 400)))
+    const variables = {
+        ...geometry,
+        ScaleX: 1, ScaleY: 1,
+        ppt_r: element.rotation * 60_000, r: element.rotation * 60_000,
+        'style.rotation': element.rotation * 60_000,
+        'style.fontSize': 1,
+        ...(fontWeightBaseline !== undefined
+            ? {'style.fontWeight': fontWeightBaseline}
+            : weights.size === 1 ? {'style.fontWeight': [...weights][0]!} : {}),
+        'style.opacity': 1, 'fill.opacity': 1, 'stroke.opacity': 1, 'shadow.opacity': 1,
+        'stroke.weight': element.strokeWidth,
+        'shadow.offset.x': animationShadowOffsetBaseline(element, 'shadow.offset.x'),
+        'shadow.offset.y': animationShadowOffsetBaseline(element, 'shadow.offset.y')
     }
-    return samples
+    return sampleAnimationFormula(keyframes, durationMs, variables, minimum, maximum, keyframeMode, randomSeed)
+}
+
+function animationShadowOffsetBaseline(element: PptxElement, property: AnimationShadowOffsetProperty): number {
+    const shadow = element.shadows?.[0] || element.shadow
+    if (!shadow) return 0
+    const angle = (shadow.angle || 0) * Math.PI / 180
+    return (property === 'shadow.offset.x' ? Math.cos(angle) : Math.sin(angle)) * shadow.distance
 }
 
 function supportsStrokeOpacity(element: PptxElement): boolean {
@@ -5285,11 +5370,56 @@ function parseLineArrowSize(property: AnimatedLineArrowSizeProperty, value: stri
     return normalized && allowed.includes(normalized) ? normalized as AnimatedLineArrowSize : undefined
 }
 
-function parseAnimations(slideRoot: Element, theme: Record<string, string>, warnings: Set<string>, elements: PptxElement[], slideWidth: number, slideHeight: number, smartArtAnimationTargets: Map<string, string>): Pick<PptxSlide, 'automaticAnimations' | 'animationSteps' | 'animationSequence' | 'animationStepSequences' | 'triggeredAnimations'> {
+type RandomEffectVariant = Pick<PptxAnimation, 'effect' | 'wipeDirection' | 'blindsOrientation' | 'checkerOrientation' | 'randomBarOrientation' | 'stripsDirection' | 'wheelSpokes' | 'scaleFrom' | 'scaleTo'>
+
+// PowerPoint and WPS can serialize preset 24 as an empty p:anim without recording the selected visual effect.
+// Choose one supported variant per import; the parsed action keeps that choice for the session's replays.
+const RANDOM_EFFECT_VARIANTS: RandomEffectVariant[] = [
+    {effect: 'fade'},
+    {effect: 'wipe', wipeDirection: 'left'},
+    {effect: 'blinds', blindsOrientation: 'horizontal'},
+    {effect: 'checker', checkerOrientation: 'horz'},
+    {effect: 'randomBars', randomBarOrientation: 'horizontal'},
+    {effect: 'strips', stripsDirection: 'rd'},
+    {effect: 'dissolve'},
+    {effect: 'wheel', wheelSpokes: 4},
+    {effect: 'zoom', scaleFrom: [0, 0], scaleTo: [1, 1]}
+]
+
+function randomEffectVariant(): RandomEffectVariant {
+    return RANDOM_EFFECT_VARIANTS[Math.floor(Math.random() * RANDOM_EFFECT_VARIANTS.length)]!
+}
+
+async function parseAnimations(slideRoot: Element, slidePath: string, theme: Record<string, string>, warnings: Set<string>, elements: PptxElement[], slideWidth: number, slideHeight: number, smartArtAnimationTargets: Map<string, string>, rels: Map<string, PptxRelationship>, zip: JSZip, urls: string[], assetUrlCache: Map<string, string>, isWpsApplication: boolean): Promise<Pick<PptxSlide, 'automaticAnimations' | 'animationSteps' | 'animationSequence' | 'animationStepSequences' | 'triggeredAnimations'>> {
     // p:timing is a direct p:sld child; ignore same-named nodes embedded in extension payloads.
     // Source: https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-presentation-slides
     const timing = child(slideRoot, 'timing')
     if (!timing) return {}
+    const soundTargetUrls = new Map<Element, string>()
+    const soundTargetIds = new Map<Element, string>()
+    let soundTargetIndex = 0
+    for (const mediaNode of descendants(timing, 'audio').concat(descendants(timing, 'video')).filter(node => node.namespaceURI === PRESENTATION_NS)) {
+        const soundTarget = child(child(child(mediaNode, 'cMediaNode'), 'tgtEl'), 'sndTgt')
+        if (!soundTarget || soundTarget.namespaceURI !== PRESENTATION_NS) continue
+        const relationshipId = namespacedAttr(soundTarget, 'embed')
+        const linkId = namespacedAttr(soundTarget, 'link')
+        const relationship = relationshipId ? rels.get(relationshipId) : undefined
+        if (!relationshipId || !relationship || relationship.external) {
+            warnings.add(linkId && rels.get(linkId)?.external
+                ? 'An external animation sound target was skipped; only embedded audio is supported.'
+                : 'An animation sound target without a resolvable embedded audio relationship was skipped.')
+            continue
+        }
+        const url = await transitionAudioUrlFor(relationship.target, zip, urls, assetUrlCache)
+        if (!url) {
+            warnings.add('An animation sound target did not resolve to a supported embedded audio file.')
+            continue
+        }
+        const timeNode = child(child(mediaNode, 'cMediaNode'), 'cTn')
+        const timeNodeId = timeNode?.getAttribute('id')
+        soundTargetUrls.set(mediaNode, url)
+        soundTargetIds.set(mediaNode, `pptx-sound-target-${timeNodeId || ++soundTargetIndex}`)
+    }
     const isInSubTimeNodeList = (node: Element) => {
         let parent = node.parentElement
         while (parent && parent !== timing) {
@@ -5300,6 +5430,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
     }
     const handledSubTimeEntries = new Set<Element>()
     let exclusiveGroupId = 0
+    let subTimeFillScopeId = 0
     const subTimeLeafTypes = new Set(['anim', 'animClr', 'animEffect', 'animMotion', 'animRot', 'animScale', 'set', 'cmd', 'audio', 'video'])
     const subTimeContainerTypes = new Set(['par', 'seq', 'excl'])
     const subTimeEntryTypes = new Set([...subTimeLeafTypes, ...subTimeContainerTypes])
@@ -5309,11 +5440,71 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             subTimeLeafTypes.has(entry.localName) && !['cmd', 'audio', 'video'].includes(entry.localName)
         )
     }
-    const supportsSequentialSubTimeTiming = (timeNode: Element | undefined) => {
+    const supportsFlattenedParallelSubTimeTiming = (timeNode: Element | undefined, actions: PptxAnimation[]) => {
         const entries = timeNode ? children(child(timeNode, 'childTnLst')) : []
-        return timeNode?.parentElement?.localName === 'seq' && entries.length > 0 && entries.every(entry =>
-            subTimeLeafTypes.has(entry.localName) && !['cmd', 'audio', 'video'].includes(entry.localName)
-        )
+        const groupTimingAttributes = ['accel', 'decel', 'tmFilter', 'spd', 'repeatCount', 'repeatDur', 'autoRev']
+        const canFlattenWithoutNestedClock = (entry: Element): boolean => {
+            if (subTimeLeafTypes.has(entry.localName)) return !['cmd', 'audio', 'video'].includes(entry.localName)
+            if (!['par', 'seq'].includes(entry.localName)) return false
+            const nestedTimeNode = child(entry, 'cTn')
+            const nestedEntries = children(child(nestedTimeNode, 'childTnLst'))
+            const nestedSequenceControls = entry.localName === 'seq' && (
+                Boolean(child(entry, 'nextCondLst') || child(entry, 'prevCondLst'))
+                || (entry.hasAttribute('concurrent') && !['0', 'false'].includes(entry.getAttribute('concurrent') || ''))
+                || (entry.hasAttribute('nextAc') && entry.getAttribute('nextAc') !== 'none')
+                || (entry.hasAttribute('prevAc') && entry.getAttribute('prevAc') !== 'none')
+            )
+            return Boolean(nestedTimeNode && nestedEntries.length
+                && !groupTimingAttributes.some(attribute => nestedTimeNode.hasAttribute(attribute))
+                && !child(nestedTimeNode, 'iterate')
+                && !child(nestedTimeNode, 'subTnLst')
+                && !nestedTimeNode.hasAttribute('masterRel')
+                && !nestedTimeNode.hasAttribute('afterEffect')
+                && !nestedSequenceControls
+                && nestedEntries.every(canFlattenWithoutNestedClock))
+        }
+        // A parallel time node can carry its clock through simple nested groups when none of them introduces another clock.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.paralleltimenode?view=openxml-3.0.1
+        return timeNode?.parentElement?.localName === 'par'
+            && entries.length > 0
+            && entries.every(entry => ['par', 'seq'].includes(entry.localName))
+            && entries.every(canFlattenWithoutNestedClock)
+            && !child(timeNode, 'iterate')
+            && !child(timeNode, 'subTnLst')
+            && !timeNode.hasAttribute('afterEffect')
+            && actions.length > 0
+            && actions.every(action => action.effect !== 'media' && !action.timingWarp && !action.mediaWaitForEnd && !action.mediaWaitForEndKeys?.length)
+    }
+    const supportsSequentialSubTimeTiming = (timeNode: Element | undefined, actions: PptxAnimation[]) => {
+        const entries = timeNode ? children(child(timeNode, 'childTnLst')) : []
+        const groupTimingAttributes = ['accel', 'decel', 'tmFilter', 'spd', 'repeatCount', 'repeatDur', 'autoRev']
+        const canFlattenWithoutNestedClock = (entry: Element): boolean => {
+            if (subTimeLeafTypes.has(entry.localName)) return !['cmd', 'audio', 'video'].includes(entry.localName)
+            if (!['par', 'seq'].includes(entry.localName)) return false
+            const nestedTimeNode = child(entry, 'cTn')
+            const nestedEntries = children(child(nestedTimeNode, 'childTnLst'))
+            const nestedSequenceControls = entry.localName === 'seq' && (
+                Boolean(child(entry, 'nextCondLst') || child(entry, 'prevCondLst'))
+                || (entry.hasAttribute('concurrent') && !['0', 'false'].includes(entry.getAttribute('concurrent') || ''))
+                || (entry.hasAttribute('nextAc') && entry.getAttribute('nextAc') !== 'none')
+                || (entry.hasAttribute('prevAc') && entry.getAttribute('prevAc') !== 'none')
+            )
+            return Boolean(nestedTimeNode && nestedEntries.length
+                && !groupTimingAttributes.some(attribute => nestedTimeNode.hasAttribute(attribute))
+                && !child(nestedTimeNode, 'iterate')
+                && !child(nestedTimeNode, 'subTnLst')
+                && !nestedTimeNode.hasAttribute('masterRel')
+                && !nestedTimeNode.hasAttribute('afterEffect')
+                && !nestedSequenceControls
+                && nestedEntries.every(canFlattenWithoutNestedClock))
+        }
+        // A sequential time node waits for each preceding child. Apply its common-time speed to flattened nested groups only when none defines a second clock.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.sequencetimenode?view=openxml-3.0.1
+        return timeNode?.parentElement?.localName === 'seq'
+            && entries.length > 0
+            && entries.every(canFlattenWithoutNestedClock)
+            && actions.length > 0
+            && actions.every(action => action.effect !== 'media' && !action.timingWarp && !action.mediaWaitForEnd && !action.mediaWaitForEndKeys?.length)
     }
     const subTimeEntryTimeNode = (entry: Element) => ['audio', 'video'].includes(entry.localName)
         ? child(child(entry, 'cMediaNode'), 'cTn')
@@ -5332,7 +5523,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         }
         return parsed
     }
-    const animationTiming = (timeNode: Element | undefined, effect: string): Pick<PptxAnimation, 'fillMode' | 'repeatCount' | 'repeatDurationMs' | 'autoReverse' | 'acceleration' | 'deceleration' | 'playbackSpeed' | 'reversePlayback'> | undefined => {
+    const animationTiming = (timeNode: Element | undefined, effect: string): Pick<PptxAnimation, 'sourceTimeNodeId' | 'fillMode' | 'repeatCount' | 'repeatDurationMs' | 'autoReverse' | 'acceleration' | 'deceleration' | 'bounceEndRatio' | 'timeFilter' | 'playbackSpeed' | 'reversePlayback'> | undefined => {
         const fill = timeNode?.getAttribute('fill') || 'hold'
         const autoRev = timeNode?.getAttribute('autoRev')
         if (!['hold', 'freeze', 'remove', 'transition'].includes(fill) || (autoRev && !['0', '1', 'false', 'true'].includes(autoRev))) {
@@ -5343,8 +5534,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         const durationValue = timeNode?.getAttribute('repeatDur')
         const count = countValue === null || countValue === undefined ? (durationValue === null || durationValue === undefined ? undefined : Infinity) : countValue === 'indefinite' ? Infinity : timelineTime(countValue, Number.NaN) / 1000
         const rawSpeed = timeNode?.getAttribute('spd')
-        const speed = rawSpeed === null || rawSpeed === undefined ? 1 : Number(rawSpeed) / 100_000
-        const playbackSpeed = Number.isFinite(speed) && speed !== 0 ? speed : 1
+        const speed = parseAnimationSpeed(rawSpeed)
+        const playbackSpeed = speed !== undefined && speed !== 0 ? speed : 1
         if (playbackSpeed !== speed) warnings.add(`${effect} animations with zero or invalid speed are played at normal speed.`)
         const playbackRate = Math.abs(playbackSpeed)
         const repeatDurationMs = durationValue === null || durationValue === undefined ? undefined : durationValue === 'indefinite' ? Infinity : timelineTime(durationValue, Number.NaN) / playbackRate
@@ -5364,32 +5555,64 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             warnings.add(`${effect} animations with invalid acceleration/deceleration timing are not rendered yet.`)
             return undefined
         }
+        const rawTimeFilter = timeNode?.getAttribute('tmFilter')
+        const timeFilter = parseTimingFilter(rawTimeFilter)
+        if (rawTimeFilter?.trim() && !timeFilter) warnings.add(`${effect} animations with an unsupported time filter use their unfiltered timing.`)
+        let behavior: Element | null | undefined = timeNode
+        while (behavior && !['anim', 'animMotion', 'animRot', 'animScale'].includes(behavior.localName)) behavior = behavior.parentElement
+        const hasBounceEnd = behavior?.hasAttributeNS(POWERPOINT_2010_NS, 'bounceEnd') || false
+        const rawBounceEnd = hasBounceEnd ? behavior?.getAttributeNS(POWERPOINT_2010_NS, 'bounceEnd') ?? null : null
+        const bounceEndRatio = hasBounceEnd ? fixedPercentage(rawBounceEnd) : undefined
+        if (hasBounceEnd && (bounceEndRatio === undefined || bounceEndRatio <= 0 || bounceEndRatio >= 1)) {
+            warnings.add(`${effect} has an invalid or unsupported p14:bounceEnd value; bounce timing was ignored.`)
+        } else if (bounceEndRatio !== undefined && bounceEndRatio > 0) {
+            warnings.add(`${effect} p14:bounceEnd timing uses the player's damped-spring approximation; Office's exact spring parameters are not specified.`)
+        }
         // OOXML repeatCount uses thousandths of an iteration; autoRev doubles each simple-duration cycle.
         return {
+            sourceTimeNodeId: timeNode?.getAttribute('id') || undefined,
             fillMode: fill === 'remove' || fill === 'transition' ? 'remove' : (fill as 'hold' | 'freeze'),
             repeatCount: count,
             repeatDurationMs,
             autoReverse: autoRev === '1' || autoRev === 'true',
             acceleration,
             deceleration,
+            bounceEndRatio: bounceEndRatio !== undefined && bounceEndRatio > 0 && bounceEndRatio < 1 ? bounceEndRatio : undefined,
+            timeFilter,
             playbackSpeed,
             reversePlayback: playbackSpeed < 0
         }
     }
     const animationDurationMs = (timeNode: Element | undefined, timing: Pick<PptxAnimation, 'playbackSpeed'>, fallback = 500) => {
-        return timelineTime(timeNode?.getAttribute('dur'), fallback) / Math.abs(timing.playbackSpeed || 1)
+        const duration = timeNode?.getAttribute('dur')
+        // ST_TLTime permits an indefinite duration; preserve it as an unending animation.
+        // An omitted cTn@dur is a different case and PowerPoint defaults it to 0.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode?view=openxml-3.0.1
+        // PowerPoint defaults an omitted cTn@dur to 0; keep the existing fallback for invalid values.
+        // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/02b2312e-9700-42e0-8a19-b2af1ba83a20
+        if (duration === 'indefinite') return Infinity
+        return timelineTime(duration, duration === null || duration === undefined ? 0 : fallback) / Math.abs(timing.playbackSpeed || 1)
     }
+    const basePlaybackDuration = (action: PptxAnimation) =>
+        action.effect === 'media' ? (action.mediaDurationMs ?? 0) : action.durationMs === 0 ? 0 : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity)
+    const iterationSpan = (action: PptxAnimation) => action.iteration ? action.iteration.intervalMs * (action.iteration.ranges.length - 1) : 0
     const playbackDuration = (action: PptxAnimation) =>
         action.timingWarp
             ? Math.max(0, action.timingWarp.groupEndDelayMs - action.delayMs)
-            : (action.effect === 'media' ? (action.mediaDurationMs ?? 0) : action.durationMs === 0 ? 0 : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity)) +
-              (action.iteration ? action.iteration.intervalMs * (action.iteration.ranges.length - 1) : 0)
+            : basePlaybackDuration(action) + iterationSpan(action)
     type GroupTiming = TimingCurve & {durationMs: number; playbackSpeed: number; playbackDurationMs: number; reversePlayback: boolean; autoReverse: boolean}
-    const groupTimingFor = (owner: Element, effect: string): GroupTiming | undefined => {
+    const groupTimingFor = (owner: Element, effect: string, childDerivedDurationMs?: number): GroupTiming | undefined => {
         const timing = animationTiming(owner, effect)
         if (!timing) return undefined
         const groupSpeed = Math.abs(timing.playbackSpeed ?? 1)
-        const durationMs = timelineTime(owner.getAttribute('dur'), Number.NaN)
+        const rawDuration = owner.getAttribute('dur')
+        const declaredDurationMs = timelineTime(rawDuration, Number.NaN)
+        // PowerPoint defaults omitted cTn@dur to 0 and derives a zero-duration time node from its children.
+        // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/02b2312e-9700-42e0-8a19-b2af1ba83a20
+        // https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-ppt/13b03cf8-e193-4d7c-bece-efee91ea40bd
+        const durationMs = rawDuration === null || declaredDurationMs === 0
+            ? childDerivedDurationMs ?? Number.NaN
+            : declaredDurationMs
         if (!Number.isFinite(durationMs) || durationMs <= 0) {
             warnings.add('A time-container timing curve or repeat without a finite positive duration is not applied.')
             return undefined
@@ -5408,16 +5631,18 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             reversePlayback: timing.reversePlayback ?? false,
             autoReverse: timing.autoReverse ?? false,
             acceleration: timing.acceleration ?? 0,
-            deceleration: timing.deceleration ?? 0
+            deceleration: timing.deceleration ?? 0,
+            timeFilter: timing.timeFilter
         }
     }
-    const applyGroupTiming = (actions: PptxAnimation[], delayMs: number, groupTiming: GroupTiming) => actions.map(action => {
+    const applyGroupTiming = (actions: PptxAnimation[], delayMs: number, groupTiming: GroupTiming, perIteration = false) => actions.map(action => {
         if (action.effect === 'media') {
             warnings.add('A time-container timing curve or repeat on timed media is not applied yet.')
             return action
         }
         const childOffsetMs = action.delayMs - delayMs
-        const childDurationMs = playbackDuration(action)
+        const appliesPerIteration = perIteration && Boolean(action.iteration)
+        const childDurationMs = appliesPerIteration ? basePlaybackDuration(action) : playbackDuration(action)
         if (!Number.isFinite(childOffsetMs) || childOffsetMs < 0 || !Number.isFinite(childDurationMs) || childOffsetMs + childDurationMs > groupTiming.durationMs + 0.01) {
             warnings.add('A time-container timing curve or repeat is not applied because child timing exceeds its finite duration.')
             return action
@@ -5432,14 +5657,16 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             timingWarp: {
                 acceleration: groupTiming.acceleration,
                 deceleration: groupTiming.deceleration,
+                timeFilter: groupTiming.timeFilter,
                 groupOffsetMs: delayMs,
                 groupDurationMs: groupTiming.durationMs,
                 groupSpeed: groupTiming.playbackSpeed,
                 groupReversePlayback: groupTiming.reversePlayback,
                 groupAutoReverse: groupTiming.autoReverse,
                 groupPlaybackDurationMs: groupTiming.playbackDurationMs,
+                groupPerIteration: appliesPerIteration,
                 childOffsetMs,
-                groupEndDelayMs: delayMs + groupTiming.playbackDurationMs
+                groupEndDelayMs: delayMs + groupTiming.playbackDurationMs + (appliesPerIteration ? iterationSpan(action) : 0)
             }
         }
     })
@@ -5519,15 +5746,17 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         return ids
     }
     const parseGroup = (group: Element, delayMs: number, owner = child(group, 'cTn'), sequenceKey = 'main', sequenceOrder = 0, mediaWaitForEndKeys: string[] = [], mediaWaitDelayMs = 0, subTimeEntry?: Element): PptxAnimation[] => {
+        // Retain separate time nodes when several behaviors animate the same property.
         const actions = new Map<string, PptxAnimation>()
+        const solidFillTypeTargets = new Set<string>()
         const mediaTimeNodeIds = new Map<string, string>()
         let groupTiming: GroupTiming | undefined
+        const hasIteration = Boolean(child(owner, 'iterate'))
+        const canApplyGroupTiming = (!subTimeEntry || supportsParallelSubTimeTiming(owner)) && Boolean(owner)
+            && ['accel', 'decel', 'tmFilter', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => owner!.hasAttribute(attribute))
         // Parent accel/decel/spd/autoRev and repeats shape the group clock; child offsets stay local to one cycle.
         // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode?view=openxml-3.0.1
         // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.childtimenodelist?view=openxml-2.19.0
-        if ((!subTimeEntry || supportsParallelSubTimeTiming(owner)) && owner && ['accel', 'decel', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => owner.hasAttribute(attribute))) {
-            groupTiming = groupTimingFor(owner, 'Animation group')
-        }
         const iterate = subTimeEntry ? undefined : child(owner, 'iterate')
         const belongsToOwner = (node: Element) => {
             if (subTimeEntry ? !subTimeEntry.contains(node) : isInSubTimeNodeList(node)) return false
@@ -5544,7 +5773,14 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 const accumulate = child(node, 'cBhvr')?.getAttribute('accumulate')
                 if (accumulate === null || accumulate === undefined || accumulate === 'none') continue
                 if (accumulate !== 'always') warnings.add('An animation behavior has an invalid cBhvr@accumulate value; it is ignored.')
-                else if (!['animRot', 'animScale', 'animMotion'].includes(name)) warnings.add('Only rotation, scale, and motion animations currently accumulate repeated values; this animation repeats without accumulation.')
+                else {
+                    const accumulatedProperties = new Set(['ppt_x', 'ppt_y', 'ppt_w', 'ppt_h', 'ScaleX', 'ScaleY', 'style.rotation', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity', 'shadow.offset.x', 'shadow.offset.y'])
+                    const attributes = descendants(node, 'attrName').map(attribute => attribute.textContent?.trim() || '')
+                    const supportedGenericAccumulation = name === 'anim' && attributes.length > 0 && attributes.every(attribute => accumulatedProperties.has(attribute))
+                    if (!['animRot', 'animScale', 'animMotion'].includes(name) && !supportedGenericAccumulation) {
+                        warnings.add(`The ${name} animation does not support repeated-value accumulation for its property.`)
+                    }
+                }
             }
             return nodes
         }
@@ -5595,11 +5831,21 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const intervalNodes = children(iterate).filter(node => ['tmAbs', 'tmPct'].includes(node.localName))
             const intervalNode = intervalNodes[0]
             const rawInterval = intervalNode?.getAttribute('val')
-            const intervalValue = rawInterval !== null && rawInterval !== undefined && /^\d+(?:\.\d+)?$/.test(rawInterval) ? Number(rawInterval) : NaN
-            const intervalMs = intervalNode?.localName === 'tmAbs' ? (intervalValue <= MAX_TL_TIME_MS ? intervalValue / Math.abs(action.playbackSpeed || 1) : NaN) : intervalNode?.localName === 'tmPct' ? (action.durationMs * intervalValue) / 100_000 : NaN
+            const intervalText = rawInterval?.trim()
+            // Office reads ST_PositivePercentage as thousandths of a percent or a percent with a % suffix.
+            // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c1f1feac-e34c-48d5-b2e2-f67bb67113e7
+            const percentageInterval = intervalNode?.localName === 'tmPct' && intervalText && /^(?:\d+\.?\d*|\.\d+)%$/.test(intervalText)
+                ? Number(intervalText.slice(0, -1)) * 1_000
+                : NaN
+            const intervalValue = Number.isFinite(percentageInterval)
+                ? percentageInterval
+                : intervalText && /^\d+$/.test(intervalText) ? Number(intervalText) : NaN
+            // tmAbs is an absolute wall-clock interval. The iterated child’s playback speed
+            // changes its duration, but must not scale the gap between iterations.
+            const intervalMs = intervalNode?.localName === 'tmAbs' ? (intervalValue <= MAX_TL_TIME_MS ? intervalValue : NaN) : intervalNode?.localName === 'tmPct' ? (iterationDurationMs * intervalValue) / 100_000 : NaN
             const backwardsValue = iterate.getAttribute('backwards')
             const backwards = backwardsValue === '1' || backwardsValue === 'true'
-            if (intervalNodes.length !== 1 || !Number.isFinite(intervalValue) || intervalValue < 0 || (intervalNode?.localName === 'tmPct' && intervalValue > 100_000) || !Number.isFinite(intervalMs) || intervalMs < 0) {
+            if (intervalNodes.length !== 1 || !Number.isFinite(intervalValue) || intervalValue < 0 || intervalValue > MAX_TL_TIME_MS || !Number.isFinite(intervalMs) || intervalMs < 0) {
                 warnings.add(elementIteration ? 'A shape iteration with an unsupported interval was rendered without staggering.' : 'A text iteration with unsupported type or interval was rendered as a single animation.')
                 return undefined
             }
@@ -5621,17 +5867,34 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 return undefined
             }
             const {intervalMs, backwards} = interval
+            if (action.effect === 'color' && action.colorProperty === 'fillcolor' && element.kind === 'shape') {
+                warnings.add('Text iteration does not stagger shape fill color; the fill animation is rendered once across the shape.')
+                return undefined
+            }
             // p:iterate applies child animation behavior to each letter or word.
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.iterate.type?view=openxml-3.0.1
-            if (!['appear', 'fade', 'blinds', 'wipe', 'slide', 'strips', 'scale', 'rotation', 'motion', 'fontSize', 'fontWeight', 'textStyle', 'opacity', 'visibility'].includes(action.effect) && !(action.effect === 'color' && action.colorProperty === 'style.color')) {
-                warnings.add(`Text iteration for ${action.effect} animation is not rendered yet.`)
+            if (!['appear', 'fade', 'blinds', 'checker', 'dissolve', 'wheel', 'randomBars', 'shape', 'barn', 'wipe', 'slide', 'strips', 'scale', 'zoom', 'rotation', 'motion', 'fontSize', 'fontWeight', 'textStyle', 'opacity', 'shadowOffset', 'visibility'].includes(action.effect) && !(action.effect === 'color' && ['style.color', 'shadow.color'].includes(action.colorProperty || ''))) {
+                warnings.add(action.effect === 'color'
+                    ? `Text iteration for ${action.colorProperty || 'color'} animation is not rendered yet.`
+                    : `Text iteration for ${action.effect} animation is not rendered yet.`)
                 return undefined
             }
             if (!Intl.Segmenter) {
                 warnings.add('Text iteration is unavailable because Intl.Segmenter is not supported by this browser.')
                 return undefined
             }
-            const segmenter = new Intl.Segmenter(undefined, {granularity: type === 'lt' ? 'grapheme' : 'word'})
+            const granularity = type === 'lt' ? 'grapheme' : 'word'
+            const segmenters = new Map<string, Intl.Segmenter>()
+            const segmenterFor = (paragraph: PptxParagraph) => {
+                const locale = type === 'wd' ? textIterationLocale(paragraph.runs) : undefined
+                const key = locale || ''
+                let segmenter = segmenters.get(key)
+                if (!segmenter) {
+                    segmenter = createTextIterationSegmenter(locale, granularity)
+                    segmenters.set(key, segmenter)
+                }
+                return segmenter
+            }
             const ranges: Array<{start: number; end: number}> = []
             let overflow = false
             let paragraphOffset = 0
@@ -5639,10 +5902,11 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 const text = paragraph.runs.map(run => run.text).join('')
                 const paragraphSelected = !action.paragraphRange || (paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
                 if (paragraphSelected) {
-                    for (const segment of segmenter.segment(text)) {
-                        if (type === 'wd' && !segment.isWordLike) continue
-                        const start = paragraphOffset + segment.index
-                        const end = start + segment.segment.length
+                    for (const range of textIterationRanges(type, segmenterFor(paragraph).segment(text))) {
+                        // Whitespace keeps its source offset but does not consume an iteration slot.
+                        // Word punctuation joins its adjacent word so it does not appear ahead of that word.
+                        const start = paragraphOffset + range.start
+                        const end = paragraphOffset + range.end
                         const selection = action.characterRange
                         if (!selection || (start < selection.end && end > selection.start)) ranges.push({start, end})
                         if (ranges.length > 10_000) {
@@ -5675,9 +5939,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 delayMs: action.delayMs + (interval?.intervalMs || 0) * (interval?.backwards ? targetIds.length - index - 1 : index)
             }))
         }
-        const addMediaAction = (node: Element, targetId: string, mediaCommand: NonNullable<PptxAnimation['mediaCommand']>, options: Pick<PptxAnimation, 'mediaStartSeconds' | 'mediaVolume' | 'mediaMuted' | 'mediaDurationMs' | 'mediaSlideCount' | 'mediaWaitForEnd' | 'mediaIsNarration'> = {}) => {
+        const addMediaAction = (node: Element, targetId: string, mediaCommand: NonNullable<PptxAnimation['mediaCommand']>, options: Pick<PptxAnimation, 'mediaStartSeconds' | 'mediaSourceUrl' | 'mediaVolume' | 'mediaMuted' | 'mediaDurationMs' | 'mediaSlideCount' | 'mediaWaitForEnd' | 'mediaIsNarration'> = {}) => {
             const element = elementsById.get(targetId)
-            if (mediaCommand !== 'stopAudio' && (!element || !['audio', 'video'].includes(element.kind))) {
+            if (mediaCommand !== 'stopAudio' && !options.mediaSourceUrl && (!element || !['audio', 'video'].includes(element.kind))) {
                 warnings.add('A media timeline action without an embedded audio or video target was skipped.')
                 handledMediaActions.add(node)
                 return
@@ -5686,7 +5950,21 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const conditions = children(child(timeNode, 'stCondLst'), 'cond')
             const condition = conditions[0]
             const delay = condition?.getAttribute('delay')
-            if (conditions.length > 1 || (condition && (Array.from(condition.attributes).some(attribute => attribute.localName !== 'delay') || condition.children.length || delay === 'indefinite' || (delay !== null && (!Number.isFinite(Number(delay)) || Number(delay) < 0))))) {
+            const parentBeginCondition = Boolean(
+                subTimeEntry?.contains(node) && owner?.getAttribute('id') && condition &&
+                ['begin', 'onBegin'].includes(condition.getAttribute('evt') || '') &&
+                (delay === null || (Number.isFinite(Number(delay)) && Number(delay) >= 0)) &&
+                Array.from(condition.attributes).every(attribute => ['evt', 'delay'].includes(attribute.localName)) &&
+                condition.children.length === 1 &&
+                firstDescendant(condition, 'tn')?.getAttribute('val') === owner.getAttribute('id')
+            )
+            const simpleDelayCondition = !condition || (
+                Array.from(condition.attributes).every(attribute => attribute.localName === 'delay') &&
+                condition.children.length === 0 &&
+                delay !== 'indefinite' &&
+                (delay === null || (Number.isFinite(Number(delay)) && Number(delay) >= 0))
+            )
+            if (conditions.length > 1 || (condition && !simpleDelayCondition && !parentBeginCondition)) {
                 warnings.add('A media timeline action with event-based or invalid start conditions was skipped.')
                 handledMediaActions.add(node)
                 return
@@ -5713,7 +5991,11 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 continue
             }
             const animationTarget = target(media)
-            if (!animationTarget.targetId || animationTarget.hasUnsupportedTextRange || animationTarget.paragraphRange || animationTarget.characterRange) {
+            const soundTarget = child(child(media, 'tgtEl'), 'sndTgt')
+            const mediaSourceUrl = soundTarget ? soundTargetUrls.get(mediaNode) : undefined
+            const isSoundTarget = Boolean(soundTarget)
+            const targetId = isSoundTarget ? soundTargetIds.get(mediaNode) : animationTarget.targetId
+            if (!targetId || (!isSoundTarget && (animationTarget.hasUnsupportedTextRange || animationTarget.paragraphRange || animationTarget.characterRange)) || (isSoundTarget && !mediaSourceUrl)) {
                 warnings.add('A timed media playback action with an unsupported target was skipped.')
                 handledMediaActions.add(mediaNode)
                 continue
@@ -5732,31 +6014,34 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const narrationValue = mediaNode.getAttribute('isNarration')?.trim().toLowerCase()
             const requestedNarration = narrationValue === '1' || narrationValue === 'true'
             if (narrationValue !== undefined && !['0', '1', 'false', 'true'].includes(narrationValue)) warnings.add('An invalid p:audio isNarration value was ignored.')
-            const mediaIsNarration = requestedNarration && mediaTargetElement?.kind === 'audio' ? true : undefined
+            const mediaIsNarration = requestedNarration && (isSoundTarget || mediaTargetElement?.kind === 'audio') ? true : undefined
             if (requestedNarration && mediaIsNarration === undefined) warnings.add('A p:audio isNarration flag without an audio shape was ignored.')
             if (mediaSlideCount && mediaSlideCount > 1 && mediaTargetElement?.kind === 'video' && (mediaTargetElement.mediaTrim || mediaTargetElement.mediaFade)) warnings.add('Cross-slide video playback ignores video trim and fades, as documented for PowerPoint 2010/2013.')
             const mediaTimeNode = firstDescendant(media, 'cTn')
             const mediaDurationValue = mediaTimeNode?.getAttribute('dur')
             const endConditions = children(child(mediaTimeNode, 'endCondLst'), 'cond')
             const hasSupportedEndCondition =
-                elementsById.get(animationTarget.targetId)?.kind === 'audio' &&
+                (isSoundTarget || mediaTargetElement?.kind === 'audio') &&
                 endConditions.every(condition => {
                     const delay = condition.getAttribute('delay')
                     return condition.getAttribute('evt') === 'onStopAudio' && Boolean(firstDescendant(condition, 'sldTgt')) && (delay === null || (/^\d+$/.test(delay) && Number(delay) === 0))
                 })
             const indefiniteDuration = mediaDurationValue === 'indefinite'
-            const parsedMediaDuration = mediaDurationValue === null || mediaDurationValue === undefined ? 0 : /^\d+$/.test(mediaDurationValue) ? Number(mediaDurationValue) : undefined
+            // WPS/PowerPoint sound-effect cMediaNodes commonly omit dur and end with the embedded media.
+            const implicitMediaDuration = mediaDurationValue === null || mediaDurationValue === undefined
+            const parsedMediaDuration = implicitMediaDuration ? undefined : /^\d+$/.test(mediaDurationValue) ? Number(mediaDurationValue) : undefined
             const mediaDurationMs = parsedMediaDuration !== undefined && Number.isFinite(parsedMediaDuration) && parsedMediaDuration <= MAX_TL_TIME_MS ? parsedMediaDuration : undefined
             if (parsedMediaDuration !== undefined && mediaDurationMs === undefined) warnings.add('A media timeline duration beyond the supported ST_TLTime range was skipped.')
             if (mediaDurationValue !== null && mediaDurationValue !== undefined && !indefiniteDuration && parsedMediaDuration === undefined) warnings.add('An invalid media timeline duration was skipped.')
             if (endConditions.length && !hasSupportedEndCondition) warnings.add('A media timeline end condition other than slide-targeted onStopAudio is not synchronized yet.')
-            addMediaAction(mediaNode, animationTarget.targetId, 'play', {
+            addMediaAction(mediaNode, targetId, 'play', {
+                mediaSourceUrl,
                 mediaVolume: volume !== undefined && volume >= 0 && volume <= 1 ? volume : undefined,
                 mediaMuted: muteValue === undefined || ['0', '1', 'false', 'true'].includes(muteValue) ? muted : undefined,
                 mediaDurationMs,
                 mediaSlideCount,
                 mediaIsNarration,
-                mediaWaitForEnd: indefiniteDuration && (!endConditions.length || hasSupportedEndCondition)
+                mediaWaitForEnd: (indefiniteDuration || implicitMediaDuration) && (!endConditions.length || hasSupportedEndCondition)
             })
         }
         for (const command of ownedDescendants('cmd').filter(node => node.namespaceURI === PRESENTATION_NS)) {
@@ -5830,7 +6115,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const wedge = filter === 'wedge'
             const supportedFilter = ['fade', 'cut'].includes(filter || '') || Boolean(wipe || blinds || checker || randomBar || strips || barn || slide || dissolve || shapeFilter || wheel || wedge)
             const presetIdText = owner?.getAttribute('presetID')?.trim() || ''
-            const presetSubtypeText = owner?.getAttribute('presetSubtype')?.trim() || ''
+            const presetSubtypeSpecified = owner?.hasAttribute('presetSubtype') ?? false
+            const presetSubtypeText = owner?.getAttribute('presetSubtype')?.trim() ?? ''
             const presetId = /^[+-]?\d+$/.test(presetIdText) ? Number(presetIdText) : undefined
             const presetSubtype = /^[+-]?\d+$/.test(presetSubtypeText) ? Number(presetSubtypeText) : undefined
             const matchingPresetClass = (normalizedTransition === 'in' && owner?.getAttribute('presetClass') === 'entr') || (normalizedTransition === 'out' && owner?.getAttribute('presetClass') === 'exit')
@@ -5855,6 +6141,10 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             // Microsoft defines presetSubtype as a direction bitflag; the supplied parser reference maps Fly's eight directional values.
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode?view=openxml-3.0.1
             const presetFlyDirection = !supportedFilter && matchingPresetClass && presetId === 2 ? FLY_PRESET_DIRECTIONS.get(flyPresetSubtype) : undefined
+            const peekPresetSubtype = presetSubtype ?? (presetSubtypeSpecified ? Number.NaN : 4)
+            // Peek In/Out slides the object into or out of view from one of the four cardinals.
+            // https://support.microsoft.com/en-au/powerpoint/animation-effects-available-in-powerpoint-for-the-web
+            const presetPeekDirection = !supportedFilter && matchingPresetClass && presetId === 12 ? PEEK_PRESET_DIRECTIONS.get(peekPresetSubtype) : undefined
             const presetSplit = !supportedFilter && matchingPresetClass && presetId === 16 ? SPLIT_PRESET_DIRECTIONS.get(presetSubtype ?? 26) : undefined
             const presetSplitMotion = presetSplit && owner?.getAttribute('presetClass') === 'exit'
                 ? presetSplit.motion === 'in' ? 'out' : 'in'
@@ -5868,7 +6158,17 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 : undefined
             const presetShape = !supportedFilter && matchingPresetClass && presetId !== undefined ? SHAPE_ANIMATION_PRESET_IDS.get(presetId) : undefined
             const presetShapeDirection = presetShape ? getShapePresetDirection(normalizedTransition as 'in' | 'out', presetSubtype) : undefined
-            const fadeFallback = ['in', 'out'].includes(normalizedTransition || '') && !supportedFilter && !presetFlyDirection && !presetAppear && !presetFade && !presetWheel && !presetWipe && !presetSplit && !presetZoomDirection && !presetShape && !presetDissolve && !presetWedge
+            // The Office preset IDs for Blinds, Checkerboard, Random Bars, and Strips
+            // match the existing filter renderers; an omitted subtype uses each effect's common default.
+            const presetBlinds = !supportedFilter && matchingPresetClass && presetId === 3
+            const presetChecker = !supportedFilter && matchingPresetClass && presetId === 5
+            const presetRandomBar = !supportedFilter && matchingPresetClass && presetId === 14
+            const presetStrips = !supportedFilter && matchingPresetClass && presetId === 18
+            const presetBlindsOrientation = presetBlinds ? presetVariantOrDefault(presetSubtype, presetSubtypeText, presetSubtypeSpecified, PRESET_BLINDS_ORIENTATIONS, 'horizontal', 'Blinds', warnings) : undefined
+            const presetCheckerOrientation = presetChecker ? presetVariantOrDefault(presetSubtype, presetSubtypeText, presetSubtypeSpecified, PRESET_CHECKER_ORIENTATIONS, 'horz', 'Checkerboard', warnings) : undefined
+            const presetRandomBarOrientation = presetRandomBar ? presetVariantOrDefault(presetSubtype, presetSubtypeText, presetSubtypeSpecified, PRESET_RANDOM_BAR_ORIENTATIONS, 'horizontal', 'Random Bars', warnings) : undefined
+            const presetStripsDirection = presetStrips ? presetVariantOrDefault(presetSubtype, presetSubtypeText, presetSubtypeSpecified, PRESET_STRIPS_DIRECTIONS, 'rd', 'Strips', warnings) : undefined
+            const fadeFallback = ['in', 'out'].includes(normalizedTransition || '') && !supportedFilter && !presetFlyDirection && !presetPeekDirection && !presetAppear && !presetFade && !presetWheel && !presetWipe && !presetSplit && !presetZoomDirection && !presetShape && !presetDissolve && !presetWedge && !presetBlinds && !presetChecker && !presetRandomBar && !presetStrips
             if (!animationTarget.targetId) {
                 warnings.add('An object animation has no shape target and was skipped.')
                 continue
@@ -5877,8 +6177,36 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add('This text range animation target is malformed or unsupported.')
                 continue
             }
-            if (!hasValidCharacterRange(animationTarget, textElement)) {
-                warnings.add('A character-range animation exceeds the target text length and was skipped.')
+            if (!hasValidTextRange(animationTarget, textElement)) {
+                warnings.add('A text-range animation exceeds the target text bounds and was skipped.')
+                continue
+            }
+            // WPS Transparency exports an image filter with a fixed opacity property list.
+            // Keep this as a property behavior so it does not become an entrance/exit fade.
+            const imageProperties = filter === 'image' ? effect.getAttribute('prLst') || '' : ''
+            const imageOpacityMatch = imageProperties.length <= 256
+                ? /^\s*opacity\s*:\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*;?\s*$/i.exec(imageProperties)
+                : null
+            const imageOpacity = imageOpacityMatch ? Number(imageOpacityMatch[1]) : Number.NaN
+            if (filter === 'image' && Number.isFinite(imageOpacity) && imageOpacity >= 0 && imageOpacity <= 1) {
+                const behavior = child(effect, 'cBhvr')
+                const timeNode = child(behavior, 'cTn') || firstDescendant(effect, 'cTn')
+                const timing = animationTiming(timeNode, 'Image opacity')
+                if (!timing) continue
+                actions.set(`${animationTarget.targetId}:image-opacity:${timeNode?.getAttribute('id') || effectIndex}`, {
+                    targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    effect: 'opacity',
+                    opacityProperty: 'style.opacity',
+                    opacityFrom: imageOpacity,
+                    opacityTo: imageOpacity,
+                    direction: 'in',
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledEffects.add(effect)
                 continue
             }
             // MS-OE376 names the supported object filters; unknown or missing filters still honor in/out as a warned fade.
@@ -5927,7 +6255,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     paragraphRange: animationTarget.paragraphRange,
                     characterRange: animationTarget.characterRange,
                     effectProgress,
-                    effect: fadeFallback || presetFade ? 'fade' : presetZoomDirection ? 'zoom' : wheel || wedge || presetWheel || presetWedge ? 'wheel' : slide || presetFlyDirection ? 'slide' : strips ? 'strips' : barn || presetSplit ? 'barn' : dissolve || presetDissolve ? 'dissolve' : shapeFilter || presetShape ? 'shape' : randomBar ? 'randomBars' : checker ? 'checker' : blinds ? 'blinds' : wipe || presetWipe ? 'wipe' : filter === 'fade' ? 'fade' : 'appear',
+                    effect: fadeFallback || presetFade ? 'fade' : presetZoomDirection ? 'zoom' : wheel || wedge || presetWheel || presetWedge ? 'wheel' : slide || presetFlyDirection || presetPeekDirection ? 'slide' : strips || presetStrips ? 'strips' : barn || presetSplit ? 'barn' : dissolve || presetDissolve ? 'dissolve' : shapeFilter || presetShape ? 'shape' : randomBar || presetRandomBar ? 'randomBars' : checker || presetChecker ? 'checker' : blinds || presetBlinds ? 'blinds' : wipe || presetWipe ? 'wipe' : filter === 'fade' ? 'fade' : 'appear',
                     direction: presetZoomDirection || normalizedTransition as 'in' | 'out',
                     scaleFrom: presetZoomDirection === 'in' ? [0, 0] : presetZoomDirection === 'out' ? [1, 1] : undefined,
                     scaleTo: presetZoomDirection === 'in' ? [1, 1] : presetZoomDirection === 'out' ? [0, 0] : undefined,
@@ -5935,15 +6263,15 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     delayMs: delayMs + startDelay(timeNode),
                     ...timing,
                     wipeDirection: wipe ? wipe[1] as PptxAnimation['wipeDirection'] : presetWipeDirection,
-                    blindsOrientation: blinds?.[1] as PptxAnimation['blindsOrientation'],
-                    checkerOrientation: checker?.[1] === 'across' ? 'horz' : checker ? 'vert' : undefined,
-                    randomBarOrientation: randomBar?.[1] as PptxAnimation['randomBarOrientation'],
-                    stripsDirection: strips ? ({downLeft: 'ld', upLeft: 'lu', downRight: 'rd', upRight: 'ru'} as const)[strips[1] as 'downLeft' | 'upLeft' | 'downRight' | 'upRight'] : undefined,
+                    blindsOrientation: blinds?.[1] as PptxAnimation['blindsOrientation'] ?? presetBlindsOrientation,
+                    checkerOrientation: checker?.[1] === 'across' ? 'horz' : checker ? 'vert' : presetCheckerOrientation,
+                    randomBarOrientation: randomBar?.[1] as PptxAnimation['randomBarOrientation'] ?? presetRandomBarOrientation,
+                    stripsDirection: strips ? ({downLeft: 'ld', upLeft: 'lu', downRight: 'rd', upRight: 'ru'} as const)[strips[1] as 'downLeft' | 'upLeft' | 'downRight' | 'upRight'] : presetStripsDirection,
                     barnOrientation: barn ? barn[2]?.toLowerCase() as PptxAnimation['barnOrientation'] : presetSplit?.orientation,
                     barnMotion: barn ? barn[1] as PptxAnimation['barnMotion'] : presetSplitMotion,
                     shapeFilter: (shapeFilter?.[1] as PptxAnimation['shapeFilter'] | undefined) ?? presetShape,
                     shapeDirection: (shapeFilter?.[2] as PptxAnimation['shapeDirection'] | undefined) ?? presetShapeDirection,
-                    slideFrom: (slide?.[1]?.toLowerCase() as PptxAnimation['slideFrom'] | undefined) || presetFlyDirection,
+                    slideFrom: (slide?.[1]?.toLowerCase() as PptxAnimation['slideFrom'] | undefined) || presetFlyDirection || presetPeekDirection,
                     wheelSpokes: wheel ? (Number(wheel[1]) as PptxAnimation['wheelSpokes']) : wedge || presetWedge ? 1 : presetWheelSpokes
                 })
                 handledEffects.add(effect)
@@ -5966,20 +6294,45 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }
             // DrawingML scale coordinates are in 100,000ths; the SDK example uses by=150000 for a 150% scale.
             // https://learn.microsoft.com/zh-cn/dotnet/api/documentformat.openxml.presentation.animatescale?view=openxml-3.0.1
-            const pair = (node: Element): [number, number] => [numberAttr(node, 'x', 100_000) / 100_000, numberAttr(node, 'y', 100_000) / 100_000]
+            const pair = (node: Element): [number, number] => [
+                percentageValue(node.getAttribute('x')) ?? 1,
+                percentageValue(node.getAttribute('y')) ?? 1
+            ]
             const fromNode = child(animation, 'from')
             const toNode = child(animation, 'to')
             const byNode = child(animation, 'by')
+            const scaleBehavior = child(animation, 'cBhvr')
+            const scaleAdditive = scaleBehavior?.getAttribute('additive')
+            if (scaleAdditive !== null && scaleAdditive !== undefined && !['base', 'sum', 'repl', 'mult', 'none'].includes(scaleAdditive)) {
+                warnings.add('A scale animation with an unsupported additive mode was skipped.')
+                handledScales.add(animation)
+                continue
+            }
             // Office starts to-only scale animations at (0, 0), while by-only starts at (1, 1).
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/358c6de3-2cd7-459b-8eb9-b90f3721fd12
-            const scaleFrom = fromNode ? pair(fromNode) : toNode ? ([0, 0] as [number, number]) : ([1, 1] as [number, number])
+            const explicitFrom = fromNode ? pair(fromNode) : undefined
+            const explicitTo = toNode ? pair(toNode) : undefined
+            const scaleFrom = explicitFrom ?? (explicitTo ? ([0, 0] as [number, number]) : ([1, 1] as [number, number]))
+            // A previously held scale becomes the base value for a later base-additive to-only track.
+            const scaleFromCurrent = !explicitFrom && Boolean(explicitTo) && (scaleAdditive === null || scaleAdditive === 'base')
+                && [...actions.values()].some(action => ['scale', 'zoom'].includes(action.effect)
+                    && action.targetId === animationTarget.targetId
+                    && action.scaleLayer === undefined
+                    && (!action.paragraphRange || !animationTarget.paragraphRange
+                        || action.paragraphRange.start <= animationTarget.paragraphRange.end && animationTarget.paragraphRange.start <= action.paragraphRange.end)
+                    && (!action.characterRange || !animationTarget.characterRange
+                        || action.characterRange.start < animationTarget.characterRange.end && animationTarget.characterRange.start < action.characterRange.end))
             const by = byNode ? pair(byNode) : undefined
-            const scaleTo = toNode ? pair(toNode) : by ? ([scaleFrom[0] * by[0], scaleFrom[1] * by[1]] as [number, number]) : undefined
-            if (!scaleTo || [...scaleFrom, ...scaleTo].some(value => !Number.isFinite(value) || value < 0 || value > 10)) {
+            const scaleTo = explicitTo ?? (by ? ([scaleFrom[0] * by[0], scaleFrom[1] * by[1]] as [number, number]) : undefined)
+            // MS-OI29500 permits scale percentages up to 2,147,483,625 thousandths.
+            const maximumScaleFactor = 2_147_483_625 / 100_000
+            const encodedScaleValues = [...(explicitFrom || []), ...(explicitTo || []), ...(by || [])]
+            if (!scaleTo || encodedScaleValues.some(value => !Number.isFinite(value) || value < 0 || value > maximumScaleFactor) || scaleTo.some(value => !Number.isFinite(value) || value < 0)) {
                 warnings.add('A scale animation with missing or out-of-range values was skipped.')
                 continue
             }
-            const key = `${animationTarget.targetId}:scale:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+            // In this composition layer, base/repl/none replace, while sum and mult compose with other scale animations.
+            const key = `${animationTarget.targetId}:scale:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
             actions.set(key, {
                 targetId: animationTarget.targetId,
                 paragraphRange: animationTarget.paragraphRange,
@@ -5987,7 +6340,10 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 effect: 'scale',
                 direction: 'in',
                 scaleFrom,
+                scaleFromCurrent,
                 scaleTo,
+                scaleAdditive: scaleAdditive === 'sum',
+                scaleMultiplicative: scaleAdditive === 'mult',
                 scaleAccumulate: child(animation, 'cBhvr')?.getAttribute('accumulate') === 'always',
                 durationMs: animationDurationMs(timeNode, timing),
                 delayMs: delayMs + startDelay(timeNode),
@@ -6000,7 +6356,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const animationTarget = target(behavior || animation)
             const element = elementsById.get(animationTarget.targetId)
             const names = descendants(child(behavior, 'attrNameLst'), 'attrName')
-            const property = names[0]?.textContent?.trim()
+            const property = normalizeAnimationAttributeName(names[0]?.textContent)
             if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element) || !['r', 'ppt_r', 'style.rotation'].includes(property || '')) {
                 warnings.add('A rotation animation with an unsupported target or property was skipped.')
                 continue
@@ -6021,13 +6377,21 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }
             const rotationFrom = from ?? 0
             const rotationTo = to ?? rotationFrom + (by ?? 0)
+            const rotationAdditive = behavior?.getAttribute('additive')
+            const rotationFromCurrent = rawFrom === null && to !== undefined && (rotationAdditive === null || rotationAdditive === 'base')
+                && [...actions.values()].some(action => action.effect === 'rotation'
+                    && action.targetId === animationTarget.targetId
+                    && (!action.paragraphRange || !animationTarget.paragraphRange
+                        || action.paragraphRange.start <= animationTarget.paragraphRange.end && animationTarget.paragraphRange.start <= action.paragraphRange.end)
+                    && (!action.characterRange || !animationTarget.characterRange
+                        || action.characterRange.start < animationTarget.characterRange.end && animationTarget.characterRange.start < action.characterRange.end))
             const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
             const timing = animationTiming(timeNode, 'Rotation')
             if (!timing) {
                 handledRotations.add(animation)
                 continue
             }
-            const key = `${animationTarget.targetId}:rotation:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+            const key = `${animationTarget.targetId}:rotation:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
             actions.set(key, {
                 targetId: animationTarget.targetId,
                 paragraphRange: animationTarget.paragraphRange,
@@ -6035,9 +6399,10 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 effect: 'rotation',
                 direction: 'in',
                 rotationFrom,
+                rotationFromCurrent,
                 rotationTo,
                 rotationRelative: from === undefined && to === undefined,
-                rotationAdditive: behavior?.getAttribute('additive') === 'sum',
+                rotationAdditive: rotationAdditive === 'sum',
                 rotationAccumulate: behavior?.getAttribute('accumulate') === 'always',
                 durationMs: animationDurationMs(timeNode, timing),
                 delayMs: delayMs + startDelay(timeNode),
@@ -6045,10 +6410,81 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             })
             handledRotations.add(animation)
         }
-        for (const animation of ownedDescendants('animClr')) {
+        // Grow With Color writes style tracks that start from the current text style,
+        // even though its exported to-only values omit <p:from>.
+        // Require the complete observed signature so other iterated color effects
+        // keep the documented defaults for omitted <p:from> values.
+        const ownedColorTracks = ownedDescendants('animClr')
+        const ownedGenericTracks = ownedDescendants('anim')
+        const ownedSetTracks = ownedDescendants('set')
+        const trackProperty = (track: Element) => normalizeAnimationAttributeName(descendants(child(child(track, 'cBhvr'), 'attrNameLst'), 'attrName')[0]?.textContent)
+        const growWithColorStyleColorTrack = ownedColorTracks.find(track => trackProperty(track) === 'style.color'
+            && !child(track, 'from') && Boolean(child(track, 'to'))
+            && child(track, 'cBhvr')?.getAttribute('override') === 'childStyle')
+        const growWithColorFillColorTrack = ownedColorTracks.find(track => trackProperty(track) === 'fillcolor'
+            && !child(track, 'from') && Boolean(child(track, 'to')))
+        const growWithColorFillTypeTrack = ownedSetTracks.find(track => trackProperty(track) === 'fill.type'
+            && firstDescendant(child(track, 'to'), 'strVal')?.getAttribute('val') === 'solid')
+        const growWithColorFontSizeTrack = ownedGenericTracks.find(track => trackProperty(track) === 'style.fontSize'
+            && track.getAttribute('to') === '1.5' && !track.hasAttribute('from') && !track.hasAttribute('by')
+            && child(track, 'cBhvr')?.getAttribute('override') === 'childStyle')
+        const growWithColorTrackTargetIds = [growWithColorStyleColorTrack, growWithColorFillColorTrack, growWithColorFillTypeTrack, growWithColorFontSizeTrack]
+            .map(track => track ? target(child(track, 'cBhvr') || track).targetId : '')
+        const hasGrowWithColorSignature = owner?.getAttribute('nodeType') === 'clickEffect'
+            && owner.getAttribute('presetID')?.trim() === '28'
+            && owner.getAttribute('presetClass') === 'emph'
+            && owner.getAttribute('presetSubtype') === '0'
+            && iterate?.getAttribute('type') === 'lt'
+            && child(iterate, 'tmPct')?.getAttribute('val') === '10000'
+            && ownedColorTracks.length === 2
+            && ownedGenericTracks.length === 1
+            && ownedSetTracks.length === 1
+            && Boolean(growWithColorStyleColorTrack && growWithColorFillColorTrack && growWithColorFillTypeTrack && growWithColorFontSizeTrack)
+            && Boolean(growWithColorTrackTargetIds[0])
+            && growWithColorTrackTargetIds.every(targetId => targetId === growWithColorTrackTargetIds[0])
+        const isWpsGrowWithColor = isWpsApplication && hasGrowWithColorSignature
+        const isGrowWithColorStyleColorTrack = hasGrowWithColorSignature && growWithColorStyleColorTrack !== undefined
+        const isGrowWithColorFontSizeTrack = hasGrowWithColorSignature && growWithColorFontSizeTrack !== undefined
+        // WPS playback completes the object-fill tween before starting the
+        // per-letter childStyle color and font-size tracks.
+        const wpsGrowWithColorChildStyleDelayMs = isWpsGrowWithColor
+            ? timelineTime(child(child(growWithColorFillColorTrack, 'cBhvr'), 'cTn')?.getAttribute('dur'), 0)
+            : 0
+        const relativeColorProperties = ['fillcolor', 'stroke.color', 'style.color']
+        const wpsRelativeColorTracks = ownedColorTracks.filter(track =>
+            !child(track, 'from') && !child(track, 'to') && Boolean(child(track, 'by'))
+        )
+        const relativeColorByValue = (track: Element) => {
+            const value = children(child(track, 'by'))[0]
+            return value?.localName === 'hsl'
+                ? ['h', 's', 'l'].map(attribute => value.getAttribute(attribute) || '').join(':')
+                : ''
+        }
+        // WPS exports Lighten (30) and Desaturate (25) as a matched set of
+        // relative HSL tracks. Resolve those deltas against each property's
+        // saved color, while leaving ordinary omitted-from animClr at black.
+        const wpsCurrentColorEmphasis = owner?.getAttribute('nodeType') === 'clickEffect'
+            && owner.getAttribute('presetClass') === 'emph'
+            && owner.getAttribute('presetSubtype') === '0'
+            && ['25', '30'].includes(owner.getAttribute('presetID')?.trim() || '')
+            && !iterate
+            && ownedColorTracks.length === 3
+            && ownedSetTracks.length === 1
+            && wpsRelativeColorTracks.length === 3
+            && wpsRelativeColorTracks.every(track => track.getAttribute('clrSpc') === 'hsl')
+            && relativeColorProperties.every(property => wpsRelativeColorTracks.some(track => trackProperty(track) === property))
+            && wpsRelativeColorTracks.some(track => trackProperty(track) === 'style.color' && child(track, 'cBhvr')?.getAttribute('override') === 'childStyle')
+            && wpsRelativeColorTracks.every(track => target(child(track, 'cBhvr') || track).targetId === target(child(wpsRelativeColorTracks[0]!, 'cBhvr') || wpsRelativeColorTracks[0]!).targetId)
+            && Boolean(target(child(wpsRelativeColorTracks[0]!, 'cBhvr') || wpsRelativeColorTracks[0]!).targetId)
+            && wpsRelativeColorTracks.every(track => relativeColorByValue(track) !== '')
+            && new Set(wpsRelativeColorTracks.map(relativeColorByValue)).size === 1
+            && trackProperty(ownedSetTracks[0]!) === 'fill.type'
+            && firstDescendant(child(ownedSetTracks[0]!, 'to'), 'strVal')?.getAttribute('val') === 'solid'
+            && target(child(ownedSetTracks[0]!, 'cBhvr') || ownedSetTracks[0]!).targetId === target(child(wpsRelativeColorTracks[0]!, 'cBhvr') || wpsRelativeColorTracks[0]!).targetId
+        for (const animation of ownedColorTracks) {
             const behavior = child(animation, 'cBhvr')
             const animationTarget = target(behavior || animation)
-            const property = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent?.trim()
+            const property = normalizeAnimationAttributeName(descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent)
             if (property === 'imageData.chromakey') {
                 // PowerPoint limits p:animClr targets to style.color, fillcolor, and stroke.color.
                 // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/9636f7f3-58e3-408d-9880-d0799fb26b0f
@@ -6056,6 +6492,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 handledColors.add(animation)
                 continue
             }
+            // The real WPS Grow With Color preset only animates the shape fill.
+            // Its childStyle text-color track is present in OOXML but WPS leaves
+            // the saved text color unchanged during playback.
             const element = elementsById.get(animationTarget.targetId)
             const colorSpace = animation.getAttribute('clrSpc') || 'rgb'
             const colorDirection = animation.getAttribute('dir') || 'cw'
@@ -6063,7 +6502,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 !element ||
                 animationTarget.hasUnsupportedTextRange ||
                 ((animationTarget.paragraphRange || animationTarget.characterRange) && !['style.color', 'shadow.color'].includes(property || '')) ||
-                !hasValidCharacterRange(animationTarget, element) ||
+                !hasValidTextRange(animationTarget, element) ||
                 (property === 'fillcolor' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
                 (property === 'stroke.color' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))) ||
                 (property === 'shadow.color' && (!element || !hasShadow(element))) ||
@@ -6072,6 +6511,21 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add('A color animation with an unsupported target or property was skipped.')
                 handledColors.add(animation)
                 continue
+            }
+            const usesCurrentColor = (wpsCurrentColorEmphasis
+                && !child(animation, 'from')
+                && !child(animation, 'to')
+                && Boolean(child(animation, 'by'))
+                && ['fillcolor', 'style.color', 'stroke.color'].includes(property || ''))
+                || (isGrowWithColorStyleColorTrack && animation === growWithColorStyleColorTrack && property === 'style.color')
+            const currentColorBaseline = property === 'fillcolor' ? element.fill : property === 'stroke.color' ? element.stroke : undefined
+            if (usesCurrentColor && property !== 'style.color') {
+                const channels = animationColorStringChannels(currentColorBaseline, 'hsl')
+                if (!channels || channels[3] <= 0) {
+                    warnings.add(`A WPS relative color emphasis track targeting an unset ${property === 'fillcolor' ? 'shape fill' : 'stroke'} was skipped.`)
+                    handledColors.add(animation)
+                    continue
+                }
             }
             if (!['rgb', 'hsl'].includes(colorSpace) || !['cw', 'ccw'].includes(colorDirection)) {
                 warnings.add('A color animation with an unsupported color space or hue direction was skipped.')
@@ -6083,7 +6537,16 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const toNode = child(animation, 'to')
             const byNode = child(animation, 'by')
             const black: [number, number, number, number] = [0, 0, 0, 1]
-            const colorFrom = fromNode ? colorValue(fromNode) : black
+            // Grow With Color uses to-only fill and childStyle color tracks;
+            // its native playback starts each track at the saved property value.
+            // Keep the documented black default for other omitted-from color tracks.
+            const iteratedFillColor = !fromNode
+                && property === 'fillcolor'
+                && hasGrowWithColorSignature
+                && element?.kind === 'shape'
+                ? animationColorStringChannels(element.fill, colorSpace as 'rgb' | 'hsl')
+                : undefined
+            const colorFrom = fromNode ? colorValue(fromNode) : iteratedFillColor ?? black
             const explicitTo = toNode ? colorValue(toNode) : undefined
             const colorBy = byNode ? colorValue(byNode) : undefined
             if (!colorFrom || (toNode && !explicitTo) || (!toNode && byNode && !colorBy) || (!toNode && !byNode)) {
@@ -6103,7 +6566,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 handledColors.add(animation)
                 continue
             }
-            const key = `${animationTarget.targetId}:color:${property}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+            const key = `${animationTarget.targetId}:color:${property}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
             actions.set(key, {
                 targetId: animationTarget.targetId,
                 paragraphRange: animationTarget.paragraphRange,
@@ -6113,10 +6576,11 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 colorProperty: property as PptxAnimation['colorProperty'],
                 colorFrom,
                 colorTo,
+                ...(usesCurrentColor ? {...(colorBy ? {colorBy} : {}), colorFromCurrent: true} : {}),
                 colorSpace: colorSpace as PptxAnimation['colorSpace'],
                 colorDirection: colorDirection as PptxAnimation['colorDirection'],
                 durationMs: animationDurationMs(timeNode, timing),
-                delayMs: delayMs + startDelay(timeNode),
+                    delayMs: delayMs + (isWpsGrowWithColor && animation === growWithColorStyleColorTrack ? wpsGrowWithColorChildStyleDelayMs : 0) + startDelay(timeNode),
                 ...timing
             })
             handledColors.add(animation)
@@ -6130,13 +6594,16 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.animatebehaviorcalculatemodevalues?view=openxml-3.0.1
             const behavior = child(animation, 'cBhvr')
             const animationTarget = target(behavior || animation)
-            const rawProperty = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent?.trim()
-            const property = rawProperty?.toLowerCase() === 'scalex' ? 'ScaleX' : rawProperty?.toLowerCase() === 'scaley' ? 'ScaleY' : rawProperty
+            const rawProperty = descendants(child(behavior, 'attrNameLst'), 'attrName')[0]?.textContent
+            const property = normalizeAnimationAttributeName(rawProperty)
+            const isGrowWithColorFontSize = isGrowWithColorFontSizeTrack && animation === growWithColorFontSizeTrack && property === 'style.fontSize'
             const element = elementsById.get(animationTarget.targetId)
             const timeNode = child(behavior, 'cTn') || firstDescendant(animation, 'cTn')
             const tavList = child(animation, 'tavLst')
             const calculationMode = animation.getAttribute('calcmode') || 'lin'
+            const valueType = animation.getAttribute('valueType') || 'num'
             const textStyleProperty = property === 'style.fontWeight' && animation.getAttribute('valueType') === 'str' ? 'fontWeight' : property === 'style.fontStyle' ? 'fontStyle' : property === 'style.fontFamily' ? 'fontFamily' : property === 'style.textDecorationUnderline' ? 'underline' : property === 'style.textDecorationLineThrough' ? 'lineThrough' : property === 'style.textTransform' ? 'textTransform' : property === 'style.textEffectOutline' ? 'outline' : property === 'style.textShadow' ? 'textShadow' : property === 'style.textEffectEmboss' ? 'emboss' : undefined
+            const isColorProperty = ['fillcolor', 'style.color', 'stroke.color', 'shadow.color'].includes(property || '')
             const isVisibilityProperty = property === 'style.visibility'
             const isGrayscaleProperty = property === 'imageData.grayscale'
             const isOnOffProperty = property === 'fill.on' || property === 'stroke.on' || property === 'shadow.on'
@@ -6144,8 +6611,10 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const isLineArrowTypeProperty = property === 'stroke.startArrow' || property === 'stroke.endArrow'
             const isLineArrowSizeProperty = property === 'stroke.startArrowWidth' || property === 'stroke.endArrowWidth' || property === 'stroke.startArrowLength' || property === 'stroke.endArrowLength'
             const isLineArrowProperty = isLineArrowTypeProperty || isLineArrowSizeProperty
+            const isShadowOffsetProperty = property === 'shadow.offset.x' || property === 'shadow.offset.y'
             const isCoordinateProperty = property === 'ppt_x' || property === 'ppt_y'
-            const isScaleProperty = property === 'ScaleX' || property === 'ScaleY'
+            const isDimensionProperty = property === 'ppt_w' || property === 'ppt_h'
+            const isScaleProperty = property === 'ScaleX' || property === 'ScaleY' || isDimensionProperty
             const imageCropProperty = property === 'imageData.cropLeft' ? 'left'
                 : property === 'imageData.cropTop' ? 'top'
                 : property === 'imageData.cropRight' ? 'right'
@@ -6157,12 +6626,67 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 : undefined
             const hasTextRange = Boolean(animationTarget.paragraphRange || animationTarget.characterRange)
             const isRotationProperty = property === 'style.rotation'
+            const directPresetChildren = owner ? children(child(owner, 'childTnLst')) : []
+            const visibilitySet = directPresetChildren.find(node => node.localName === 'set')
+            const visibilitySetBehavior = visibilitySet ? child(visibilitySet, 'cBhvr') : undefined
+            const visibilitySetTimeNode = visibilitySetBehavior ? child(visibilitySetBehavior, 'cTn') : undefined
+            const visibilitySetTarget = visibilitySetBehavior ? target(visibilitySetBehavior) : undefined
+            const visibilitySetProperty = firstDescendant(child(visibilitySetBehavior, 'attrNameLst'), 'attrName')?.textContent?.trim()
+            const visibilitySetValue = child(child(visibilitySet, 'to'), 'strVal')?.getAttribute('val')
+            const isRandomEffectPlaceholder = Boolean(
+                // Match the observed preset-24 placeholder exactly; other incomplete p:anim tracks stay unsupported.
+                owner?.getAttribute('nodeType') === 'clickEffect' &&
+                owner.getAttribute('presetID')?.trim() === '24' &&
+                owner.getAttribute('presetClass') === 'entr' &&
+                owner.getAttribute('presetSubtype')?.trim() === '0' &&
+                directPresetChildren.length === 2 &&
+                directPresetChildren.filter(node => node.localName === 'anim').length === 1 &&
+                directPresetChildren.filter(node => node.localName === 'set').length === 1 &&
+                ownedDescendants('anim').length === 1 &&
+                ownedDescendants('animEffect').length === 0 &&
+                visibilitySetProperty === 'style.visibility' &&
+                visibilitySetTarget?.targetId === animationTarget.targetId &&
+                visibilitySetValue === 'visible' &&
+                !rawProperty &&
+                animation.getAttribute('to') === '' &&
+                !animation.hasAttribute('from') &&
+                !animation.hasAttribute('by') &&
+                !tavList &&
+                calculationMode === 'lin' &&
+                valueType === 'num' &&
+                Boolean(timeNode) &&
+                Boolean(element) &&
+                !hasTextRange &&
+                !animationTarget.hasUnsupportedTextRange &&
+                hasValidTextRange(animationTarget, element)
+            )
+            if (isRandomEffectPlaceholder) {
+                const timing = animationTiming(timeNode, 'Random Effects')
+                handledTextAnimations.add(animation)
+                if (!timing) continue
+                const variant = randomEffectVariant()
+                // These placeholder tracks can be 1ms even when the paired visibility restore marks a 2s effect.
+                const visibilitySetDurationMs = visibilitySetTimeNode
+                    ? startDelay(visibilitySetTimeNode) + animationDurationMs(visibilitySetTimeNode, timing, 1)
+                    : 0
+                actions.set(`${animationTarget.targetId}:random-preset:${timeNode?.getAttribute('id') || actions.size}`, {
+                    targetId: animationTarget.targetId,
+                    ...variant,
+                    randomEffectFallback: true,
+                    direction: 'in',
+                    durationMs: Math.max(animationDurationMs(timeNode, timing), visibilitySetDurationMs),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                warnings.add(`This Random Effects preset omitted its selected effect; ${variant.effect} was randomly selected for this playback session.`)
+                continue
+            }
             if (
                 !animationTarget.targetId ||
-                !['style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline', 'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow', 'style.textEffectEmboss', 'style.visibility', 'style.rotation', 'imageData.grayscale', 'fill.on', 'stroke.on', 'shadow.on', 'stroke.dashstyle', 'stroke.startArrow', 'stroke.endArrow', 'stroke.startArrowWidth', 'stroke.endArrowWidth', 'stroke.startArrowLength', 'stroke.endArrowLength', 'imageData.cropLeft', 'imageData.cropTop', 'imageData.cropRight', 'imageData.cropBottom', 'imageData.gain', 'imageData.blacklevel', 'imageData.blackleve', 'imageData.gamma', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'stroke.weight', 'shadow.opacity', 'ppt_x', 'ppt_y', 'ScaleX', 'ScaleY'].includes(property || '') ||
+                !['style.fontSize', 'style.fontWeight', 'style.fontStyle', 'style.fontFamily', 'style.textDecorationUnderline', 'style.textDecorationLineThrough', 'style.textTransform', 'style.textEffectOutline', 'style.textShadow', 'style.textEffectEmboss', 'style.visibility', 'style.rotation', 'imageData.grayscale', 'fill.on', 'fillcolor', 'style.color', 'stroke.on', 'stroke.color', 'shadow.on', 'shadow.color', 'shadow.offset.x', 'shadow.offset.y', 'stroke.dashstyle', 'stroke.startArrow', 'stroke.endArrow', 'stroke.startArrowWidth', 'stroke.endArrowWidth', 'stroke.startArrowLength', 'stroke.endArrowLength', 'imageData.cropLeft', 'imageData.cropTop', 'imageData.cropRight', 'imageData.cropBottom', 'imageData.gain', 'imageData.blacklevel', 'imageData.blackleve', 'imageData.gamma', 'style.opacity', 'fill.opacity', 'stroke.opacity', 'stroke.weight', 'shadow.opacity', 'ppt_x', 'ppt_y', 'ppt_w', 'ppt_h', 'ScaleX', 'ScaleY'].includes(property || '') ||
                 !element ||
                 (isCoordinateProperty && hasTextRange) ||
-                (isScaleProperty && hasTextRange) ||
+                (isScaleProperty && hasTextRange && !isDimensionProperty) ||
                 (isOnOffProperty && hasTextRange) ||
                 (isStrokeDashProperty && (!['shape', 'line'].includes(element.kind) || hasTextRange)) ||
                 (isLineArrowProperty && (element.kind !== 'line' || hasTextRange)) ||
@@ -6171,14 +6695,20 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 (isGrayscaleProperty && (element.kind !== 'picture' || hasTextRange)) ||
                 (imageCropProperty && (element.kind !== 'picture' || hasTextRange)) ||
                 (imageToneProperty && (element.kind !== 'picture' || hasTextRange)) ||
+                (hasTextRange && isColorProperty && !['style.color', 'shadow.color'].includes(property || '')) ||
+                (property === 'fillcolor' && (element.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
+                (property === 'stroke.color' && (!['shape', 'line'].includes(element.kind) || /gradient\(/i.test(element.stroke))) ||
+                (property === 'shadow.color' && !hasShadow(element)) ||
+                (isShadowOffsetProperty && !hasShadow(element)) ||
+                (property === 'style.color' && (!element.paragraphs.length || (element.kind === 'table' && animationTarget.paragraphRange))) ||
                 (property === 'fill.opacity' && !hasTextRange && element.kind !== 'shape') ||
                 (property === 'stroke.opacity' && !hasTextRange && !supportsStrokeOpacity(element)) ||
                 (property === 'shadow.opacity' && !hasTextRange && !hasShadow(element)) ||
                 animationTarget.hasUnsupportedTextRange ||
-                !hasValidCharacterRange(animationTarget, element) ||
-                (animation.getAttribute('valueType') && animation.getAttribute('valueType') !== (textStyleProperty || isVisibilityProperty || isGrayscaleProperty || isOnOffProperty || isStrokeDashProperty || isLineArrowProperty ? 'str' : 'num')) ||
+                !hasValidTextRange(animationTarget, element) ||
+                valueType !== (isColorProperty ? 'clr' : textStyleProperty || isVisibilityProperty || isGrayscaleProperty || isOnOffProperty || isStrokeDashProperty || isLineArrowProperty ? 'str' : 'num') ||
                 !['lin', 'discrete'].includes(calculationMode) ||
-                (calculationMode === 'discrete' && !tavList && !textStyleProperty && !isVisibilityProperty && !isGrayscaleProperty && !isOnOffProperty && !isStrokeDashProperty && !isLineArrowProperty && !isCoordinateProperty && !isScaleProperty && !isRotationProperty) ||
+                (calculationMode === 'discrete' && !tavList && !textStyleProperty && !isVisibilityProperty && !isGrayscaleProperty && !isOnOffProperty && !isStrokeDashProperty && !isLineArrowProperty && !isCoordinateProperty && !isScaleProperty && !isRotationProperty && !isShadowOffsetProperty && !isColorProperty) ||
                 (tavList && children(tavList).some(node => node.localName !== 'tav'))
             ) {
                 warnings.add('A generic object animation with an unsupported target or interpolation was skipped.')
@@ -6188,6 +6718,15 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const rawFrom = animation.getAttribute('from')
             const rawTo = animation.getAttribute('to')
             const rawBy = animation.getAttribute('by')
+            const formulaGeometry = animationGeometryVariables(element, slideWidth, slideHeight)
+            // Office/WPS dimension tracks can store #ppt_w/#ppt_h expressions in strVal.
+            // MS-OE376 attrName and tav define these properties and shape-size variables.
+            const parseNumericValue = (raw: string | null): number => {
+                if (!raw?.trim() || isDimensionProperty && raw.length > 16_384) return Number.NaN
+                const numeric = Number(raw)
+                if (Number.isFinite(numeric) || !isDimensionProperty) return numeric
+                return evaluateMotionFormula(raw, formulaGeometry, true) ?? Number.NaN
+            }
             const parseFixedPercentage = (raw: string | null): number | undefined => {
                 if (raw === null) return undefined
                 const value = raw.trim()
@@ -6198,8 +6737,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 return undefined
             }
             const keyframeNodes = tavList ? children(tavList) : []
-            const minimumKeyframeValue = isRotationProperty ? -2_147_483_647 : 0
-            const maximumKeyframeValue = isRotationProperty ? 2_147_483_647 : property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : 1000
+            const hasNumericFormula = keyframeNodes.some(node => Boolean(node.getAttribute('fmla')?.trim()))
+            const minimumKeyframeValue = isRotationProperty ? -2_147_483_647 : isDimensionProperty ? -1000 : isShadowOffsetProperty ? -MAX_ANIMATED_SHADOW_OFFSET_EMU : 0
+            const maximumKeyframeValue = isRotationProperty ? 2_147_483_647 : property === 'stroke.weight' ? MAX_ANIMATED_STROKE_WIDTH_EMU : isShadowOffsetProperty ? MAX_ANIMATED_SHADOW_OFFSET_EMU : 1000
             // ponytail: cap at 256 keypoints to bound parser and per-frame work; raise only when real decks need denser curves.
             const parsedKeyframes =
                 tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
@@ -6208,9 +6748,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                               const valueNode = children(child(node, 'val'))[0]
                               const offset = parseFixedPercentage(node.getAttribute('tm'))
                               const rawValue = valueNode && ['fltVal', 'strVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
-                              const value = rawValue?.trim() ? Number(rawValue) : Number.NaN
-                              const formula = node.hasAttribute('fmla') ? node.getAttribute('fmla')?.trim() : undefined
-                              return offset !== undefined && offset >= 0 && offset <= 1 && Number.isFinite(value) && value >= minimumKeyframeValue && value <= maximumKeyframeValue
+                              const value = parseNumericValue(rawValue)
+                              const formula = node.getAttribute('fmla')?.trim() || undefined
+                              return offset !== undefined && offset >= 0 && offset <= 1 && Number.isFinite(value) && (hasNumericFormula || value >= minimumKeyframeValue && value <= maximumKeyframeValue)
                                   && (formula === undefined || Boolean(formula && formula.length <= 16_384))
                                   ? {offset, value, formula}
                                   : undefined
@@ -6222,6 +6762,100 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 ? parsedKeyframes.map(({offset, value}) => ({offset, value}))
                 : undefined
             const validKeyframes = Boolean(keyframes?.length)
+            if (isColorProperty) {
+                // clr tracks use RGB/HSL strings or p:clrVal keypoints; a to-only or by-only track starts at black.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/cd27d302-0342-4d80-8118-5495c8fafea8
+                // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.progress?view=openxml-3.0.1
+                const keyframeColorSpaces = keyframeNodes.map(node => {
+                    const valueNode = children(child(node, 'val'))[0]
+                    if (valueNode?.localName === 'clrVal') return 'rgb' as const
+                    if (valueNode?.localName === 'strVal') return parseAnimationColorString(valueNode.getAttribute('val'))?.colorSpace
+                    return undefined
+                })
+                const directColorSpaces = [rawFrom, rawTo, rawBy]
+                    .filter((value): value is string => value !== null)
+                    .map(value => parseAnimationColorString(value)?.colorSpace)
+                const colorSpaces = [...directColorSpaces, ...keyframeColorSpaces].filter((space): space is AnimationColorSpace => Boolean(space))
+                const colorSpace: AnimationColorSpace = colorSpaces.length > 0 && colorSpaces.every(space => space === 'hsl') ? 'hsl' : 'rgb'
+                const parsedColorKeyframes = tavList && keyframeNodes.length > 0 && keyframeNodes.length <= 256
+                    ? keyframeNodes.map(node => {
+                          const offset = parseFixedPercentage(node.getAttribute('tm'))
+                          const valueNode = children(child(node, 'val'))[0]
+                          const value = valueNode?.localName === 'strVal'
+                              ? animationColorStringChannels(valueNode.getAttribute('val'), colorSpace)
+                              : valueNode?.localName === 'clrVal'
+                                ? animationColorChannels(children(valueNode)[0], theme, colorSpace)
+                                : undefined
+                          const formula = node.getAttribute('fmla')?.trim()
+                          return offset !== undefined && offset >= 0 && offset <= 1 && value && !formula
+                              ? {offset, value}
+                              : undefined
+                      })
+                    : undefined
+                const validColorKeyframes = Boolean(parsedColorKeyframes
+                    && parsedColorKeyframes.length > 0
+                    && parsedColorKeyframes.length === keyframeNodes.length
+                    && parsedColorKeyframes.every((frame, index) => {
+                        if (!frame) return false
+                        if (index === 0) return true
+                        const previous = parsedColorKeyframes[index - 1]
+                        return Boolean(previous && frame.offset > previous.offset)
+                    }))
+                const colorKeyframes = validColorKeyframes
+                    ? parsedColorKeyframes!.map(frame => frame!)
+                    : undefined
+                const hasFrom = rawFrom !== null
+                const hasTo = rawTo !== null
+                const hasBy = rawBy !== null
+                const validDirectCombination = hasTo ? !hasBy : hasBy
+                const validValues = tavList
+                    ? validColorKeyframes && !hasFrom && !hasTo && !hasBy
+                    : validDirectCombination
+                const black: [number, number, number, number] = [0, 0, 0, 1]
+                const colorFrom = colorKeyframes?.[0]?.value ?? (hasFrom ? animationColorStringChannels(rawFrom, colorSpace) : black)
+                const explicitTo = colorKeyframes?.at(-1)?.value ?? (hasTo ? animationColorStringChannels(rawTo, colorSpace) : undefined)
+                const colorBy = hasBy ? animationColorStringChannels(rawBy, colorSpace) : undefined
+                const colorTo = explicitTo || (colorFrom && colorBy
+                    ? colorFrom.map((channel, index) => {
+                          const maximum = index === 3 ? 1 : colorSpace === 'rgb' ? 255 : 1
+                          const sum = channel + colorBy[index]!
+                          return index === 0 && colorSpace === 'hsl' ? sum : Math.max(0, Math.min(maximum, sum))
+                      }) as [number, number, number, number]
+                    : undefined)
+                const additive = behavior?.getAttribute('additive')
+                if (!validValues || !colorFrom || !colorTo || (additive !== null && additive !== undefined && !['base', 'sum'].includes(additive))) {
+                    warnings.add('A generic color animation with missing, invalid, or unsupported values was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Color')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const directColorKeyframes = !tavList && calculationMode === 'discrete'
+                    ? [{offset: 0, value: colorFrom}, {offset: 1, value: colorTo}]
+                    : undefined
+                actions.set(`${animationTarget.targetId}:color:generic:${property}:${timeNode?.getAttribute('id') || actions.size}`, {
+                    targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    effect: 'color',
+                    direction: 'in',
+                    colorProperty: property as PptxAnimation['colorProperty'],
+                    colorFrom,
+                    colorTo,
+                    colorKeyframes: colorKeyframes || directColorKeyframes,
+                    colorKeyframeMode: tavList || directColorKeyframes ? calculationMode as 'lin' | 'discrete' : undefined,
+                    colorSpace,
+                    colorDirection: 'cw',
+                    durationMs: animationDurationMs(timeNode, timing),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
             if (isRotationProperty) {
                 const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
                 const validKeyframeTrack = Boolean(parsedKeyframes?.length && parsedKeyframes.length === keyframeNodes.length && parsedKeyframes.every((frame, index) => index === 0 || frame.offset > parsedKeyframes[index - 1]!.offset))
@@ -6233,7 +6867,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 const validValues = tavList
                     ? validRotationKeyframes && rawFrom === null && rawTo === null && rawBy === null
                     : validCombination
-                if (!validValues || !Number.isFinite(from) || to === undefined || !Number.isFinite(to) || Math.abs(from) > 2_147_483_647 || Math.abs(to) > 2_147_483_647 || (additive !== null && additive !== undefined && !['base', 'sum'].includes(additive))) {
+                if (!validValues || !Number.isFinite(from) || to === undefined || !Number.isFinite(to) || (!hasFormulaKeyframes && (Math.abs(from) > 2_147_483_647 || Math.abs(to) > 2_147_483_647)) || (additive !== null && additive !== undefined && !['base', 'sum'].includes(additive))) {
                     warnings.add(hasFormulaKeyframes
                         ? 'A generic style.rotation animation had an unsupported formula or keyframe track and was skipped.'
                         : 'A generic style.rotation animation with unsupported composition or out-of-range values was skipped.')
@@ -6254,13 +6888,25 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     handledTextAnimations.add(animation)
                     continue
                 }
-                // style.rotation is an allowed p:anim target; values use DrawingML's 60,000ths-of-a-degree angle unit.
+                // WPS generic style.rotation tracks use plain degrees (for example, Grow and Turn exports 90 -> 0).
+                // Preserve DrawingML angle units for aliases, formula tracks, and large values used by other exports.
+                const rawRotationValues = [
+                    rawFrom,
+                    rawTo,
+                    rawBy,
+                    ...(parsedKeyframes?.map(frame => String(frame.value)) ?? [])
+                ].filter((value): value is string => value !== null).map(Number)
+                const usesCompactStyleRotationDegrees = rawProperty?.trim().toLowerCase() === 'style.rotation'
+                    && !hasFormulaKeyframes
+                    && rawRotationValues.length > 0
+                    && rawRotationValues.every(value => Number.isFinite(value) && Math.abs(value) <= 360)
+                const rotationUnitScale = usesCompactStyleRotationDegrees ? 1 : 1 / 60_000
                 const rotationFrom = formulaSamples?.[0]?.value ?? from
                 const rotationTo = formulaSamples?.at(-1)?.value ?? to
-                const fromDegrees = rotationFrom / 60_000
-                const toDegrees = rotationTo / 60_000
+                const fromDegrees = rotationFrom * rotationUnitScale
+                const toDegrees = rotationTo * rotationUnitScale
                 const rotationKeyframes = formulaSamples?.map(({offset, value}) => ({offset, value: value / 60_000}))
-                    ?? keyframes?.map(({offset, value}) => ({offset, value: value / 60_000}))
+                    ?? keyframes?.map(({offset, value}) => ({offset, value: value * rotationUnitScale}))
                     ?? (calculationMode === 'discrete' ? [{offset: 0, value: fromDegrees}, {offset: 1, value: toDegrees}] : undefined)
                 actions.set(`${animationTarget.targetId}:rotation:generic:${timeNode?.getAttribute('id') || actions.size}`, {
                     targetId: animationTarget.targetId,
@@ -6283,22 +6929,24 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 continue
             }
             if (isScaleProperty) {
-                const scaleProperty = property as 'ScaleX' | 'ScaleY'
-                const scaleAxis = scaleProperty === 'ScaleX' ? 'x' : 'y'
+                const scaleProperty = property as 'ScaleX' | 'ScaleY' | 'ppt_w' | 'ppt_h'
+                const scaleAxis = scaleProperty === 'ScaleX' || scaleProperty === 'ppt_w' ? 'x' : 'y'
+                const baseline = isDimensionProperty ? scaleAxis === 'x' ? formulaGeometry.ppt_w : formulaGeometry.ppt_h : 1
+                const minimumScaleValue = isDimensionProperty ? -baseline * 10 : 0
                 const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
-                const validScaleKeyframes = Boolean(validKeyframeTrack && parsedKeyframes?.every(frame => frame.value >= 0 && frame.value <= 10))
+                const validScaleKeyframes = Boolean(validKeyframeTrack && (hasFormulaKeyframes || parsedKeyframes?.every(frame => frame.value >= minimumScaleValue && frame.value <= baseline * 10)))
                 const rawFrom = animation.getAttribute('from')
                 const rawTo = animation.getAttribute('to')
                 const rawBy = animation.getAttribute('by')
                 // MS-OI29500 §19.5.1: numeric to-only and by-only animations start at 0.
-                const from = parsedKeyframes?.[0]?.value ?? (rawFrom !== null ? Number(rawFrom) : rawTo !== null || rawBy !== null ? 0 : 1)
-                const to = parsedKeyframes?.at(-1)?.value ?? (rawTo !== null ? Number(rawTo) : rawBy !== null ? from + Number(rawBy) : undefined)
+                const from = parsedKeyframes?.[0]?.value ?? (rawFrom !== null ? parseNumericValue(rawFrom) : rawTo !== null || rawBy !== null ? 0 : baseline)
+                const to = parsedKeyframes?.at(-1)?.value ?? (rawTo !== null ? parseNumericValue(rawTo) : rawBy !== null ? from + parseNumericValue(rawBy) : undefined)
                 const validCombination = (rawTo !== null) !== (rawBy !== null) && (rawFrom !== null || rawTo !== null || rawBy !== null)
                 const additive = behavior?.getAttribute('additive')
                 const validValues = tavList
                     ? validScaleKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || calculationMode === 'lin')
                     : validCombination
-                if (!validValues || !Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from > 10 || to === undefined || to < 0 || to > 10 || additive !== null && additive !== undefined && additive !== 'base') {
+                if (!validValues || !Number.isFinite(baseline) || baseline <= 0 || !Number.isFinite(from) || !Number.isFinite(to) || to === undefined || (!hasFormulaKeyframes && (from < minimumScaleValue || from > baseline * 10 || to < minimumScaleValue || to > baseline * 10)) || additive !== null && additive !== undefined && !['base', 'sum', 'mult'].includes(additive)) {
                     warnings.add(`A generic ${property} animation with unsupported composition or out-of-range values was skipped.`)
                     handledTextAnimations.add(animation)
                     continue
@@ -6317,14 +6965,33 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     handledTextAnimations.add(animation)
                     continue
                 }
-                const scaleKeyframes = formulaSamples || keyframes || (calculationMode === 'discrete' ? [{offset: 0, value: from}, {offset: 1, value: to}] : undefined)
+                const sourceKeyframes = formulaSamples || keyframes || (calculationMode === 'discrete' ? [{offset: 0, value: from}, {offset: 1, value: to}] : undefined)
+                const scaleKeyframes = isDimensionProperty ? sourceKeyframes?.map(frame => ({offset: frame.offset, value: frame.value / baseline})) : sourceKeyframes
+                const scaleFrom = (formulaSamples?.[0]?.value ?? from) / baseline
+                const scaleTo = (formulaSamples?.at(-1)?.value ?? to) / baseline
+                // Office defaults cBhvr@additive to base, and numeric by-only p:anim tracks start at zero.
+                // Apply generic p:anim values against the identity scale to preserve the original scale as the base.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/b9a20a78-6401-4a8b-8ca9-b31ead409132
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e9355b93-5184-4ffe-8428-63a08858da2f
+                const baseAdditive = additive === null || additive === 'base'
                 actions.set(`${animationTarget.targetId}:scale:${property}:${timeNode?.getAttribute('id') || actions.size}`, {
                     targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
                     effect: 'scale',
                     direction: 'in',
-                    scaleFrom: scaleAxis === 'x' ? [from, 1] : [1, from],
-                    scaleTo: scaleAxis === 'x' ? [to, 1] : [1, to],
+                    scaleLayer: isDimensionProperty ? 'dimensions' : 'transform',
+                    scaleFrom: scaleAxis === 'x' ? [scaleFrom, 1] : [1, scaleFrom],
+                    scaleTo: scaleAxis === 'x' ? [scaleTo, 1] : [1, scaleTo],
                     scaleAxis,
+                    scaleAdditive: additive === 'sum',
+                    scaleMultiplicative: additive === 'mult',
+                    // ppt_w/ppt_h keyframes are geometry values normalized into
+                    // the dimension layer; adding the underlying geometry again
+                    // would make a 0 -> original-size zoom render as 1x -> 2x.
+                    // Dimension by-only tracks carry a relative delta (for example WPS Flip's -2x width).
+                    // Apply that delta to the original geometry; to-only dimension tracks remain absolute sizes.
+                    scaleBaseAdditive: baseAdditive && (!isDimensionProperty || rawBy !== null && rawTo === null),
                     scaleKeyframes,
                     scaleKeyframeMode: tavList || calculationMode === 'discrete' ? calculationMode as 'lin' | 'discrete' : undefined,
                     scaleAccumulate: behavior?.getAttribute('accumulate') === 'always',
@@ -6336,20 +7003,14 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 continue
             }
             if (isCoordinateProperty) {
-                const baseline = property === 'ppt_x' ? element.x / slideWidth : element.y / slideHeight
-                const formulaVariables = {
-                    ppt_x: element.x / slideWidth,
-                    ppt_y: element.y / slideHeight,
-                    ppt_w: element.width / slideWidth,
-                    ppt_h: element.height / slideHeight,
-                    [property]: baseline
-                }
+                const baseline = formulaGeometry[property]
+                const formulaVariables = formulaGeometry
                 const readCoordinateValue = (raw: string | null, progress: number): number | undefined => {
                     const value = raw?.trim()
                     if (!value || value.length > 16_384) return undefined
                     const numeric = Number(value)
                     if (Number.isFinite(numeric)) return numeric
-                    return evaluateMotionFormula(value, {...formulaVariables, $: progress})
+                    return evaluateMotionFormula(value, {...formulaVariables, $: progress}, true)
                 }
                 const coordinateKeyframes = tavList && keyframeNodes.length >= 2 && keyframeNodes.length <= 256
                     ? keyframeNodes.map(node => {
@@ -6357,8 +7018,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                           const valueNode = children(child(node, 'val'))[0]
                           const rawValue = valueNode && ['fltVal', 'strVal', 'intVal'].includes(valueNode.localName) ? valueNode.getAttribute('val') : null
                           const value = readCoordinateValue(rawValue, offset ?? 0)
-                          const formula = node.hasAttribute('fmla') ? node.getAttribute('fmla')?.trim() : undefined
-                          return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && value >= -100 && value <= 100 && (formula === undefined || Boolean(formula && formula.length <= 16_384))
+                          const formula = node.getAttribute('fmla')?.trim() || undefined
+                          return offset !== undefined && offset >= 0 && offset <= 1 && value !== undefined && (hasNumericFormula || value >= -100 && value <= 100) && (formula === undefined || Boolean(formula && formula.length <= 16_384))
                               ? {offset, value, formula}
                               : undefined
                       }).filter((frame): frame is {offset: number; value: number; formula: string | undefined} => Boolean(frame))
@@ -6377,13 +7038,13 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     : validCombination && from !== undefined && to !== undefined
                 const behavior = child(animation, 'cBhvr')
                 const additive = behavior?.getAttribute('additive')
-                const accumulate = timeNode?.getAttribute('accumulate')
-                if (additive !== null && additive !== undefined && additive !== 'base' || accumulate !== null && accumulate !== undefined && accumulate !== 'none') {
-                    warnings.add(`A ${property} animation with additive or cumulative composition was skipped.`)
+                const accumulate = behavior?.getAttribute('accumulate')
+                if (additive !== null && additive !== undefined && !['base', 'sum'].includes(additive) || accumulate !== null && accumulate !== undefined && !['none', 'always'].includes(accumulate)) {
+                    warnings.add(`A ${property} animation with unsupported additive or cumulative composition was skipped.`)
                     handledTextAnimations.add(animation)
                     continue
                 }
-                if (!validValues || from === undefined || to === undefined || from < -100 || from > 100 || to < -100 || to > 100) {
+                if (!validValues || from === undefined || to === undefined || (!hasFormulaKeyframes && (from < -100 || from > 100 || to < -100 || to > 100))) {
                     warnings.add(`A ${property} animation with unsupported values, formulas, or interpolation was skipped.`)
                     handledTextAnimations.add(animation)
                     continue
@@ -6414,6 +7075,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     effect: 'motion',
                     direction: 'in',
                     motionCoordinateProperty: property,
+                    motionAdditive: additive === 'sum',
+                    motionAccumulate: accumulate === 'always',
                     motionPathSamples: samples.map(frame => ({
                         progress: frame.offset,
                         x: property === 'ppt_x' ? (frame.value - baseline) * slideWidth : 0,
@@ -6648,7 +7311,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     handledTextAnimations.add(animation)
                     continue
                 }
-                const key = `${animationTarget.targetId}:textStyle:${textStyleProperty}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+                const key = `${animationTarget.targetId}:textStyle:${textStyleProperty}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
                 actions.set(key, {
                     targetId: animationTarget.targetId,
                     paragraphRange: animationTarget.paragraphRange,
@@ -6893,13 +7556,15 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             if (property === 'stroke.weight') {
                 const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
                 const strokeWidthKeyframes = hasFormulaKeyframes ? parsedKeyframes : keyframes
-                const validStrokeWidthKeyframes = Boolean(validKeyframeTrack && strokeWidthKeyframes?.every(frame => frame.value <= MAX_ANIMATED_STROKE_WIDTH_EMU))
+                const validStrokeWidthKeyframes = Boolean(validKeyframeTrack && (hasFormulaKeyframes || strokeWidthKeyframes?.every(frame => frame.value <= MAX_ANIMATED_STROKE_WIDTH_EMU)))
                 const validValues = tavList
                     ? validStrokeWidthKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || calculationMode === 'lin')
                     : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
-                const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? element.strokeWidth : Number(rawFrom))
+                // MS-OI29500 19.5.1(h): numeric to-only/by-only p:anim starts at zero.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e9355b93-5184-4ffe-8428-63a08858da2f
+                const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? 0 : Number(rawFrom))
                 const to = parsedKeyframes?.at(-1)?.value ?? (rawTo !== null ? Number(rawTo) : rawBy !== null ? from + Number(rawBy) : undefined)
-                if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || from < 0 || from > MAX_ANIMATED_STROKE_WIDTH_EMU || to < 0 || to > MAX_ANIMATED_STROKE_WIDTH_EMU) {
+                if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || (!hasFormulaKeyframes && (from < 0 || from > MAX_ANIMATED_STROKE_WIDTH_EMU || to < 0 || to > MAX_ANIMATED_STROKE_WIDTH_EMU))) {
                     warnings.add(hasFormulaKeyframes
                         ? 'A stroke.weight formula animation with unsupported interpolation or numeric keyframes was skipped.'
                         : 'A stroke.weight animation with missing or out-of-range numeric values was skipped.')
@@ -6920,12 +7585,12 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     handledTextAnimations.add(animation)
                     continue
                 }
-                actions.set(`${animationTarget.targetId}:strokeWidth`, {
+                actions.set(`${animationTarget.targetId}:strokeWidth:${timeNode?.getAttribute('id') || actions.size}`, {
                     targetId: animationTarget.targetId,
                     effect: 'strokeWidth',
                     direction: 'in',
-                    strokeWidthFrom: from,
-                    strokeWidthTo: to,
+                    strokeWidthFrom: strokeWidthFormulaSamples?.[0]?.value ?? from,
+                    strokeWidthTo: strokeWidthFormulaSamples?.at(-1)?.value ?? to,
                     strokeWidthKeyframes: keyframes,
                     strokeWidthKeyframeMode: tavList ? (calculationMode as NonNullable<PptxAnimation['strokeWidthKeyframeMode']>) : undefined,
                     strokeWidthFormulaSamples,
@@ -6936,11 +7601,78 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 handledTextAnimations.add(animation)
                 continue
             }
+            if (isShadowOffsetProperty) {
+                const shadowOffsetProperty = property as AnimationShadowOffsetProperty
+                const hasTextShadowTarget = hasTextRange || ['lt', 'wd'].includes(iterate?.getAttribute('type') || '')
+                const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
+                if (hasTextShadowTarget && hasFormulaKeyframes) {
+                    warnings.add('A text-range shadow offset formula animation was skipped because formula variables cannot resolve per-run shadow baselines.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const shadowOffsetKeyframes = hasFormulaKeyframes ? parsedKeyframes : keyframes
+                const validShadowOffsetKeyframes = Boolean(validKeyframeTrack && shadowOffsetKeyframes?.every(frame => Math.abs(frame.value) <= MAX_ANIMATED_SHADOW_OFFSET_EMU))
+                const additive = behavior?.getAttribute('additive')
+                const validComposition = additive === null || additive === undefined || ['base', 'repl', 'none'].includes(additive)
+                const validValues = validComposition && (tavList
+                    ? validShadowOffsetKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || calculationMode === 'lin')
+                    : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null))
+                // PowerPoint numeric to-only/by-only tracks start at zero, independent of the saved property value.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e9355b93-5184-4ffe-8428-63a08858da2f
+                const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? 0 : Number(rawFrom))
+                const by = rawBy === null ? undefined : Number(rawBy)
+                const to = parsedKeyframes?.at(-1)?.value ?? (rawTo !== null ? Number(rawTo) : by !== undefined ? from + by : undefined)
+                if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || Math.abs(from) > MAX_ANIMATED_SHADOW_OFFSET_EMU || Math.abs(to) > MAX_ANIMATED_SHADOW_OFFSET_EMU || (by !== undefined && (!Number.isFinite(by) || Math.abs(by) > MAX_ANIMATED_SHADOW_OFFSET_EMU))) {
+                    warnings.add('A generic shadow offset animation with unsupported composition or out-of-range values was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const timing = animationTiming(timeNode, 'Shadow offset')
+                if (!timing) {
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                const durationMs = animationDurationMs(timeNode, timing)
+                const shadowOffsetFormulaSamples = hasFormulaKeyframes && parsedKeyframes
+                    ? sampleNumericAnimationFormula(parsedKeyframes, durationMs, shadowOffsetProperty, element, slideWidth, slideHeight)
+                    : undefined
+                if (hasFormulaKeyframes && !shadowOffsetFormulaSamples) {
+                    warnings.add(`A generic ${property} formula used an unsupported variable or produced an out-of-range value; animation was skipped.`)
+                    handledTextAnimations.add(animation)
+                    continue
+                }
+                actions.set(`${animationTarget.targetId}:shadowOffset:${shadowOffsetProperty}:${timeNode?.getAttribute('id') || actions.size}`, {
+                    targetId: animationTarget.targetId,
+                    effect: 'shadowOffset',
+                    direction: 'in',
+                    shadowOffsetProperty,
+                    shadowOffsetFrom: shadowOffsetFormulaSamples?.[0]?.value ?? shadowOffsetKeyframes?.[0]?.value ?? from,
+                    shadowOffsetTo: shadowOffsetFormulaSamples?.at(-1)?.value ?? shadowOffsetKeyframes?.at(-1)?.value ?? to,
+                    shadowOffsetKeyframes: keyframes,
+                    shadowOffsetFormulaSamples,
+                    shadowOffsetKeyframeMode: tavList ? calculationMode as 'lin' | 'discrete' : undefined,
+                    shadowOffsetAccumulate: behavior?.getAttribute('accumulate') === 'always',
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    durationMs,
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                handledTextAnimations.add(animation)
+                continue
+            }
             if (!['style.fontSize', 'style.fontWeight'].includes(property || '')) {
+                const opacityAdditive = behavior?.getAttribute('additive')
+                const isOpacityProperty = ['style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(property || '')
+                if (isOpacityProperty && opacityAdditive !== null && opacityAdditive !== undefined && !['base', 'sum', 'repl', 'mult', 'none'].includes(opacityAdditive)) {
+                    warnings.add('A generic opacity animation with an unsupported additive mode was skipped.')
+                    handledTextAnimations.add(animation)
+                    continue
+                }
                 const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
                 const formulaProperty = ['style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(property || '')
                 const validOpacityKeyframes = formulaProperty && hasFormulaKeyframes
-                    ? Boolean(validKeyframeTrack && parsedKeyframes?.every(frame => frame.value <= 1))
+                    ? validKeyframeTrack
                     : Boolean(validKeyframes && keyframes?.every(frame => frame.value <= 1))
                 const validValues = tavList
                     ? validOpacityKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || formulaProperty && calculationMode === 'lin')
@@ -6969,18 +7701,20 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     continue
                 }
                 const rangeKey = hasTextRange ? ':' + (animationTarget.paragraphRange?.start ?? '') + ':' + (animationTarget.paragraphRange?.end ?? '') + ':' + (animationTarget.characterRange?.start ?? '') + ':' + (animationTarget.characterRange?.end ?? '') : ''
-                actions.set(animationTarget.targetId + ':opacity:' + property + rangeKey, {
+                actions.set(animationTarget.targetId + ':opacity:' + property + rangeKey + ':' + (timeNode?.getAttribute('id') || actions.size), {
                     targetId: animationTarget.targetId,
                     paragraphRange: animationTarget.paragraphRange,
                     characterRange: animationTarget.characterRange,
                     effect: 'opacity',
                     opacityProperty: property as PptxAnimation['opacityProperty'],
                     direction: 'in',
-                    opacityFrom: keyframes?.[0]?.value ?? from,
-                    opacityTo: keyframes?.at(-1)?.value ?? to,
+                    opacityFrom: opacityFormulaSamples?.[0]?.value ?? keyframes?.[0]?.value ?? from,
+                    opacityTo: opacityFormulaSamples?.at(-1)?.value ?? keyframes?.at(-1)?.value ?? to,
                     opacityKeyframes: keyframes,
                     opacityFormulaSamples,
                     opacityKeyframeMode: tavList ? (calculationMode as NonNullable<PptxAnimation['opacityKeyframeMode']>) : undefined,
+                    opacityAdditive: isOpacityProperty && (opacityAdditive === 'sum' || opacityAdditive === 'mult') ? opacityAdditive : undefined,
+                    opacityAccumulate: behavior?.getAttribute('accumulate') === 'always',
                     durationMs,
                     delayMs: delayMs + startDelay(timeNode),
                     ...timing
@@ -6990,13 +7724,13 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }
             if (property === 'style.fontWeight') {
                 const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
-                const validFontWeightKeyframes = Boolean(validKeyframeTrack && parsedKeyframes?.every(frame => frame.value >= 1 && frame.value <= 1000))
+                const validFontWeightKeyframes = Boolean(validKeyframeTrack && (hasFormulaKeyframes || parsedKeyframes?.every(frame => frame.value >= 1 && frame.value <= 1000)))
                 const validValues = tavList
                     ? validFontWeightKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || calculationMode === 'lin')
                     : rawFrom !== null && rawTo !== null && rawBy === null
                 const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? Number.NaN : Number(rawFrom))
                 const to = parsedKeyframes?.at(-1)?.value ?? (rawTo === null ? Number.NaN : Number(rawTo))
-                if (!validValues || !Number.isFinite(from) || !Number.isFinite(to) || from < 1 || from > 1000 || to < 1 || to > 1000) {
+                if (!validValues || !Number.isFinite(from) || !Number.isFinite(to) || (!hasFormulaKeyframes && (from < 1 || from > 1000 || to < 1 || to > 1000))) {
                     warnings.add(hasFormulaKeyframes
                         ? 'A generic text font-weight formula animation with unsupported interpolation or invalid numeric keyframes was skipped.'
                         : 'A generic text font-weight animation with missing or out-of-range numeric values was skipped.')
@@ -7009,25 +7743,39 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     continue
                 }
                 const durationMs = animationDurationMs(timeNode, timing)
-                const fontWeightFormulaSamples = hasFormulaKeyframes && parsedKeyframes
-                    ? sampleNumericAnimationFormula(parsedKeyframes, durationMs, 'style.fontWeight', element, slideWidth, slideHeight)
+                const fontWeightBaselines = [...new Set(element.paragraphs.flatMap(paragraph => paragraph.runs.map(run => run.bold ? 700 : 400)))]
+                const formulaUsesFontWeightBaseline = Boolean(parsedKeyframes?.some(frame => /#style\.fontweight\b/i.test(frame.formula || '')))
+                const formulaUsesRandom = Boolean(parsedKeyframes?.some(frame => /\brand\s*\(/i.test(frame.formula || '')))
+                const needsPerBaselineFormulaSamples = Boolean(hasFormulaKeyframes && parsedKeyframes && formulaUsesFontWeightBaseline && fontWeightBaselines.length > 1)
+                const fontWeightFormulaSeed = needsPerBaselineFormulaSamples && formulaUsesRandom ? Math.floor(Math.random() * 0x1_0000_0000) : undefined
+                const fontWeightFormulaSamplesByBaseline = needsPerBaselineFormulaSamples && parsedKeyframes
+                    ? fontWeightBaselines.map(baseline => ({
+                        baseline,
+                        samples: sampleNumericAnimationFormula(parsedKeyframes, durationMs, 'style.fontWeight', element, slideWidth, slideHeight, 'lin', baseline, fontWeightFormulaSeed)
+                    }))
                     : undefined
-                if (hasFormulaKeyframes && !fontWeightFormulaSamples) {
+                const fontWeightFormulaSamples = hasFormulaKeyframes && parsedKeyframes
+                    ? fontWeightFormulaSamplesByBaseline
+                        ? fontWeightFormulaSamplesByBaseline[0]?.samples
+                        : sampleNumericAnimationFormula(parsedKeyframes, durationMs, 'style.fontWeight', element, slideWidth, slideHeight)
+                    : undefined
+                if (hasFormulaKeyframes && (!fontWeightFormulaSamples || fontWeightFormulaSamplesByBaseline?.some(entry => !entry.samples))) {
                     warnings.add('A generic text font-weight formula used an unsupported variable or produced an out-of-range value; animation was skipped.')
                     handledTextAnimations.add(animation)
                     continue
                 }
-                const key = `${animationTarget.targetId}:fontWeight:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+                const key = `${animationTarget.targetId}:fontWeight:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
                 actions.set(key, {
                     targetId: animationTarget.targetId,
                     paragraphRange: animationTarget.paragraphRange,
                     characterRange: animationTarget.characterRange,
                     effect: 'fontWeight',
                     direction: 'in',
-                    fontWeightFrom: from,
-                    fontWeightTo: to,
+                    fontWeightFrom: fontWeightFormulaSamples?.[0]?.value ?? from,
+                    fontWeightTo: fontWeightFormulaSamples?.at(-1)?.value ?? to,
                     fontWeightKeyframes: keyframes,
                     fontWeightFormulaSamples,
+                    fontWeightFormulaSamplesByBaseline: fontWeightFormulaSamplesByBaseline?.map(entry => ({baseline: entry.baseline, samples: entry.samples!})),
                     fontWeightKeyframeMode: tavList ? (calculationMode as NonNullable<PptxAnimation['fontWeightKeyframeMode']>) : undefined,
                     durationMs,
                     delayMs: delayMs + startDelay(timeNode),
@@ -7037,11 +7785,11 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 continue
             }
             const hasFormulaKeyframes = Boolean(parsedKeyframes?.some(frame => frame.formula !== undefined))
-            const validFontSizeKeyframes = Boolean(validKeyframeTrack && parsedKeyframes?.every(frame => frame.value > 0))
+            const validFontSizeKeyframes = Boolean(validKeyframeTrack && (hasFormulaKeyframes || parsedKeyframes?.every(frame => frame.value >= 0)))
             const validValues = tavList ? validFontSizeKeyframes && rawFrom === null && rawTo === null && rawBy === null && (!hasFormulaKeyframes || calculationMode === 'lin') : !(rawTo !== null && rawBy !== null) && (rawTo !== null || rawBy !== null) && !(rawFrom !== null && rawTo === null && rawBy === null)
-            const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? 1 : Number(rawFrom))
+            const from = parsedKeyframes?.[0]?.value ?? (rawFrom === null ? (isGrowWithColorFontSize ? 1 : 0) : Number(rawFrom))
             const to = parsedKeyframes?.at(-1)?.value ?? (rawTo === null ? (rawBy === null ? undefined : from + Number(rawBy)) : Number(rawTo))
-            if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0 || from > 100 || to > 100) {
+            if (!validValues || to === undefined || !Number.isFinite(from) || !Number.isFinite(to) || (!hasFormulaKeyframes && (from < 0 || to < 0 || from > 100 || to > 100))) {
                 warnings.add(hasFormulaKeyframes
                     ? 'A generic text font-size formula animation with unsupported interpolation or invalid numeric keyframes was skipped.'
                     : 'A generic text animation with missing or out-of-range font sizes was skipped.')
@@ -7062,20 +7810,20 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 handledTextAnimations.add(animation)
                 continue
             }
-            const key = `${animationTarget.targetId}:fontSize:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+            const key = `${animationTarget.targetId}:fontSize:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
             actions.set(key, {
                 targetId: animationTarget.targetId,
                 paragraphRange: animationTarget.paragraphRange,
                 characterRange: animationTarget.characterRange,
                 effect: 'fontSize',
                 direction: 'in',
-                fontSizeFrom: from,
-                fontSizeTo: to,
+                fontSizeFrom: fontSizeFormulaSamples?.[0]?.value ?? from,
+                fontSizeTo: fontSizeFormulaSamples?.at(-1)?.value ?? to,
                 fontSizeKeyframes: keyframes,
                 fontSizeFormulaSamples,
                 fontSizeKeyframeMode: tavList ? (calculationMode as NonNullable<PptxAnimation['fontSizeKeyframeMode']>) : undefined,
                 durationMs,
-                delayMs: delayMs + startDelay(timeNode),
+                delayMs: delayMs + (isGrowWithColorFontSize && isWpsGrowWithColor ? wpsGrowWithColorChildStyleDelayMs : 0) + startDelay(timeNode),
                 ...timing
             })
             handledTextAnimations.add(animation)
@@ -7114,6 +7862,24 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add('Motion animations without a supported layout or parent path are not rendered yet.')
                 continue
             }
+            const behavior = child(animation, 'cBhvr')
+            const additive = behavior?.getAttribute('additive')
+            if (additive !== null && additive !== undefined && !['base', 'sum'].includes(additive)) {
+                warnings.add('A motion animation with an unsupported additive mode was skipped.')
+                handledMotions.add(animation)
+                continue
+            }
+            const motionAttributeNames = children(child(behavior, 'attrNameLst'), 'attrName')
+                .slice(0, 2)
+                .map(node => normalizeAnimationAttributeName(node.textContent) || '')
+            const motionCoordinateProperties = [motionAttributeNames[0] || 'ppt_x', motionAttributeNames[1] || 'ppt_y']
+            if (motionCoordinateProperties.some(property => !['ppt_x', 'ppt_y'].includes(property))
+                || new Set(motionCoordinateProperties).size !== motionCoordinateProperties.length) {
+                warnings.add('A motion animation with unsupported or duplicate coordinate properties was skipped.')
+                handledMotions.add(animation)
+                continue
+            }
+            const remapsMotionAxes = motionCoordinateProperties[0] !== 'ppt_x' || motionCoordinateProperties[1] !== 'ppt_y'
             const timing = animationTiming(timeNode, 'Motion')
             if (!timing) {
                 handledMotions.add(animation)
@@ -7147,13 +7913,16 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const angleRadians = (rotationAngle * Math.PI) / (60_000 * 180)
             const angleCosine = Math.cos(angleRadians),
                 angleSine = Math.sin(angleRadians)
+            const motionGeometry = element ? animationGeometryVariables(element, slideWidth, slideHeight) : undefined
             const rotateMotionOffset = (x: number, y: number): [number, number] => {
-                if (rotationAngle === 0 || !rotationCenter || !element) return [x, y]
+                if (rotationAngle === 0 || !rotationCenter || !motionGeometry) return [x, y]
                 const centerX = rotationCenter[0] * slideWidth,
                     centerY = rotationCenter[1] * slideHeight
-                const dx = element.x + x - centerX,
-                    dy = element.y + y - centerY
-                return [centerX + dx * angleCosine - dy * angleSine - element.x, centerY + dx * angleSine + dy * angleCosine - element.y]
+                const shapeCenterX = motionGeometry.ppt_x * slideWidth,
+                    shapeCenterY = motionGeometry.ppt_y * slideHeight
+                const dx = shapeCenterX + x - centerX,
+                    dy = shapeCenterY + y - centerY
+                return [centerX + dx * angleCosine - dy * angleSine - shapeCenterX, centerY + dx * angleSine + dy * angleCosine - shapeCenterY]
             }
             if (!path) {
                 const hasFrom = Boolean(fromNode),
@@ -7180,7 +7949,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     warnings.add('A motion animation with out-of-range from/to/by coordinates was skipped.')
                     continue
                 }
-                const key = `${animationTarget.targetId}:motion:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+                const key = `${animationTarget.targetId}:motion:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
                 actions.set(key, {
                     targetId: animationTarget.targetId,
                     paragraphRange: animationTarget.paragraphRange,
@@ -7192,7 +7961,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                         {x: rotatedEndX, y: rotatedEndY, distance}
                     ],
                     motionPathLength: distance,
-                    motionAccumulate: child(animation, 'cBhvr')?.getAttribute('accumulate') === 'always',
+                    ...(remapsMotionAxes ? {motionCoordinateProperties: motionCoordinateProperties as ['ppt_x' | 'ppt_y', 'ppt_x' | 'ppt_y']} : {}),
+                    motionAdditive: additive === 'sum',
+                    motionAccumulate: behavior?.getAttribute('accumulate') === 'always',
                     durationMs: animationDurationMs(timeNode, timing),
                     delayMs: delayMs + startDelay(timeNode),
                     ...timing
@@ -7218,14 +7989,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             let tooManyTokens = false
             let unsupportedFormula = false
             let dynamicFormula = false
-            const formulaVariables: Record<string, number> = element
-                ? {
-                      ppt_x: element.x / slideWidth,
-                      ppt_y: element.y / slideHeight,
-                      ppt_w: element.width / slideWidth,
-                      ppt_h: element.height / slideHeight
-                  }
-                : {ppt_x: Number.NaN, ppt_y: Number.NaN, ppt_w: Number.NaN, ppt_h: Number.NaN}
+            const formulaVariables: Record<string, number> = motionGeometry
+                || {ppt_x: Number.NaN, ppt_y: Number.NaN, ppt_w: Number.NaN, ppt_h: Number.NaN}
             while (scan < path.length && !invalidPathSyntax) {
                 const character = path[scan]
                 if (character && /[\s,]/.test(character)) {
@@ -7319,16 +8084,12 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add('An invalid or unsupported motion path was skipped.')
                 continue
             }
-            // Relative layout paths travel with the target; fixed paths stay anchored to the slide.
+            // Anchor motion points to the target's slide-space center. Group transforms are already
+            // baked into the target geometry, so applying the group matrix here would scale offsets twice.
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/498c3cfa-652c-49b3-a82c-33fd94468af8
             const point = (x: number, y: number): [number, number] => {
-                if (origin === 'parent' && element.motionParent) {
-                    const [a, b, c, d] = element.motionParent.matrix
-                    const localX = x * slideWidth - element.motionParent.x
-                    const localY = y * slideHeight - element.motionParent.y
-                    return [a * localX + c * localY, b * localX + d * localY]
-                }
-                return origin === 'layout' ? (pathEditMode === 'fixed' ? [x * slideWidth - element.x, y * slideHeight - element.y] : [x * slideWidth, y * slideHeight]) : [x * slideWidth - element.x, y * slideHeight - element.y]
+                const anchored: [number, number] = [(x - formulaVariables.ppt_x!) * slideWidth, (y - formulaVariables.ppt_y!) * slideHeight]
+                return origin === 'layout' && pathEditMode !== 'fixed' ? [x * slideWidth, y * slideHeight] : anchored
             }
             const limit = 100 * Math.max(slideWidth, slideHeight)
             const buildPath = (progress: number) => {
@@ -7502,7 +8263,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add('A motion animation with out-of-range coordinates was skipped.')
                 continue
             }
-            const key = `${animationTarget.targetId}:motion:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+            const key = `${animationTarget.targetId}:motion:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}:${timeNode?.getAttribute('id') || actions.size}`
             actions.set(key, {
                 targetId: animationTarget.targetId,
                 paragraphRange: animationTarget.paragraphRange,
@@ -7512,7 +8273,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 motionPath: pathGeometry.points,
                 motionPathLength: pathGeometry.length,
                 motionPathSamples,
-                motionAccumulate: child(animation, 'cBhvr')?.getAttribute('accumulate') === 'always',
+                ...(remapsMotionAxes ? {motionCoordinateProperties: motionCoordinateProperties as ['ppt_x' | 'ppt_y', 'ppt_x' | 'ppt_y']} : {}),
+                motionAdditive: additive === 'sum',
+                motionAccumulate: behavior?.getAttribute('accumulate') === 'always',
                 durationMs,
                 delayMs: delayMs + startDelay(timeNode),
                 ...timing
@@ -7520,7 +8283,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             handledMotions.add(animation)
         }
         for (const set of ownedDescendants('set')) {
-            const attribute = firstDescendant(set, 'attrName')?.textContent?.trim()
+            const attribute = normalizeAnimationAttributeName(firstDescendant(set, 'attrName')?.textContent)
             const value = firstDescendant(set, 'strVal')?.getAttribute('val')
             const behavior = child(set, 'cBhvr')
             const animationTarget = target(behavior || set)
@@ -7529,7 +8292,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7d6aef67-5dbc-456c-bcf5-f08011bbf5bf
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
             if (attribute === 'style.fontStyle' || attribute === 'style.fontFamily' || attribute === 'style.textDecorationUnderline' || attribute === 'style.textDecorationLineThrough' || attribute === 'style.textTransform' || attribute === 'style.textEffectOutline' || attribute === 'style.textShadow' || attribute === 'style.textEffectEmboss') {
-                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element)) {
                     warnings.add(`A ${attribute} p:set animation with an unsupported target was skipped.`)
                     continue
                 }
@@ -7559,6 +8322,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     effect: 'textStyle',
                     direction: 'in',
                     textStyleProperty: property,
+                    textStyleFrom: textStyleTo,
                     textStyleTo,
                     durationMs: animationDurationMs(timeNode, timing, 1),
                     delayMs: delayMs + startDelay(timeNode),
@@ -7566,9 +8330,27 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 })
                 continue
             }
+            if (attribute === 'fill.type') {
+                if (!animationTarget.targetId || element?.kind !== 'shape' || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange) {
+                    warnings.add('A fill.type p:set animation with an unsupported target was skipped.')
+                    continue
+                }
+                const fillType = child(child(set, 'to'), 'strVal')?.getAttribute('val')?.trim()
+                const hasSolidBaseline = element.fill !== 'transparent' && !/(?:gradient\(|url\()/i.test(element.fill)
+                const hasAnimatedFillColor = [...actions.values()].some(action => action.targetId === animationTarget.targetId && action.effect === 'color' && action.colorProperty === 'fillcolor')
+                if (fillType !== 'solid' || (!hasSolidBaseline && !hasAnimatedFillColor)) {
+                    warnings.add('A fill.type p:set animation without a supported solid color was skipped.')
+                    continue
+                }
+                // A solid p:set needs no separate renderer state when its static or animated color is already a CSS solid color.
+                solidFillTypeTargets.add(animationTarget.targetId)
+                continue
+            }
             if (attribute === 'fill.on' || attribute === 'stroke.on' || attribute === 'shadow.on') {
                 const property = attribute as AnimationOnOffProperty
-                if (!animationTarget.targetId || !element || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element) || !hasOnOffBaseline(element, property)) {
+                const hasFillOnBaseline = property === 'fill.on' && element?.kind === 'shape'
+                    && (hasOnOffBaseline(element, property) || solidFillTypeTargets.has(animationTarget.targetId))
+                if (!animationTarget.targetId || !element || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element) || !(property === 'fill.on' ? hasFillOnBaseline : hasOnOffBaseline(element, property))) {
                     warnings.add(`A ${attribute} p:set animation without a supported whole-object baseline was skipped.`)
                     continue
                 }
@@ -7586,6 +8368,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     effect: 'onOff',
                     direction: 'in',
                     onOffProperty: property,
+                    onOffFrom: on,
                     onOffTo: on,
                     durationMs: animationDurationMs(timeNode, timing, 1),
                     delayMs: delayMs + startDelay(timeNode),
@@ -7676,10 +8459,40 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 })
                 continue
             }
+            if (attribute === 'style.rotation') {
+                if (!animationTarget.targetId || !element || animationTarget.paragraphRange || animationTarget.characterRange || animationTarget.hasUnsupportedTextRange) {
+                    warnings.add('A style.rotation p:set animation with an unsupported target was skipped.')
+                    continue
+                }
+                const to = child(set, 'to')
+                const rawRotation = child(to, 'strVal')?.getAttribute('val') ?? child(to, 'fltVal')?.getAttribute('val') ?? child(to, 'intVal')?.getAttribute('val')
+                const rotationText = rawRotation?.trim() || ''
+                // WPS serializes this p:set value as degrees (for example, -45.0); generic p:anim rotation tracks use 60,000ths of a degree.
+                const rotation = rotationText ? Number(rotationText) : Number.NaN
+                if (!Number.isFinite(rotation) || Math.abs(rotation) > 2_147_483_647 / 60_000) {
+                    warnings.add('A style.rotation p:set animation with a missing or out-of-range value was skipped.')
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, 'p:set rotation')
+                if (!timing) continue
+                const key = `${animationTarget.targetId}:rotation:set:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'rotation',
+                    direction: 'in',
+                    rotationFrom: rotation,
+                    rotationTo: rotation,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
             if (attribute === 'style.fontWeight') {
                 // MS-OE376 specifies the p:set string presets none, normal, and bold for style.fontWeight.
                 // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/7b427ccc-3a1f-418b-821f-d78f7aed51c5
-                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element)) {
                     warnings.add('A style.fontWeight p:set animation with an unsupported target was skipped.')
                     continue
                 }
@@ -7712,7 +8525,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.setbehavior?view=openxml-3.0.1
             // https://learn.microsoft.com/en-us/office/open-xml/presentation/working-with-animation
             if (attribute === 'style.fontSize') {
-                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+                if (!animationTarget.targetId || !element?.paragraphs.length || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element)) {
                     warnings.add('A style.fontSize p:set animation with an unsupported target was skipped.')
                     continue
                 }
@@ -7769,14 +8582,45 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 })
                 continue
             }
+            if (attribute === 'shadow.offset.x' || attribute === 'shadow.offset.y') {
+                if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasShadow(element) || !hasValidTextRange(animationTarget, element)) {
+                    warnings.add(`A ${attribute} p:set animation with an unsupported target was skipped.`)
+                    continue
+                }
+                const to = child(set, 'to')
+                const rawValue = child(to, 'fltVal')?.getAttribute('val') ?? child(to, 'intVal')?.getAttribute('val') ?? child(to, 'strVal')?.getAttribute('val')
+                const offset = rawValue?.trim() ? Number(rawValue) : Number.NaN
+                if (!Number.isFinite(offset) || Math.abs(offset) > MAX_ANIMATED_SHADOW_OFFSET_EMU) {
+                    warnings.add(`A ${attribute} p:set animation with a missing or out-of-range value was skipped.`)
+                    continue
+                }
+                const timeNode = child(behavior, 'cTn') || firstDescendant(set, 'cTn')
+                const timing = animationTiming(timeNode, `p:set ${attribute}`)
+                if (!timing) continue
+                const key = `${animationTarget.targetId}:shadowOffset:${attribute}:set:${timeNode?.getAttribute('id') || actions.size}`
+                actions.set(key, {
+                    targetId: animationTarget.targetId,
+                    effect: 'shadowOffset',
+                    direction: 'in',
+                    shadowOffsetProperty: attribute,
+                    shadowOffsetFrom: offset,
+                    shadowOffsetTo: offset,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
+                    durationMs: animationDurationMs(timeNode, timing, 1),
+                    delayMs: delayMs + startDelay(timeNode),
+                    ...timing
+                })
+                continue
+            }
             if (['style.opacity', 'fill.opacity', 'stroke.opacity', 'shadow.opacity'].includes(attribute || '')) {
                 const property = attribute as NonNullable<PptxAnimation['opacityProperty']>
                 const unsupportedTarget =
                     !animationTarget.targetId ||
                     !element ||
                     animationTarget.hasUnsupportedTextRange ||
-                    ((animationTarget.paragraphRange || animationTarget.characterRange) && property !== 'style.opacity') ||
-                    !hasValidCharacterRange(animationTarget, element) ||
+                    ((animationTarget.paragraphRange || animationTarget.characterRange) && !['style.opacity', 'shadow.opacity'].includes(property)) ||
+                    !hasValidTextRange(animationTarget, element) ||
                     (property === 'fill.opacity' && element?.kind !== 'shape') ||
                     (property === 'stroke.opacity' && (!element || !supportsStrokeOpacity(element))) ||
                     (property === 'shadow.opacity' && (!element || !hasShadow(element)))
@@ -7816,9 +8660,9 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     !animationTarget.targetId ||
                     !element ||
                     animationTarget.hasUnsupportedTextRange ||
-                    animationTarget.paragraphRange ||
-                    animationTarget.characterRange ||
-                    !hasValidCharacterRange(animationTarget, element) ||
+                    !hasValidTextRange(animationTarget, element) ||
+                    ((animationTarget.paragraphRange || animationTarget.characterRange) && !['style.color', 'shadow.color'].includes(property)) ||
+                    (property === 'style.color' && element.kind === 'table' && animationTarget.paragraphRange) ||
                     (property === 'fillcolor' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
                     (property === 'stroke.color' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))) ||
                     (property === 'shadow.color' && (!element || !hasShadow(element))) ||
@@ -7839,6 +8683,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 const key = `${animationTarget.targetId}:color:${property}:set:${timeNode?.getAttribute('id') || actions.size}`
                 actions.set(key, {
                     targetId: animationTarget.targetId,
+                    paragraphRange: animationTarget.paragraphRange,
+                    characterRange: animationTarget.characterRange,
                     effect: 'color',
                     direction: 'in',
                     colorProperty: property,
@@ -7949,7 +8795,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add(`A p:set animation for ${attribute || 'an unknown property'} is not rendered yet.`)
                 continue
             }
-            if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidCharacterRange(animationTarget, element)) {
+            if (!animationTarget.targetId || !element || animationTarget.hasUnsupportedTextRange || !hasValidTextRange(animationTarget, element)) {
                 warnings.add('A style.visibility p:set animation with an unsupported target was skipped.')
                 continue
             }
@@ -7957,21 +8803,33 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 warnings.add('A style.visibility p:set animation with an invalid value was skipped.')
                 continue
             }
-            const key = `${animationTarget.targetId}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
+            const timeNode = firstDescendant(set, 'cTn')
+            const key = `${animationTarget.targetId}:visibility:set:${timeNode?.getAttribute('id') || actions.size}:${animationTarget.paragraphRange?.start ?? ''}:${animationTarget.paragraphRange?.end ?? ''}:${animationTarget.characterRange?.start ?? ''}:${animationTarget.characterRange?.end ?? ''}`
             if (!actions.has(key)) {
-                const timeNode = firstDescendant(set, 'cTn')
                 actions.set(key, {
                     targetId: animationTarget.targetId,
                     paragraphRange: animationTarget.paragraphRange,
                     characterRange: animationTarget.characterRange,
-                    effect: 'appear',
+                    effect: 'visibility',
                     direction: value === 'visible' ? 'in' : 'out',
+                    visibilityFrom: value === 'visible' ? 'hidden' : 'visible',
+                    visibilityTo: value === 'visible' ? 'visible' : 'hidden',
                     durationMs: 0,
                     delayMs: delayMs + startDelay(timeNode)
                 })
             }
         }
-        return [...actions.entries()].flatMap(([actionKey, action], actionIndex) => {
+        // tmPct staggers the containing effect, so an instantaneous visibility set
+        // shares the same interval as its size/opacity tracks. Otherwise later
+        // letters appear at full size before their Zoom animation starts.
+        // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timepercentage
+        const parsedIterationDurationMs = [...actions.values()].reduce((duration, action) => Math.max(duration, Math.max(0, action.delayMs - delayMs) + action.durationMs), 0)
+        const iterationDurationMs = isWpsGrowWithColor
+            ? [...actions.values()].reduce((duration, action) => Math.max(duration, action.durationMs), 0)
+            : parsedIterationDurationMs || (iterate
+            ? ownedDescendants('cTn').reduce((duration, timeNode) => Math.max(duration, timelineTime(timeNode.getAttribute('dur'), 0)), 0)
+            : 0)
+        const groupedActions = [...actions.entries()].flatMap(([actionKey, action], actionIndex) => {
             const mediaActionKey = action.effect === 'media' ? `${sequenceKey}:${sequenceOrder}:${actionIndex}:${action.targetId}` : undefined
             const mediaTimeNodeId = sequenceKey === 'main' ? mediaTimeNodeIds.get(actionKey) : undefined
             if (mediaTimeNodeId && mediaActionKey) {
@@ -7981,15 +8839,39 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 ...action,
                 sequenceKey,
                 sequenceOrder,
+                fillSequenceScopes: [{key: sequenceKey, order: sequenceOrder}],
                 mediaActionKey,
                 mediaWaitForEndKeys: mediaWaitForEndKeys.length ? mediaWaitForEndKeys : undefined,
                 mediaWaitDelayMs: mediaWaitForEndKeys.length ? mediaWaitDelayMs + action.delayMs - delayMs : undefined
             }
             const elementActions = elementIterationActions(sequencedAction)
-            const expandedActions = elementActions ? elementActions.map(elementAction => ({...elementAction, sequenceKey, sequenceOrder})) : [{...sequencedAction, iteration: iterationRanges(sequencedAction)}]
-            if (!groupTiming) return expandedActions
-            return applyGroupTiming(expandedActions, delayMs, groupTiming)
+            return elementActions ? elementActions.map(elementAction => ({...elementAction, sequenceKey, sequenceOrder})) : [{...sequencedAction, iteration: iterationRanges(sequencedAction)}]
         })
+        if (canApplyGroupTiming && owner) {
+            const rawDuration = owner.getAttribute('dur')
+            const declaredDurationMs = timelineTime(rawDuration, Number.NaN)
+            const needsChildDerivedDuration = rawDuration === null || declaredDurationMs === 0
+            // p:iterate repeats contained timing structures over letters/words/shapes; apply this parent curve to
+            // each unit's single timeline while leaving its tmPct/tmAbs stagger on the wall clock.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.iterate?view=openxml-3.0.1
+            const supportsPerIterationTiming = hasIteration && groupedActions.length > 0
+                && groupedActions.every(action => Boolean(action.iteration?.ranges.length))
+                && !['spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => owner.hasAttribute(attribute))
+            const perIterationGroupTiming = needsChildDerivedDuration && supportsPerIterationTiming
+            const supportsSpeedOnlyIterationTiming = hasIteration && owner.hasAttribute('spd')
+                && !['accel', 'decel', 'tmFilter', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => owner.hasAttribute(attribute))
+            const canDeriveDuration = needsChildDerivedDuration && (!hasIteration || supportsPerIterationTiming || supportsSpeedOnlyIterationTiming) && groupedActions.length > 0 && groupedActions.every(action => {
+                const childOffsetMs = action.delayMs - delayMs
+                const childDurationMs = supportsPerIterationTiming ? basePlaybackDuration(action) : playbackDuration(action)
+                return action.effect !== 'media' && Number.isFinite(childOffsetMs) && childOffsetMs >= 0 && Number.isFinite(childDurationMs) && childDurationMs >= 0
+            })
+            const childDerivedDurationMs = canDeriveDuration
+                ? groupedActions.reduce((duration, action) => Math.max(duration, action.delayMs - delayMs + (supportsPerIterationTiming ? basePlaybackDuration(action) : playbackDuration(action))), 0)
+                : undefined
+            groupTiming = groupTimingFor(owner, 'Animation group', childDerivedDurationMs)
+            if (groupTiming && perIterationGroupTiming) return applyGroupTiming(groupedActions, delayMs, groupTiming, true)
+        }
+        return groupTiming ? applyGroupTiming(groupedActions, delayMs, groupTiming) : groupedActions
     }
 
     const conditionalSequencePlans: Array<{step: PptxAnimation[]; actions: PptxAnimation[][]; concurrent: boolean; nextAction: 'none' | 'seek'}> = []
@@ -8023,13 +8905,19 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 && [null, 'none', 'seek'].includes(nextAction)
                 && [null, 'none', 'skipTimed'].includes(previousAction)
                 && (!duration || duration === 'indefinite')
-                && !['accel', 'decel', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => timeNode.hasAttribute(attribute))
+                && !['accel', 'decel', 'tmFilter', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => timeNode.hasAttribute(attribute))
                 && !descendants(sequenceNode, 'subTnLst').length
                 && !descendants(sequenceNode, 'seq').some(nested => nested !== sequenceNode && (child(nested, 'nextCondLst') || child(nested, 'prevCondLst')))
                 && hasImmediateSlideCondition(sequenceNode, 'nextCondLst', 'onNext')
                 && hasImmediateSlideCondition(sequenceNode, 'prevCondLst', 'onPrev')
         }
-        const append = (node: Element, owner: Element, nodeStartMs: number, depth: number): number | undefined => {
+        const append = (
+            node: Element,
+            owner: Element,
+            nodeStartMs: number,
+            depth: number,
+            fillSequenceScopes: Array<{key: string; order: number}> = [{key: sequenceKey, order: sequenceOrder}]
+        ): number | undefined => {
             if (depth > 32) {
                 warnings.add('A p:subTnLst timing container nesting deeper than 32 levels was skipped.')
                 return undefined
@@ -8038,7 +8926,8 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 const timeNode = subTimeEntryTimeNode(node)
                 if (!timeNode) return undefined
                 const actionStart = sequence.length
-                sequence.push(...parseGroup(ownerGroup, nodeStartMs, owner, sequenceKey, sequenceOrder, [], 0, node))
+                sequence.push(...parseGroup(ownerGroup, nodeStartMs, owner, sequenceKey, sequenceOrder, [], 0, node)
+                    .map(action => ({...action, fillSequenceScopes})))
                 const actions = sequence.slice(actionStart)
                 if (actions.some(action => action.mediaWaitForEnd)) return undefined
                 const actionEndMs = actions.reduce((end, action) => Math.max(end, action.delayMs + playbackDuration(action)), nodeStartMs)
@@ -8084,15 +8973,19 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }
             const containerStartMs = nodeStartMs + timelineTime(rawDelay)
             const isSequential = node.localName === 'seq'
+            const fillScopeKey = node.localName === 'seq' || node.localName === 'excl'
+                ? `subtime-fill-${++subTimeFillScopeId}`
+                : undefined
             let sequenceCursorMs = containerStartMs
             let containerEndMs = containerStartMs
             let unknownEnd = false
             let exceedsDuration = false
             let sequentialChildrenHaveActions = true
             let sequentialTimingApplied = false
+            let flattenedParallelTimingApplied = false
             const conditionalChildActions: Array<{actions: PptxAnimation[]; startMs: number}> = []
             const containerActionStart = sequence.length
-            for (const childNode of childTimeNodes) {
+            for (const [childOrder, childNode] of childTimeNodes.entries()) {
                 if (childNode.namespaceURI !== PRESENTATION_NS) {
                     warnings.add(`A non-PresentationML child of p:${node.localName} was skipped.`)
                     parallelTimingApplied = false
@@ -8103,7 +8996,10 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 }
                 const childSequenceStart = sequence.length
                 const childStartMs = isSequential ? sequenceCursorMs : containerStartMs
-                const childEndMs = append(childNode, timeNode, childStartMs, depth + 1)
+                const childFillScopes = fillScopeKey
+                    ? [...fillSequenceScopes, {key: fillScopeKey, order: childOrder}]
+                    : fillSequenceScopes
+                const childEndMs = append(childNode, timeNode, childStartMs, depth + 1, childFillScopes)
                 const childActions = sequence.slice(childSequenceStart)
                 if (conditionalSequence) {
                     conditionalChildActions.push({actions: sequence.splice(childSequenceStart), startMs: childStartMs})
@@ -8123,10 +9019,31 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             }
             if (isSequential) containerEndMs = sequenceCursorMs
 
-            const hasGroupTiming = ['accel', 'decel', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => timeNode.hasAttribute(attribute))
-            if (isSequential && supportsSequentialSubTimeTiming(timeNode) && hasGroupTiming && sequentialChildrenHaveActions && !unknownEnd) {
-                const groupTiming = groupTimingFor(timeNode, 'Animation group')
-                const childActions = sequence.slice(containerActionStart)
+            const hasGroupTiming = ['accel', 'decel', 'tmFilter', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => timeNode.hasAttribute(attribute))
+            const sequentialChildActions = sequence.slice(containerActionStart)
+            const parallelChildActions = sequence.slice(containerActionStart)
+            if (node.localName === 'par'
+                && !parallelTimingApplied
+                && supportsFlattenedParallelSubTimeTiming(timeNode, parallelChildActions)
+                && hasGroupTiming
+                && !unknownEnd
+                && Number.isFinite(containerEndMs)) {
+                const groupTiming = groupTimingFor(timeNode, 'Animation group', containerEndMs - containerStartMs)
+                if (groupTiming) {
+                    const warpedActions = applyGroupTiming(parallelChildActions, containerStartMs, groupTiming)
+                    if (warpedActions.every(action => Boolean(action.timingWarp))) {
+                        sequence.splice(containerActionStart, parallelChildActions.length, ...warpedActions)
+                        containerEndMs = warpedActions.reduce((end, action) => Math.max(end, action.delayMs + playbackDuration(action)), containerStartMs)
+                        flattenedParallelTimingApplied = true
+                    }
+                }
+            }
+            if (isSequential && supportsSequentialSubTimeTiming(timeNode, sequentialChildActions) && hasGroupTiming && sequentialChildrenHaveActions && !unknownEnd) {
+                const childDerivedDurationMs = child(timeNode, 'iterate')
+                    ? undefined
+                    : Number.isFinite(containerEndMs) ? containerEndMs - containerStartMs : undefined
+                const groupTiming = groupTimingFor(timeNode, 'Animation group', childDerivedDurationMs)
+                const childActions = sequentialChildActions
                 if (groupTiming && childActions.length) {
                     const warpedActions = applyGroupTiming(childActions, containerStartMs, groupTiming)
                     if (warpedActions.every(action => Boolean(action.timingWarp))) {
@@ -8136,7 +9053,7 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                     }
                 }
             }
-            const groupTimingApplied = parallelTimingApplied || sequentialTimingApplied
+            const groupTimingApplied = parallelTimingApplied || sequentialTimingApplied || flattenedParallelTimingApplied
             if (!groupTimingApplied && hasGroupTiming) {
                 warnings.add(`Timing curves and repeats on nested p:${node.localName} containers are rendered as one pass.`)
             }
@@ -8287,6 +9204,23 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 endDelayMs
             })
         }
+        const actionsByTimeNodeId = new Map<string, PptxAnimation[]>()
+        for (const action of actions) {
+            const sourceTimeNodeId = action.sourceTimeNodeId
+            if (!sourceTimeNodeId || sourceTimeNodeId === timeNodeId || action.effect === 'media') continue
+            const sourceActions = actionsByTimeNodeId.get(sourceTimeNodeId) || []
+            sourceActions.push(action)
+            actionsByTimeNodeId.set(sourceTimeNodeId, sourceActions)
+        }
+        for (const [sourceTimeNodeId, sourceActions] of actionsByTimeNodeId) {
+            if (timeNodeSources.has(sourceTimeNodeId)) continue
+            const endDelays = sourceActions.map(action => action.delayMs + playbackDuration(action))
+            timeNodeSources.set(sourceTimeNodeId, {
+                step: currentStep ? steps.length - 1 : undefined,
+                startDelayMs: Math.min(...sourceActions.map(action => action.delayMs)),
+                endDelayMs: endDelays.every(Number.isFinite) ? Math.max(...endDelays) : undefined
+            })
+        }
     }
     for (const list of descendants(timing, 'subTnLst')) {
         const owner = list.parentElement
@@ -8301,13 +9235,23 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
             const timeNode = subTimeEntryTimeNode(entry)
             const masterRelation = timeNode?.getAttribute('masterRel')
             const afterEffectValue = timeNode?.getAttribute('afterEffect')
-            if (!timeNode || !['sameClick', 'nextClick'].includes(masterRelation || '') || (afterEffectValue !== null && afterEffectValue !== undefined && !['0', '1', 'false', 'true'].includes(afterEffectValue))) {
+            // ECMA-376 ST_TLTimeNodeMasterRelation includes sameClick, lastClick, and nextClick.
+            // https://c-rex.net/samples/ooxml/e1/Part4/OOXML_P4_DOCX_ST_TLTimeNodeMasterR_topic_ID0EWEPIB.html
+            if (!timeNode || !['sameClick', 'lastClick', 'nextClick'].includes(masterRelation || '') || (afterEffectValue !== null && afterEffectValue !== undefined && !['0', '1', 'false', 'true'].includes(afterEffectValue))) {
                 continue
             }
-            const targetStep = masterRelation === 'sameClick' ? source.step : (source.step ?? -1) + 1
+            const targetStep = masterRelation === 'sameClick'
+                ? source.step
+                : masterRelation === 'lastClick'
+                    ? source.step === undefined ? undefined : source.step - 1
+                    : (source.step ?? -1) + 1
+            const matchingClickEvents = targetStep === undefined ? [] : mainEvents.filter(node =>
+                startsOnClick(groupType(node)) && node.getAttribute('id') && timeNodeSources.get(node.getAttribute('id')!)?.step === targetStep)
             const targetEvent = masterRelation === 'sameClick'
                 ? owner
-                : mainEvents.find(node => startsOnClick(groupType(node)) && node.getAttribute('id') && timeNodeSources.get(node.getAttribute('id')!)?.step === targetStep)
+                : masterRelation === 'lastClick'
+                    ? matchingClickEvents.at(-1)
+                    : matchingClickEvents[0]
             if (!targetEvent) continue
             const targetSourceId = targetEvent.getAttribute('id')
             const targetSource = targetSourceId ? timeNodeSources.get(targetSourceId) : undefined
@@ -8336,6 +9280,11 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
         if (isInSubTimeNodeList(timeNode)) continue
         const restart = timeNode.getAttribute('restart')
         if (!restart || restart === 'always') continue
+        // restart only controls whether a time node may restart after it completes its action.
+        // A tmRoot with an indefinite duration cannot complete, so its restart policy has no playback effect.
+        // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/02b2312e-9700-42e0-8a19-b2af1ba83a20
+        const isIndefiniteTimelineRoot = timeNode.getAttribute('nodeType') === 'tmRoot' && timeNode.getAttribute('dur') === 'indefinite'
+        if (isIndefiniteTimelineRoot && ['whenNotActive', 'never'].includes(restart)) continue
         if (timeNode.getAttribute('nodeType') === 'interactiveSeq' && ['whenNotActive', 'never'].includes(restart)) continue
         warnings.add(['whenNotActive', 'never'].includes(restart)
             ? 'A non-default p:cTn@restart outside an interactive sequence is not applied yet.'
@@ -8470,14 +9419,17 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
                 const timeNode = subTimeEntryTimeNode(entry)
                 const masterRelation = timeNode?.getAttribute('masterRel')
                 const afterEffectValue = timeNode?.getAttribute('afterEffect')
-                if (!timeNode || !['sameClick', 'nextClick'].includes(masterRelation || '') || (afterEffectValue !== null && afterEffectValue !== undefined && !['0', '1', 'false', 'true'].includes(afterEffectValue))) continue
-                const targetStep = masterRelation === 'sameClick' ? source.step : source.step + 1
+                if (!timeNode || !['sameClick', 'lastClick', 'nextClick'].includes(masterRelation || '') || (afterEffectValue !== null && afterEffectValue !== undefined && !['0', '1', 'false', 'true'].includes(afterEffectValue))) continue
+                const targetStep = masterRelation === 'sameClick'
+                    ? source.step
+                    : masterRelation === 'lastClick' ? source.step - 1 : source.step + 1
+                const matchingClickMarkers = markers.filter(node => {
+                    const nodeId = node.getAttribute('id')
+                    return startsOnClick(groupType(node)) && Boolean(nodeId) && interactiveTimeNodeSources.get(nodeId!)?.step === targetStep
+                })
                 const targetEvent = masterRelation === 'sameClick'
                     ? owner
-                    : markers.find(node => {
-                        const nodeId = node.getAttribute('id')
-                        return startsOnClick(groupType(node)) && Boolean(nodeId) && interactiveTimeNodeSources.get(nodeId!)?.step === targetStep
-                    })
+                    : masterRelation === 'lastClick' ? matchingClickMarkers.at(-1) : matchingClickMarkers[0]
                 if (!targetEvent) continue
                 const targetId = targetEvent.getAttribute('id')
                 const targetSource = targetId ? interactiveTimeNodeSources.get(targetId) : undefined
@@ -8551,26 +9503,20 @@ function parseAnimations(slideRoot: Element, theme: Record<string, string>, warn
     for (const action of allTimelineActions) {
         for (const group of action.exclusiveGroups || []) exclusiveGroups.set(group.id, group)
     }
-    const hasNestedExclusiveGroups = allTimelineActions.some(action => (action.exclusiveGroups?.length || 0) > 1)
-    if (hasNestedExclusiveGroups) {
-        warnings.add('Nested p:excl groups on one slide are rendered without pausing other timelines because nested pause timing is unsupported.')
-        for (const action of allTimelineActions) delete action.exclusiveGroups
-    } else {
-        let mediaMayContinueAfterExclusive = false
-        for (const [groupId, group] of exclusiveGroups) {
-            const owner = allTimelineActions.find(action => action.exclusiveGroups?.some(candidate => candidate.id === groupId))
-            const ownerContext = owner ? timelineContexts.find(context => context.includes(owner)) : undefined
-            if (owner && allTimelineActions.some(action => action.effect === 'media'
-                && action.exclusiveGroups?.some(candidate => candidate.id === groupId)
-                && ownerContext?.includes(action)
-                && action.delayMs + playbackDuration(action) > group.endMs)) {
-                mediaMayContinueAfterExclusive = true
-                break
-            }
+    let mediaMayContinueAfterExclusive = false
+    for (const [groupId, group] of exclusiveGroups) {
+        const owner = allTimelineActions.find(action => action.exclusiveGroups?.some(candidate => candidate.id === groupId))
+        const ownerContext = owner ? timelineContexts.find(context => context.includes(owner)) : undefined
+        if (owner && allTimelineActions.some(action => action.effect === 'media'
+            && action.exclusiveGroups?.some(candidate => candidate.id === groupId)
+            && ownerContext?.includes(action)
+            && action.delayMs + playbackDuration(action) > group.endMs)) {
+            mediaMayContinueAfterExclusive = true
+            break
         }
-        if (mediaMayContinueAfterExclusive) {
-            warnings.add('Media started inside p:excl may continue after the exclusive timeline ends.')
-        }
+    }
+    if (mediaMayContinueAfterExclusive) {
+        warnings.add('Media started inside p:excl may continue after the exclusive timeline ends.')
     }
     if (descendants(timing, 'animEffect').some(effect => !isInSubTimeNodeList(effect) && !handledEffects.has(effect) && !isInSkippedInteractiveSequence(effect))) {
         warnings.add('An object effect animation outside supported timing groups is not rendered yet.')
@@ -8820,7 +9766,6 @@ function applyGroupTransform(element: PptxElement, parent: Matrix2D): PptxElemen
         rotation: 0,
         flipH: false,
         flipV: false,
-        motionParent: {matrix: parent, x: element.x, y: element.y},
         renderMatrix: [transform[0], transform[1], transform[2], transform[3], transform[4] - minX, transform[5] - minY]
     }
 }
@@ -9283,6 +10228,9 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             const entry = zip.file(path)
             return entry ? parseXml(await entry.async('string'), path) : undefined
         }
+        const appPropertiesXml = await readXml('docProps/app.xml')
+        const sourceApplication = firstDescendant(appPropertiesXml?.documentElement, 'Application')?.textContent?.trim() || ''
+        const isWpsApplication = /wps|kingsoft/i.test(sourceApplication)
         const presentationPropertiesRelation = [...presentationRels.values()].find(relation => relation.type.endsWith('/presProps'))
         const presentationPropertiesXml = presentationPropertiesRelation && !presentationPropertiesRelation.external
             ? await readXml(presentationPropertiesRelation.target)
@@ -9394,7 +10342,7 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
             await resolvePictureBullets(elements, zip, warnings, urls, imageUrlCache)
             const notes = parseSpeakerNotes(notesXml, notesMasterXml, notesTheme, warnings, notesRels, notesMasterRels)
             if (notes.speakerNoteParagraphs) await resolvePictureBullets([{paragraphs: notes.speakerNoteParagraphs}], zip, warnings, urls, imageUrlCache)
-            const animations = parseAnimations(xml.documentElement, theme, warnings, elements, width, height, smartArtAnimationTargets)
+            const animations = await parseAnimations(xml.documentElement, slidePath, theme, warnings, elements, width, height, smartArtAnimationTargets, rels, zip, urls, imageUrlCache, isWpsApplication)
             const slideInfo = firstDescendant(xml.documentElement, 'cSld')
             const slideBackground = await backgroundFill(xml, rels, {...themeData, colors: theme}, warnings, zip, urls, imageUrlCache)
             const layoutBackground = await backgroundFill(layoutXml, layoutRels, {...themeData, colors: layoutTheme}, warnings, zip, urls, imageUrlCache)
@@ -9408,10 +10356,10 @@ export async function parsePptx(file: File): Promise<PptxDocument> {
                 elements,
                 ...notes,
                 ...animations,
-                ...parseSlideAdvance(xml.documentElement, warnings),
+                ...parseSlideAdvance(xml.documentElement, warnings, layoutXml?.documentElement, masterXml?.documentElement),
                 background: selectedBackground.color || '#ffffff',
                 backgroundImage: selectedBackground.image,
-                transition: parseTransition(xml.documentElement, warnings)
+                transition: await parseTransition(xml.documentElement, warnings, rels, zip, urls, imageUrlCache, layoutXml?.documentElement, layoutRels, masterXml?.documentElement, masterRels)
             })
         }
         if (!slides.length) throw new Error('No readable slides were found in this presentation.')

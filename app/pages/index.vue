@@ -27,6 +27,10 @@ const projectorError = ref<LocaleMessageKey | ''>('')
 const projectorAcknowledgement = ref<{ slideId: string; number: number; animationStep: number; blank: 'black' | 'white' | null; triggerCount: number } | null>(null)
 const triggerPlayback = shallowRef<PptxTriggerPlayback[]>([])
 const transitionPlayback = shallowRef<PptxTransitionPlayback | null>(null)
+const transitionAudio = ref<HTMLAudioElement | null>(null)
+const transitionSoundWarning = ref('')
+let transitionSoundPlaybackId = 0
+let transitionSoundShouldPlay = false
 const presenterTrigger = ref<HTMLButtonElement | null>(null)
 const presenterExit = ref<HTMLButtonElement | null>(null)
 const sorterTrigger = ref<HTMLButtonElement | null>(null)
@@ -81,6 +85,7 @@ let pinchStartZoom = 1
 let wasPinching = false
 let panStart: { pointerId: number; x: number; y: number; offsetX: number; offsetY: number; moved: boolean } | undefined
 const currentSlide = computed(() => deck.value?.slides[currentIndex.value] || null)
+const renderingWarnings = computed(() => [...(deck.value?.warnings || []), ...(transitionSoundWarning.value ? [transitionSoundWarning.value] : [])])
 const shownSlideIndices = computed(() => (deck.value?.slides || []).reduce<number[]>((indices, slide, index) => {
   if (!slide.hidden) indices.push(index)
   return indices
@@ -127,10 +132,50 @@ function createTransitionPlayback(slide: PptxSlide | null): PptxTransitionPlayba
   return { slideId: slide.id, startedAtEpoch: performance.timeOrigin + performance.now(), transition }
 }
 
+function stopTransitionSound(unload = false) {
+  transitionSoundPlaybackId++
+  transitionSoundShouldPlay = false
+  const audio = transitionAudio.value
+  if (!audio) return
+  audio.loop = false
+  audio.pause()
+  if (audio.readyState > 0) audio.currentTime = 0
+  if (unload) {
+    audio.removeAttribute('src')
+    audio.load()
+    audio.pause()
+  }
+}
+
+function playTransitionSound(playback: PptxTransitionPlayback | null) {
+  if (!playback) return
+  for (const action of playback.transition.soundActions || []) {
+    stopTransitionSound(action.type === 'end')
+    transitionSoundWarning.value = ''
+    if (action.type === 'end') continue
+    const audio = transitionAudio.value
+    if (!audio) continue
+    const playbackId = transitionSoundPlaybackId
+    transitionSoundShouldPlay = true
+    audio.src = action.url
+    audio.loop = action.loop
+    audio.currentTime = 0
+    void audio.play().then(() => {
+      if (playbackId !== transitionSoundPlaybackId && !transitionSoundShouldPlay) stopTransitionSound(true)
+    }).catch(() => {
+      if (playbackId === transitionSoundPlaybackId) {
+        transitionSoundShouldPlay = false
+        transitionSoundWarning.value = 'The browser could not play the transition sound.'
+      }
+    })
+  }
+}
+
 watch(currentIndex, () => {
   transitionPlayback.value = createTransitionPlayback(currentSlide.value)
   void nextTick(ensureActiveThumbnailVisible)
 }, { flush: 'sync' })
+watch(transitionPlayback, playTransitionSound, { flush: 'sync' })
 useSlideTransition({ slide: currentSlide, shell: stageShell, incomingHost: stageSlideHost, underlay: transitionUnderlay, flash: flashOverlay, playback: transitionPlayback })
 useSlideTransition({ slide: currentSlide, shell: presenterStageShell, incomingHost: presenterSlideHost, underlay: presenterTransitionUnderlay, flash: presenterFlashOverlay, playback: transitionPlayback })
 
@@ -483,6 +528,8 @@ function clearDocument() {
   zoomPanBeforeReading = undefined
   draggedSlideIndex.value = null
   stageShell.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]').forEach(media => media.pause())
+  stopTransitionSound(true)
+  transitionSoundWarning.value = ''
   for (const media of continuingMedia.keys()) stopContinuingMedia(media)
   if (slideAdvanceTimer) clearTimeout(slideAdvanceTimer)
   slideAdvanceTimer = undefined
@@ -1084,6 +1131,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="app-shell" :class="{ 'is-reading-view': readingView }">
+    <audio ref="transitionAudio" data-transition-sound hidden />
     <header class="topbar">
       <div class="brand" :aria-label="t('brandAria')">
         <span class="brand-mark">D</span>
@@ -1206,11 +1254,11 @@ onBeforeUnmount(() => {
           <div v-if="errorMessage" class="error-card" role="alert">
             <strong>{{ t('cannotOpenPresentation') }}</strong>{{ translateError(errorMessage) }}
           </div>
-          <details v-if="deck?.warnings.length" class="warning-panel" @click.stop>
-            <summary>{{ t('renderingLimitations', { count: deck.warnings.length }) }}</summary>
+          <details v-if="renderingWarnings.length" class="warning-panel" @click.stop>
+            <summary>{{ t('renderingLimitations', { count: renderingWarnings.length }) }}</summary>
             <p v-if="locale === 'zh'" class="warning-detail-note">{{ t('warningDetails') }}</p>
             <ul class="warning-list">
-              <li v-for="warning in deck.warnings" :key="warning">
+              <li v-for="warning in renderingWarnings" :key="warning">
                 <template v-if="locale === 'zh'">
                   <span>{{ translateWarning(warning) }}</span>
                   <details class="warning-original">

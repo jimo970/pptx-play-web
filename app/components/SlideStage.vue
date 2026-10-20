@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch, type CSSProperties } from 'vue'
 import { formatChartNumberWithColor, getChartDateAxisMajorTicks } from '~/utils/chart-number-format'
 import { paragraphEntries } from '~/utils/paragraph-bullets'
-import { hslToRgb } from '~/utils/color'
+import { hslToRgb, rgbToHsl } from '~/utils/color'
 import { characterScript, cssFontFamily, type ScriptFont } from '~/utils/text-fonts'
 import { getPptxChartStacking, isSvgPolygonGeometry, presetEllipsePoint } from '~/utils/pptx-render-utils'
 import type { PptxAnimation, PptxAnimationTriggerCondition, PptxChart, PptxChartDataLabelPosition, PptxChartDataLabelStyle, PptxChartMarkerSymbol, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxHyperlink, PptxParagraph, PptxShadow, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx-model'
@@ -1315,9 +1315,11 @@ watch(() => [props.slide.backgroundImage?.url, Boolean(props.slide.backgroundIma
   probe.src = url
 }, { immediate: true })
 
-const frameStyle = computed<CSSProperties>(() => {
+const frameStyle = computed<CSSProperties>(() => ({ aspectRatio: `${props.width} / ${props.height}` }))
+
+const backgroundStyle = computed<CSSProperties>(() => {
   const image = props.slide.backgroundImage
-  if (!image) return { aspectRatio: `${props.width} / ${props.height}`, background: props.slide.background }
+  if (!image) return { background: props.slide.background || '#fff' }
   const { left, top, right, bottom } = image.crop
   const tile = image.tile
   const alignments = { tl: [0, 0], t: [50, 0], tr: [100, 0], l: [0, 50], ctr: [50, 50], r: [100, 50], bl: [0, 100], b: [50, 100], br: [100, 100] } as const
@@ -1332,8 +1334,7 @@ const frameStyle = computed<CSSProperties>(() => {
     : tile ? `${tilePosition(alignments[tile.align][0], tile.offsetX * scale.value + tileWidth * alignments[tile.align][0] / 100 * ((naturalSize?.repeatX ?? 1) - 1))} ${tilePosition(alignments[tile.align][1], tile.offsetY * scale.value + tileHeight * alignments[tile.align][1] / 100 * ((naturalSize?.repeatY ?? 1) - 1))}`
       : `${left + right ? left / (left + right) * 100 : 50}% ${top + bottom ? top / (top + bottom) * 100 : 50}%`
   return {
-    aspectRatio: `${props.width} / ${props.height}`,
-    background: props.slide.background,
+    background: props.slide.background || '#fff',
     backgroundImage: `url("${naturalSize?.url || image.url}")`,
     backgroundRepeat: tile ? 'repeat' : 'no-repeat',
     backgroundSize: tile
@@ -1352,6 +1353,8 @@ const textAnchorCenterOffsets = new Map<string, number>()
 const elementLayoutVersion = ref(0)
 const textOverflowWarning = ref<LocaleMessageKey | ''>('')
 const animationClock = ref(0)
+const animationClockTargetIds = new Set<string>()
+const animationTimelineVersion = ref(0)
 const reduceMotion = ref(false)
 const invalidMediaTrimIds = ref<string[]>([])
 const invalidMediaFadeIds = ref<string[]>([])
@@ -1378,7 +1381,7 @@ const startedMediaActions = new Map<string, number>()
 const completedMediaActions = reactive(new Map<string, number>())
 const endedMediaTargets = reactive(new Map<string, number>())
 const mediaActionEndTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const exclusivePausedMedia = new Map<HTMLMediaElement, number | undefined>()
+const exclusivePausedMedia = new Map<HTMLMediaElement, {remainingMs?: number; actionKey?: string; pausedAt: number}>()
 let automaticStartedAt: number | undefined
 let stepStartedAt = new Map<number, number>()
 let mainStepEndedAt = new Map<number, number>()
@@ -1472,11 +1475,12 @@ function measureTextEllipsisLineCount(frame: HTMLElement): number {
   return bands.some(line => line.bottom > contentBottom + 0.5) ? Math.max(1, visibleLines) : 0
 }
 
-function scheduleShapeAutoFit() {
+function scheduleShapeAutoFit(targetIds?: ReadonlySet<string>) {
   if (!stage.value || autoFitFrame || scale.value <= 0) return
   autoFitFrame = requestAnimationFrame(() => {
     autoFitFrame = 0
     if (!stage.value) return
+    const isTargeted = (id: string | undefined) => Boolean(id && (!targetIds || targetIds.has(id)))
     const ellipsisFrames = [...stage.value.querySelectorAll<HTMLElement>('.text-frame[data-text-overflow="ellipsis"]')]
     let resetTextEllipsis = false
     let layoutChanged = false
@@ -1497,7 +1501,7 @@ function scheduleShapeAutoFit() {
     if (canClampText) {
       for (const frame of ellipsisFrames) {
         const id = frame.dataset.elementId
-        if (!id) continue
+        if (!isTargeted(id)) continue
         const lineCount = measureTextEllipsisLineCount(frame)
         if (lineCount > 0 && textEllipsisLineCounts.get(`${props.slide.id}:${id}`) !== lineCount) {
           textEllipsisLineCounts.set(`${props.slide.id}:${id}`, lineCount)
@@ -1510,7 +1514,7 @@ function scheduleShapeAutoFit() {
     for (const frame of stage.value.querySelectorAll<HTMLElement>('.text-frame[data-autofit="shape"]')) {
       const id = frame.dataset.elementId
       const element = id ? elements.get(id) : undefined
-      if (!id || !element) continue
+      if (!id || !isTargeted(id) || !element) continue
       const overflowWidth = Math.max(0, frame.scrollWidth - frame.clientWidth)
       const overflowHeight = Math.max(0, frame.scrollHeight - frame.clientHeight)
       if (!overflowWidth && !overflowHeight) continue
@@ -1526,7 +1530,7 @@ function scheduleShapeAutoFit() {
     for (const frame of stage.value.querySelectorAll<HTMLElement>('.text-frame[data-autofit="normal"]')) {
       const id = frame.dataset.elementId
       const element = id ? elements.get(id) : undefined
-      if (!id || !element || !frame.clientWidth || !frame.clientHeight) continue
+      if (!id || !isTargeted(id) || !element || !frame.clientWidth || !frame.clientHeight) continue
       const overflowWidth = frame.scrollWidth > frame.clientWidth + 1 ? frame.clientWidth / frame.scrollWidth : 1
       const overflowHeight = frame.scrollHeight > frame.clientHeight + 1 ? frame.clientHeight / frame.scrollHeight : 1
       if (overflowWidth === 1 && overflowHeight === 1) continue
@@ -1547,7 +1551,7 @@ function scheduleShapeAutoFit() {
       const element = id ? elements.get(id) : undefined
       const model = element?.table?.rows[rowIndex]?.cells[cellIndex]
       const text = cell.querySelector<HTMLElement>('.table-cell-text')
-      if (!id || !model || !text?.clientWidth || !text.clientHeight) continue
+      if (!id || !isTargeted(id) || !model || !text?.clientWidth || !text.clientHeight) continue
       const overflowWidth = text.scrollWidth > text.clientWidth + 1 ? text.clientWidth / text.scrollWidth : 1
       const overflowHeight = text.scrollHeight > text.clientHeight + 1 ? text.clientHeight / text.scrollHeight : 1
       if (overflowWidth === 1 && overflowHeight === 1) continue
@@ -1695,26 +1699,81 @@ const timelineActions = computed<RenderAnimation[]>(() => [
   ...(props.slide.animationSteps || []).flatMap((step, index) => step.map(animation => ({ ...animation, step: index, automatic: false }))),
   ...(props.slide.triggeredAnimations || []).flatMap((sequence, sequenceIndex) => sequence.steps.flatMap((step, stepIndex) => step.map(animation => ({ ...animation, step: -1, automatic: false, triggerSequence: sequenceIndex, triggerStep: stepIndex })))),
 ].filter(playbackActionEnabled))
+const embeddedSoundActions = computed(() => props.thumbnail && !props.playbackPreview ? [] : timelineActions.value.filter(action => action.effect === 'media' && action.mediaSourceUrl))
 const exclusiveTimelineRanges = computed(() => {
+  // Keep Map-backed click starts reactive as the clock advances.
   const now = animationClock.value
-  const groups = new Map<string, {id: string; baseAt: number; startMs: number; endMs: number}>()
+  type ExclusiveGroup = {id: string; baseAt: number; startMs: number; endMs: number; parentId?: string}
+  const groups = new Map<string, ExclusiveGroup>()
+  const parentIds = new Map<string, string>()
   for (const action of timelineActions.value) {
     const startedAt = timelineBaseStart(action)
     if (startedAt === undefined || !Number.isFinite(startedAt)) continue
-    for (const group of action.exclusiveGroups || []) {
+    const memberships = action.exclusiveGroups || []
+    // The parser appends enclosing groups after their descendants, so membership order is inner-to-outer.
+    for (let index = 0; index < memberships.length - 1; index++) {
+      parentIds.set(memberships[index]!.id, memberships[index + 1]!.id)
+    }
+    for (const group of memberships) {
       if (!groups.has(group.id) && Number.isFinite(group.startMs) && Number.isFinite(group.endMs) && group.endMs > group.startMs) {
         groups.set(group.id, {id: group.id, baseAt: startedAt, startMs: group.startMs, endMs: group.endMs})
       }
     }
   }
-  const orderedGroups = [...groups.values()].sort((a, b) => a.baseAt + a.startMs - b.baseAt - b.startMs)
+  for (const group of groups.values()) group.parentId = parentIds.get(group.id)
+  const childrenByParent = new Map<string, ExclusiveGroup[]>()
+  for (const group of groups.values()) {
+    if (!group.parentId || !groups.has(group.parentId)) continue
+    const children = childrenByParent.get(group.parentId) || []
+    children.push(group)
+    childrenByParent.set(group.parentId, children)
+  }
+  const orderedChildren = (group: ExclusiveGroup) => (childrenByParent.get(group.id) || [])
+    .sort((a, b) => a.baseAt + a.startMs - b.baseAt - b.startMs)
+  const groupDurations = new Map<string, number>()
+  const durationOf = (group: ExclusiveGroup, visiting = new Set<string>()): number => {
+    const cached = groupDurations.get(group.id)
+    if (cached !== undefined) return cached
+    if (visiting.has(group.id)) return group.endMs - group.startMs
+    const nextVisiting = new Set(visiting).add(group.id)
+    // Nested exclusives pause the parent clock, extending its wall-clock range.
+    const nestedPause = orderedChildren(group).reduce((total, child) => total + durationOf(child, nextVisiting), 0)
+    const duration = group.endMs - group.startMs + nestedPause
+    groupDurations.set(group.id, duration)
+    return duration
+  }
+  const rootGroups = [...groups.values()]
+    .filter(group => !group.parentId || !groups.has(group.parentId))
+    .sort((a, b) => a.baseAt + a.startMs - b.baseAt - b.startMs)
   const ranges: Array<{id: string; startAt: number; endAt: number}> = []
-  for (const group of orderedGroups) {
+  const scheduledRoots: Array<{id: string; startAt: number; endAt: number}> = []
+  const scheduleChildren = (parent: ExclusiveGroup, parentStartAt: number) => {
+    let accumulatedPauseMs = 0
+    let previousLocalEnd = Number.NEGATIVE_INFINITY
+    const parentNominalStart = parent.baseAt + parent.startMs
+    for (const child of orderedChildren(parent)) {
+      const childNominalOffset = child.baseAt + child.startMs - parentNominalStart
+      let localStart = childNominalOffset + accumulatedPauseMs
+      if (localStart < previousLocalEnd) {
+        const siblingShift = previousLocalEnd - localStart
+        localStart += siblingShift
+        accumulatedPauseMs += siblingShift
+      }
+      const childStartAt = parentStartAt + localStart
+      const childDuration = durationOf(child)
+      const childRange = {id: child.id, startAt: childStartAt, endAt: childStartAt + childDuration}
+      ranges.push(childRange)
+      scheduleChildren(child, childStartAt)
+      accumulatedPauseMs += childDuration
+      previousLocalEnd = localStart + childDuration
+    }
+  }
+  for (const group of rootGroups) {
     let startAt = group.baseAt + group.startMs
     const shifted = new Set<string>()
     while (true) {
       let adjusted = false
-      for (const previous of ranges) {
+      for (const previous of scheduledRoots) {
         if (shifted.has(previous.id) || previous.startAt >= startAt || previous.endAt <= group.baseAt) continue
         startAt += previous.endAt - Math.max(previous.startAt, group.baseAt)
         shifted.add(previous.id)
@@ -1722,7 +1781,10 @@ const exclusiveTimelineRanges = computed(() => {
       }
       if (!adjusted) break
     }
-    ranges.push({id: group.id, startAt, endAt: startAt + group.endMs - group.startMs})
+    const rootRange = {id: group.id, startAt, endAt: startAt + durationOf(group)}
+    ranges.push(rootRange)
+    scheduledRoots.push(rootRange)
+    scheduleChildren(group, startAt)
   }
   return ranges.sort((a, b) => a.startAt - b.startAt || a.endAt - b.endAt)
 })
@@ -1767,10 +1829,10 @@ function clearMediaActionEnd(actionKey: string) {
   if (timer) clearTimeout(timer)
   mediaActionEndTimers.delete(actionKey)
 }
-function scheduleMediaActionEnd(action: RenderAnimation, element: PptxElement, media: HTMLMediaElement, remainingMs: number, checkedAt = performance.now()) {
+function scheduleMediaActionEnd(action: RenderAnimation, media: HTMLMediaElement, remainingMs: number, checkedAt = performance.now()) {
   const actionKey = action.mediaActionKey
   if (!actionKey) return
-  const state = {action, element, media, remainingMs, checkedAt}
+  const state = {action, media, remainingMs, checkedAt}
   const now = performance.now()
   const boundary = nextExclusiveTimelineBoundary(action, now)
   const delay = timelineIsPaused(action, now) ? boundary - now : Math.min(remainingMs, boundary - now)
@@ -1781,37 +1843,58 @@ function scheduleMediaActionEnd(action: RenderAnimation, element: PptxElement, m
     const paused = timelinePauseDuration(action, endedAt) - timelinePauseDuration(action, state.checkedAt)
     state.remainingMs -= Math.max(0, elapsed - paused)
     if (state.remainingMs > 0) {
-      scheduleMediaActionEnd(action, element, media, state.remainingMs, endedAt)
+      scheduleMediaActionEnd(action, media, state.remainingMs, endedAt)
       return
     }
     clearMediaActionEnd(actionKey)
     delete media.dataset.mediaActionEndAt
     media.pause()
-    finishTimedMedia(element)
+    finishTimedMedia(action.targetId)
   }, Math.max(0, delay)))
 }
 function syncExclusiveMediaPlayback(now: number) {
   const activeGroups = exclusiveTimelineRanges.value.filter(range => range.startAt <= now && now < range.endAt)
-  if (activeGroups.length) {
-    const activeGroupIds = new Set(activeGroups.map(group => group.id))
-    const exclusiveTargetIds = new Set(timelineActions.value
-      .filter(action => action.effect === 'media' && action.exclusiveGroups?.some(group => activeGroupIds.has(group.id)))
-      .map(action => action.targetId))
-    for (const media of stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []) {
-      if (media.ended || exclusiveTargetIds.has(media.dataset.mediaId || '')) continue
+  if (!activeGroups.length && !exclusivePausedMedia.size) return
+  const activeMediaActions = new Map<string, {action: RenderAnimation; startedAt: number}>()
+  // A target can have pending actions in nested groups; only its latest started play action owns playback.
+  for (const action of timelineActions.value) {
+    const actionKey = action.mediaActionKey
+    if (action.effect !== 'media' || !actionKey || !['play', 'togglePause'].includes(action.mediaCommand || '') || completedMediaActions.has(actionKey)) continue
+    const startedAt = startedMediaActions.get(actionKey)
+    if (startedAt === undefined) continue
+    const previous = activeMediaActions.get(action.targetId)
+    if (!previous || startedAt > previous.startedAt) activeMediaActions.set(action.targetId, {action, startedAt})
+  }
+  for (const media of stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []) {
+    if (media.ended) continue
+    const mediaId = media.dataset.mediaId || ''
+    const action = activeMediaActions.get(mediaId)?.action
+    const memberships = new Set(action?.exclusiveGroups?.map(group => group.id) || [])
+    // Nested media remains active only when it belongs to every currently exclusive ancestor/group.
+    const belongsToEveryActiveGroup = activeGroups.length > 0 && activeGroups.every(group => memberships.has(group.id))
+    if (activeGroups.length && !belongsToEveryActiveGroup) {
       if (!media.paused && !exclusivePausedMedia.has(media)) {
         const endAt = Number(media.dataset.mediaActionEndAt)
-        exclusivePausedMedia.set(media, Number.isFinite(endAt) ? endAt - now : undefined)
+        exclusivePausedMedia.set(media, {
+          remainingMs: Number.isFinite(endAt) ? endAt - now : undefined,
+          actionKey: activeMediaActions.get(mediaId)?.action.mediaActionKey,
+          pausedAt: now
+        })
       }
       if (exclusivePausedMedia.has(media) && !media.paused) media.pause()
+      continue
     }
-    return
-  }
-  for (const [media, endRemainingMs] of exclusivePausedMedia) {
+    if (!exclusivePausedMedia.has(media)) continue
+    const pausedPlayback = exclusivePausedMedia.get(media)
     exclusivePausedMedia.delete(media)
-    if (!media.isConnected || media.ended || !media.paused) continue
-    if (endRemainingMs !== undefined) media.dataset.mediaActionEndAt = String(now + Math.max(0, endRemainingMs))
-    const mediaId = media.dataset.mediaId
+    if (!media.isConnected || !media.paused) continue
+    const activePlayback = activeMediaActions.get(mediaId)
+    const playbackRestartedWhilePaused = activePlayback
+      && activePlayback.action.mediaActionKey !== pausedPlayback?.actionKey
+      && activePlayback.startedAt >= (pausedPlayback?.pausedAt ?? Infinity)
+    const pausedActionCompleted = pausedPlayback?.actionKey && completedMediaActions.has(pausedPlayback.actionKey)
+    if (playbackRestartedWhilePaused || pausedActionCompleted) continue
+    if (pausedPlayback?.remainingMs !== undefined) media.dataset.mediaActionEndAt = String(now + Math.max(0, pausedPlayback.remainingMs))
     void media.play().catch(error => {
       if (error instanceof DOMException && error.name === 'NotAllowedError' && mediaId && !blockedMediaPlaybackIds.value.includes(mediaId)) {
         blockedMediaPlaybackIds.value = [...blockedMediaPlaybackIds.value, mediaId]
@@ -1866,6 +1949,8 @@ const elementMemoMetadata = new WeakMap<PptxElement, {
   showAnimations: boolean
   animations: RenderAnimation[] | undefined
   hasStepAnimations: boolean
+  hasTriggerAnimations: boolean
+  hasPotentialFillExpiration: boolean
   layoutKey: string
 }>()
 
@@ -1875,19 +1960,27 @@ function elementMemoDependencies(element: PptxElement) {
   let metadata = elementMemoMetadata.get(element)
   if (!metadata || metadata.slide !== slide || metadata.slideId !== slideId || metadata.showAnimations !== props.showAnimations) {
     const animations = animationsByTarget.value.get(element.id)
+    const allActions = timelineActions.value
+    const hasPotentialFillExpiration = Boolean(animations?.some(action => action.fillMode === 'freeze'
+      && allActions.some(sibling => animationStartsLaterInFillScope(action, sibling))))
     metadata = {
       slide,
       slideId,
       showAnimations: props.showAnimations,
       animations,
       hasStepAnimations: Boolean(animations?.some(action => !action.automatic && action.triggerSequence === undefined)),
+      hasTriggerAnimations: Boolean(animations?.some(action => action.triggerSequence !== undefined)),
+      hasPotentialFillExpiration,
       layoutKey: `${slideId}:${element.id}`,
     }
     elementMemoMetadata.set(element, metadata)
   }
-  const {animations, hasStepAnimations, layoutKey} = metadata
+  const {animations, hasStepAnimations, hasTriggerAnimations, hasPotentialFillExpiration, layoutKey} = metadata
   const step = hasStepAnimations ? props.animationStep : null
-  const animationTime = animations?.length ? animationClock.value : null
+  const animationTime = animations?.length && (hasTriggerAnimations || hasPotentialFillExpiration || animationClockTargetIds.has(element.id))
+    ? animationClock.value
+    : null
+  const timelineVersion = animations?.length ? animationTimelineVersion.value : null
   const fitted = autoFitDimensions.get(layoutKey)
   const fontScale = normalAutoFitScales.get(layoutKey)
   const ellipsisLines = textEllipsisLineCounts.get(layoutKey)
@@ -1917,6 +2010,7 @@ function elementMemoDependencies(element: PptxElement) {
     blockedPlayback,
     animations,
     animationTime,
+    timelineVersion,
   ]
 }
 
@@ -1929,13 +2023,21 @@ function cancelTimelineUpdates() {
 
 function scheduleTimelineUpdate() {
   cancelTimelineUpdates()
+  animationClockTargetIds.clear()
   if (props.thumbnail && !props.playbackPreview) return
   runTimedMediaActions()
   const now = animationClock.value
   syncExclusiveMediaPlayback(now)
   const exclusiveActive = exclusiveTimelineRanges.value.some(range => range.startAt <= now && now < range.endAt)
   const nextTimingNodeTriggerAt = exclusiveActive ? Infinity : runTimingNodeTriggeredAnimations(now)
+  const scheduleAnimatedTextAutoFit = () => {
+    const targetIds = new Set(timelineActions.value
+      .filter(action => action.effect === 'fontSize' && animationClockTargetIds.has(action.targetId))
+      .map(action => action.targetId))
+    if (targetIds.size) scheduleShapeAutoFit(targetIds)
+  }
   if (reduceMotion.value) {
+    for (const targetId of animationsByTarget.value.keys()) animationClockTargetIds.add(targetId)
     const nextScheduledAt = timelineActions.value.reduce((next, action) => {
       if (action.effect !== 'media') return next
       const startedAt = timelineStart(action)
@@ -1946,6 +2048,7 @@ function scheduleTimelineUpdate() {
       const boundary = range.startAt > now ? range.startAt : range.endAt > now ? range.endAt : Infinity
       return Math.min(next, boundary)
     }, Infinity)
+    scheduleAnimatedTextAutoFit()
     const nextScheduledTime = Math.min(nextScheduledAt, nextExclusiveBoundary)
     if (Number.isFinite(nextScheduledTime) && nextScheduledTime > now) {
       animationTimer = setTimeout(() => {
@@ -1967,9 +2070,15 @@ function scheduleTimelineUpdate() {
     if (actionStop !== undefined && actionStop <= actionNow) continue
     const start = startedAt + action.delayMs
     const end = Math.min(start + animationScheduleDuration(action), actionStop ?? Infinity)
-    if (start > actionNow) nextStart = Math.min(nextStart, now + start - actionNow)
-    else if (end > actionNow) hasActiveAnimation = true
+    if (start > actionNow) {
+      nextStart = Math.min(nextStart, now + start - actionNow)
+      animationClockTargetIds.add(action.targetId)
+    } else {
+      if (end > actionNow) hasActiveAnimation = true
+      if (end > actionNow || start === actionNow) animationClockTargetIds.add(action.targetId)
+    }
   }
+  scheduleAnimatedTextAutoFit()
   const update = () => {
     animationFrame = 0
     animationTimer = undefined
@@ -1982,6 +2091,7 @@ function scheduleTimelineUpdate() {
 
 function refreshTimeline() {
   cancelTimelineUpdates()
+  animationTimelineVersion.value++
   animationClock.value = performance.now()
   scheduleTimelineUpdate()
 }
@@ -2007,6 +2117,7 @@ function beginSlideTimeline(step: number) {
   firedTimingNodeTriggers.clear()
   triggerConditionDueAt.clear()
   pendingTriggerConditions.clear()
+  animationTimelineVersion.value++
   animationClock.value = now
   scheduleTimelineUpdate()
 }
@@ -2125,6 +2236,10 @@ onUnmounted(() => {
   for (const frame of mediaPlaybackFrames.values()) cancelAnimationFrame(frame)
   mediaPlaybackFrames.clear()
   for (const actionKey of mediaActionEndTimers.keys()) clearMediaActionEnd(actionKey)
+  for (const audio of stage.value?.querySelectorAll<HTMLAudioElement>('audio[data-animation-sound]') || []) {
+    audio.pause()
+    if (audio.readyState > 0) audio.currentTime = 0
+  }
   exclusivePausedMedia.clear()
 })
 
@@ -2160,10 +2275,23 @@ function animatedRunColor(color: string | undefined, opacity: number): string | 
     : `color-mix(in srgb, ${value} ${Math.max(0, Math.min(opacity, 1)) * 100}%, transparent)`
 }
 
-function elementStyle(element: PptxElement): CSSProperties {
+function elementRenderSize(element: PptxElement): { width: number; height: number; scaleX: number; scaleY: number } {
   const fittedSize = autoFitDimensions.get(`${props.slide.id}:${element.id}`)
-  const width = fittedSize?.width || element.width
-  const height = fittedSize?.height || element.height
+  const matrix = element.renderMatrix
+  const matrixScaleX = matrix ? Math.hypot(matrix[0], matrix[1]) : 1
+  const matrixScaleY = matrix ? Math.hypot(matrix[2], matrix[3]) : 1
+  const scaleX = Number.isFinite(matrixScaleX) && matrixScaleX > 0 ? matrixScaleX : 1
+  const scaleY = Number.isFinite(matrixScaleY) && matrixScaleY > 0 ? matrixScaleY : 1
+  return {
+    width: (fittedSize?.width || element.width) * scaleX,
+    height: (fittedSize?.height || element.height) * scaleY,
+    scaleX,
+    scaleY,
+  }
+}
+
+function elementStyle(element: PptxElement): CSSProperties {
+  const { width, height, scaleX: matrixScaleX, scaleY: matrixScaleY } = elementRenderSize(element)
   const flips = [element.flipH ? 'scaleX(-1)' : '', element.flipV ? 'scaleY(-1)' : ''].filter(Boolean).join(' ')
   const matrix = element.renderMatrix
   const [scaleX, scaleY] = animationScale(element)
@@ -2181,7 +2309,8 @@ function elementStyle(element: PptxElement): CSSProperties {
   const strokeOn = animationOnOff(element, 'stroke.on')
   const shadowOn = animationOnOff(element, 'shadow.on')
   const shadowBlurScale = element.kind === 'shape' && element.geometry === 'ellipse' ? 0.5 : 1
-  const shadowColors = shadows.map(shadow => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')), shadow.inset ? 1 : shadowBlurScale))
+  const renderBlurScale = Math.sqrt(matrixScaleX * matrixScaleY)
+  const shadowColors = shadows.map((shadow, index) => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')), shadow.inset ? 1 : shadowBlurScale, { scaleX: matrixScaleX, scaleY: matrixScaleY }, animationShadowOffset(element, shadow, index)))
   const animatedFill = animationColor(element, 'fillcolor')
   const fill = animatedFill || element.fill
   const fillOpacity = animationOpacity(element, 'fill.opacity')
@@ -2196,8 +2325,11 @@ function elementStyle(element: PptxElement): CSSProperties {
     ? radialGradientBackground(radialFill)
     : undefined
   const showStroke = strokeOn && element.kind === 'shape' && !customGeometry && !usesSvgOutline(element) && strokeWidth > 0 && stroke !== 'transparent' && !stroke.includes('gradient')
+  const normalizedMatrix = matrix
+    ? [matrix[0] / matrixScaleX, matrix[1] / matrixScaleX, matrix[2] / matrixScaleY, matrix[3] / matrixScaleY]
+    : undefined
   const transform = matrix
-    ? [translations, `matrix(${matrix.slice(0, 4).join(',')},${matrix[4] * scale.value},${matrix[5] * scale.value})${hasScaleAnimation || hasRotationAnimation ? ` translate(${element.width * scale.value / 2}px,${element.height * scale.value / 2}px)${hasRotationAnimation ? ` rotate(${rotationDelta}deg)` : ''}${hasScaleAnimation ? ` scale(${scaleX},${scaleY})` : ''} translate(${-element.width * scale.value / 2}px,${-element.height * scale.value / 2}px)` : ''}`].filter(Boolean).join(' ')
+    ? [translations, `matrix(${normalizedMatrix!.join(',')},${matrix[4] * scale.value},${matrix[5] * scale.value})${hasScaleAnimation || hasRotationAnimation ? ` translate(${width * scale.value / 2}px,${height * scale.value / 2}px)${hasRotationAnimation ? ` rotate(${rotationDelta}deg)` : ''}${hasScaleAnimation ? ` scale(${scaleX},${scaleY})` : ''} translate(${-width * scale.value / 2}px,${-height * scale.value / 2}px)` : ''}`].filter(Boolean).join(' ')
     : [translations, rotation ? `rotate(${rotation}deg)` : '', flips, hasScaleAnimation ? `scale(${scaleX},${scaleY})` : ''].filter(Boolean).join(' ')
   return {
     left: `${(element.x / props.width) * 100}%`,
@@ -2209,10 +2341,10 @@ function elementStyle(element: PptxElement): CSSProperties {
     transformOrigin: matrix ? '0 0' : undefined,
     background: element.kind === 'shape' && !customGeometry && !usesSvgPolygon(element) ? fillOn ? radialBackground || applyColorOpacity(fill, fillOpacity) : 'none' : undefined,
     borderColor: showStroke ? stroke : undefined,
-    borderWidth: showStroke ? `${strokeWidth * scale.value}px` : undefined,
+    borderWidth: showStroke ? `${strokeWidth * scale.value * renderBlurScale}px` : undefined,
     borderStyle: showStroke ? cssLineStyle(strokeDash) : undefined,
     boxShadow: shadows.length && shadowOn && !customGeometry && !usesSvgPolygon(element) ? shadowColors.join(', ') : undefined,
-    filter: glows.length ? glows.map(glow => `drop-shadow(0 0 ${glow.radius * scale.value}px ${glow.color})`).join(' ') : undefined,
+    filter: glows.length ? glows.map(glow => `drop-shadow(0 0 ${glow.radius * scale.value * renderBlurScale}px ${glow.color})`).join(' ') : undefined,
   }
 }
 
@@ -3248,8 +3380,9 @@ function lineStrokeColor(element: PptxElement): string {
 }
 
 function lineRenderStyle(element: PptxElement): CSSProperties {
+  const { width, height } = elementRenderSize(element)
   const stroke = animationColor(element, 'stroke.color') || (element.stroke === 'transparent' ? '#222' : element.stroke)
-  return { width: `${Math.max(element.width * scale.value, 1)}px`, height: `${Math.max(element.height * scale.value, 1)}px`, color: applyColorOpacity(stroke, animationOpacity(element, 'stroke.opacity')) }
+  return { width: `${Math.max(width * scale.value, 1)}px`, height: `${Math.max(height * scale.value, 1)}px`, color: applyColorOpacity(stroke, animationOpacity(element, 'stroke.opacity')) }
 }
 
 function lineEndId(element: PptxElement, side: 'head' | 'tail'): string {
@@ -3354,12 +3487,14 @@ function animationLineEnd(element: PptxElement, side: 'head' | 'tail'): NonNulla
 function customGeometryStyle(element: PptxElement): CSSProperties {
   const shadows = element.shadows?.length ? element.shadows : element.shadow ? [element.shadow] : []
   const outerShadows = shadows.filter(shadow => !shadow.inset)
+  const { scaleX, scaleY } = elementRenderSize(element)
+  const groupScale = { scaleX, scaleY }
   const innerShadowFilter = customGeometryInnerShadowFilterReference(element)
   if ((!outerShadows.length && !innerShadowFilter) || !animationOnOff(element, 'shadow.on')) return {}
   return {
     filter: [
       innerShadowFilter,
-      ...outerShadows.map(shadow => `drop-shadow(${shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')), 0.5)})`)
+      ...outerShadows.map(shadow => `drop-shadow(${shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')), 0.5, groupScale, animationShadowOffset(element, shadow, shadows.indexOf(shadow)))})`)
     ].filter((filter): filter is string => Boolean(filter)).join(' ')
   }
 }
@@ -3397,10 +3532,10 @@ function customGeometryInnerShadowDeviation(element: PptxElement, shadow: PptxSh
 }
 
 function customGeometryInnerShadowOffset(element: PptxElement, shadow: PptxShadow): {dx: number; dy: number} {
-  const angle = (shadow.angle || 0) * Math.PI / 180
+  const [x, y] = animationShadowOffset(element, shadow, Math.max(0, element.shadows?.indexOf(shadow) ?? 0))
   return {
-    dx: Math.cos(angle) * shadow.distance / Math.max(1, element.width),
-    dy: Math.sin(angle) * shadow.distance / Math.max(1, element.height)
+    dx: x / Math.max(1, element.width),
+    dy: y / Math.max(1, element.height)
   }
 }
 
@@ -3408,13 +3543,59 @@ function customGeometryInnerShadowColor(element: PptxElement, shadow: PptxShadow
   return applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity'))
 }
 
-function shadowCss(shadow: PptxShadow, color: string, blurScale = 1): string {
+function animationShadowOffset(element: PptxElement, shadow: PptxShadow, shadowIndex = 0, paragraphIndex?: number, characterStart?: number, characterEnd?: number): [number, number] {
   const angle = (shadow.angle || 0) * Math.PI / 180
+  const baseX = Math.cos(angle) * shadow.distance
+  const baseY = Math.sin(angle) * shadow.distance
+  let x = baseX
+  let y = baseY
+  if (shadowIndex !== 0) return [x, y]
+  const actions = animationsByTarget.value.get(element.id)?.filter(item => {
+    if (item.effect !== 'shadowOffset') return false
+    const hasTextTarget = Boolean(item.paragraphRange || item.characterRange || item.iteration)
+    if (!hasTextTarget) return true
+    if (paragraphIndex === undefined) return false
+    const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(item, characterStart, characterEnd)
+    return (!item.paragraphRange || paragraphIndex >= item.paragraphRange.start && paragraphIndex <= item.paragraphRange.end)
+      && (!item.characterRange || characterStart !== undefined && characterEnd !== undefined && characterStart < item.characterRange.end && characterEnd > item.characterRange.start)
+      && (!item.iteration || iterationIndex !== undefined && iterationIndex >= 0)
+  }) || []
+  for (const action of actions) {
+    const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
+    const progress = animationProgress(action, iterationIndex)
+    if (progress === -2) {
+      if (action.shadowOffsetProperty === 'shadow.offset.x') x = baseX
+      else if (action.shadowOffsetProperty === 'shadow.offset.y') y = baseY
+      continue
+    }
+    if (progress === null || progress < 0 || action.shadowOffsetFrom === undefined || action.shadowOffsetTo === undefined) continue
+    const keyframes = action.shadowOffsetKeyframes
+    const formulaSamples = action.shadowOffsetFormulaSamples
+    const from = action.shadowOffsetFrom
+    const to = action.shadowOffsetTo
+    let value = formulaSamples?.length
+      ? animationKeyframeValue(formulaSamples, 'lin', progress)
+      : keyframes?.length
+        ? animationKeyframeValue(keyframes, action.shadowOffsetKeyframeMode, progress)
+        : from + (to - from) * progress
+    if (action.shadowOffsetAccumulate) {
+      value += (to - from) * completedAnimationRepeats(action, iterationIndex) * (action.reversePlayback ? -1 : 1)
+    }
+    if (action.shadowOffsetProperty === 'shadow.offset.x') x = value
+    else if (action.shadowOffsetProperty === 'shadow.offset.y') y = value
+  }
+  return [x, y]
+}
+
+function shadowCss(shadow: PptxShadow, color: string, blurScale = 1, groupScale = { scaleX: 1, scaleY: 1 }, offset?: [number, number]): string {
+  const angle = (shadow.angle || 0) * Math.PI / 180
+  const blurTransformScale = Math.sqrt(groupScale.scaleX * groupScale.scaleY)
+  const [offsetX, offsetY] = offset || [Math.cos(angle) * shadow.distance, Math.sin(angle) * shadow.distance]
   return [
     ...(shadow.inset ? ['inset'] : []),
-    Math.cos(angle) * shadow.distance * scale.value + 'px',
-    Math.sin(angle) * shadow.distance * scale.value + 'px',
-    shadow.blur * blurScale * scale.value + 'px',
+    offsetX * scale.value * groupScale.scaleX + 'px',
+    offsetY * scale.value * groupScale.scaleY + 'px',
+    shadow.blur * blurScale * scale.value * blurTransformScale + 'px',
     color
   ].join(' ')
 }
@@ -3423,8 +3604,9 @@ function pictureInnerShadowStyle(element: PptxElement): CSSProperties | undefine
   const shadows = element.shadows?.length ? element.shadows : element.shadow ? [element.shadow] : []
   const innerShadows = shadows.filter(shadow => shadow.inset)
   if (!innerShadows.length || !animationOnOff(element, 'shadow.on')) return undefined
+  const { scaleX, scaleY } = elementRenderSize(element)
   return {
-    boxShadow: innerShadows.map(shadow => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')))).join(', ')
+    boxShadow: innerShadows.map(shadow => shadowCss(shadow, applyColorOpacity(animationColor(element, 'shadow.color') || shadow.color, animationOpacity(element, 'shadow.opacity')), 1, { scaleX, scaleY }, animationShadowOffset(element, shadow, shadows.indexOf(shadow)))).join(', ')
   }
 }
 
@@ -3623,17 +3805,18 @@ function updateMediaOnPlay(event: Event, element: PptxElement) {
   if (startedAction) refreshTimeline()
 }
 
-function finishTimedMedia(element: PptxElement, refresh = true, targetEnded = false) {
+function finishTimedMedia(target: PptxElement | string, refresh = true, targetEnded = false) {
+  const targetId = typeof target === 'string' ? target : target.id
   const endedAt = performance.now()
   let changed = false
-  const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === element.id)
+  const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === targetId)
   if (media) {
     delete media.dataset.mediaActionEndAt
     mediaBookmarkPlaybackStarted.delete(media)
     lastMediaBookmarkTimes.delete(media)
   }
   timelineActions.value.forEach((action, index) => {
-    if (action.effect !== 'media' || action.targetId !== element.id || !action.mediaActionKey || !executedMediaActions.has(index)) return
+    if (action.effect !== 'media' || action.targetId !== targetId || !action.mediaActionKey || !executedMediaActions.has(index)) return
     completedMediaActions.set(action.mediaActionKey, endedAt)
     if (targetEnded) endedMediaTargets.set(action.mediaActionKey, endedAt)
     clearMediaActionEnd(action.mediaActionKey)
@@ -3661,13 +3844,39 @@ function runTimedMediaActions() {
         if (audio.readyState > 0) audio.currentTime = (element.mediaTrim?.startMs || 0) / 1000
         finishTimedMedia(element, false)
       }
+      for (const audio of stage.value?.querySelectorAll<HTMLAudioElement>('audio[data-animation-sound]') || []) {
+        audio.pause()
+        if (audio.readyState > 0) audio.currentTime = 0
+        if (audio.dataset.mediaId) finishTimedMedia(audio.dataset.mediaId, false)
+      }
       runSlideTriggeredAnimations('onStopAudio')
       refreshTimeline()
       return
     }
     const element = props.slide.elements.find(item => item.id === action.targetId)
     const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || []).find(item => item.dataset.mediaId === action.targetId)
-    if (!element || !media) return
+    if (!media || (!element && !action.mediaSourceUrl)) return
+    if (action.mediaSourceUrl) {
+      if (action.mediaCommand !== 'play') return
+      if (action.mediaVolume !== undefined) media.volume = action.mediaVolume
+      if (action.mediaMuted !== undefined) media.muted = action.mediaMuted
+      media.currentTime = 0
+      void media.play().then(() => {
+        if (action.mediaActionKey && !startedMediaActions.has(action.mediaActionKey)) {
+          startedMediaActions.set(action.mediaActionKey, performance.now())
+          refreshTimeline()
+        }
+      }).catch(error => {
+        if (error instanceof DOMException && error.name === 'NotAllowedError' && !blockedMediaPlaybackIds.value.includes(action.targetId)) {
+          blockedMediaPlaybackIds.value = [...blockedMediaPlaybackIds.value, action.targetId]
+        }
+      })
+      if (action.mediaActionKey && action.mediaDurationMs !== undefined) {
+        scheduleMediaActionEnd(action, media, action.mediaDurationMs)
+      }
+      return
+    }
+    if (!element) return
     const startsPlayback = action.mediaCommand === 'play' || action.mediaCommand === 'togglePause' && media.paused
     if (action.mediaActionKey && (!startsPlayback || !media.paused)) startedMediaActions.set(action.mediaActionKey, performance.now())
     if (action.mediaSlideCount) media.dataset.mediaSlideCount = String(action.mediaSlideCount)
@@ -3699,7 +3908,7 @@ function runTimedMediaActions() {
       else if (media.currentTime < (element.mediaTrim?.startMs || 0) / 1000) seek((element.mediaTrim?.startMs || 0) / 1000)
       play()
       if (action.mediaActionKey && action.mediaDurationMs !== undefined) {
-        scheduleMediaActionEnd(action, element, media, action.mediaDurationMs)
+        scheduleMediaActionEnd(action, media, action.mediaDurationMs)
       }
     } else if (action.mediaCommand === 'pause') media.pause()
     else if (action.mediaCommand === 'togglePause') {
@@ -3726,7 +3935,7 @@ function finalAnimationProgress(action: PptxAnimation): number {
   if (!Number.isFinite(totalDuration)) return 0
   const remainder = totalDuration % cycleDuration
   let progress: number
-  if (!action.autoReverse) progress = remainder === 0 ? 1 : easedProgress(action, remainder / action.durationMs)
+  if (!action.autoReverse) progress = easedProgress(action, remainder === 0 ? 1 : remainder / action.durationMs)
   else if (remainder === 0) progress = 0
   else if (remainder <= action.durationMs) progress = easedProgress(action, remainder / action.durationMs)
   else progress = 1 - easedProgress(action, (remainder - action.durationMs) / action.durationMs)
@@ -3746,8 +3955,9 @@ function animationFillExpired(action: RenderAnimation, startedAt: number | undef
   }
   if (action.fillMode !== 'freeze' || startedAt === undefined) return false
   const actionStart = startedAt + action.delayMs
-  return (animationsByTarget.value.get(action.targetId) || []).some((sibling) => {
-    if (sibling.sequenceKey !== action.sequenceKey || (sibling.sequenceOrder ?? -1) <= (action.sequenceOrder ?? -1)) return false
+  // Cross-target actions expire fills at later click steps or nested sequence children.
+  return timelineActions.value.some((sibling) => {
+    if (!animationStartsLaterInFillScope(action, sibling)) return false
     const siblingStart = timelineStart(sibling)
     if (siblingStart === undefined) return false
     const start = siblingStart + sibling.delayMs
@@ -3755,9 +3965,23 @@ function animationFillExpired(action: RenderAnimation, startedAt: number | undef
   })
 }
 
+function animationStartsLaterInFillScope(action: RenderAnimation, sibling: RenderAnimation): boolean {
+  const actionScopes = action.fillSequenceScopes || (action.sequenceKey === undefined ? [] : [{key: action.sequenceKey, order: action.sequenceOrder ?? -1}])
+  const siblingScopes = sibling.fillSequenceScopes || (sibling.sequenceKey === undefined ? [] : [{key: sibling.sequenceKey, order: sibling.sequenceOrder ?? -1}])
+  return actionScopes.some(scope => siblingScopes.some(siblingScope => {
+    if (siblingScope.key !== scope.key || siblingScope.order <= scope.order) return false
+    if (scope.key !== action.sequenceKey) return true
+    if (action.triggerSequence !== undefined) {
+      return sibling.triggerSequence === action.triggerSequence && (sibling.triggerStep ?? -1) > (action.triggerStep ?? -1)
+    }
+    return sibling.step > action.step
+  }))
+}
+
 function timingWarpChildElapsed(action: RenderAnimation, startedAt: number, stagger = 0): number {
   const warp = action.timingWarp!
-  const elapsedWallMs = timelineNow(action) - startedAt - warp.groupOffsetMs
+  const iterationStartOffsetMs = warp.groupPerIteration ? stagger : 0
+  const elapsedWallMs = timelineNow(action) - startedAt - warp.groupOffsetMs - iterationStartOffsetMs
   if (elapsedWallMs < 0) return -1
   const elapsedPlaybackMs = Math.min(elapsedWallMs, warp.groupPlaybackDurationMs) * warp.groupSpeed
   const cycleDurationMs = warp.groupDurationMs * (warp.groupAutoReverse ? 2 : 1)
@@ -3771,7 +3995,7 @@ function timingWarpChildElapsed(action: RenderAnimation, startedAt: number, stag
   const isReverse = warp.groupReversePlayback !== reverseLeg
   const groupProgress = timingProgress(warp, isReverse ? 1 - legProgress : legProgress)
   return groupProgress * warp.groupDurationMs
-    - warp.childOffsetMs - stagger
+    - warp.childOffsetMs - (warp.groupPerIteration ? 0 : stagger)
 }
 
 function animationProgress(action: RenderAnimation, iterationIndex?: number): number | null {
@@ -3803,7 +4027,7 @@ function animationProgress(action: RenderAnimation, iterationIndex?: number): nu
 
 function completedAnimationRepeats(action: RenderAnimation, iterationIndex?: number): number {
   const cycleDuration = action.durationMs * (action.autoReverse ? 2 : 1)
-  if (!(action.rotationAccumulate || action.scaleAccumulate || action.motionAccumulate) || action.autoReverse || cycleDuration <= 0) return 0
+  if (!(action.rotationAccumulate || action.scaleAccumulate || action.motionAccumulate || action.opacityAccumulate || action.shadowOffsetAccumulate) || action.autoReverse || cycleDuration <= 0) return 0
   const totalDuration = animationDuration(action)
   const lastRepeat = Number.isFinite(totalDuration) ? Math.max(0, Math.ceil(totalDuration / cycleDuration) - 1) : Infinity
   const startedAt = timelineStart(action)
@@ -3827,32 +4051,54 @@ function motionAccumulationOffset(action: RenderAnimation, iterationIndex?: numb
   return [(end.x - start.x) * repeats, (end.y - start.y) * repeats]
 }
 
+type AnimationScaleLayers = { dimensions: [number, number]; transform: [number, number] }
+
+function applyAnimationScaleLayer(layers: AnimationScaleLayers, action: RenderAnimation, value: [number, number]) {
+  const layer = action.scaleLayer === 'dimensions' ? layers.dimensions : layers.transform
+  const applyValue = (axis: 0 | 1) => {
+    layer[axis] = action.scaleBaseAdditive
+      ? 1 + value[axis]
+      : action.scaleAdditive
+      ? layer[axis] + value[axis]
+      : action.scaleMultiplicative
+        ? layer[axis] * value[axis]
+        : value[axis]
+  }
+  if (action.scaleAxis === 'x') applyValue(0)
+  else if (action.scaleAxis === 'y') applyValue(1)
+  else {
+    applyValue(0)
+    applyValue(1)
+  }
+}
+
+function composedAnimationScale(layers: AnimationScaleLayers): [number, number] {
+  return [layers.dimensions[0] * layers.transform[0], layers.dimensions[1] * layers.transform[1]]
+}
+
 function animationScale(element: PptxElement): [number, number] {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => ['scale', 'zoom'].includes(action.effect) && !action.paragraphRange && !action.characterRange && !action.iteration) || []
-  let value: [number, number] = [1, 1]
+  const layers: AnimationScaleLayers = { dimensions: [1, 1], transform: [1, 1] }
   for (const action of actions) {
     const progress = animationProgress(action)
     if (progress === -2) {
-      if (action.scaleAxis === 'x') value = [1, value[1]]
-      else if (action.scaleAxis === 'y') value = [value[0], 1]
-      else value = [1, 1]
+      if (!action.scaleAdditive && !action.scaleMultiplicative) applyAnimationScaleLayer(layers, action, [1, 1])
       continue
     }
     if (progress === null || progress < 0) {
-      if (action.effect === 'zoom' && action.direction === 'in' && action.scaleFrom) value = action.scaleFrom
+      if (action.effect === 'zoom' && action.direction === 'in' && action.scaleFrom) applyAnimationScaleLayer(layers, action, action.scaleFrom)
       continue
     }
     if (!action.scaleFrom || !action.scaleTo) continue
-    const animatedScale = animationScaleValue(action, progress)
-    if (action.scaleAxis === 'x') value = [animatedScale[0], value[1]]
-    else if (action.scaleAxis === 'y') value = [value[0], animatedScale[1]]
-    else value = animatedScale
+    const currentScale = action.scaleLayer === 'dimensions' ? layers.dimensions : layers.transform
+    const animatedScale = animationScaleValue(action, progress, undefined, action.scaleFromCurrent ? currentScale : undefined)
+    applyAnimationScaleLayer(layers, action, animatedScale)
   }
-  return value
+  return composedAnimationScale(layers)
 }
 
-function animationScaleValue(action: RenderAnimation, progress: number, iterationIndex?: number): [number, number] {
-  const [fromX, fromY] = action.scaleFrom!
+function animationScaleValue(action: RenderAnimation, progress: number, iterationIndex?: number, currentScale?: [number, number]): [number, number] {
+  const [fromX, fromY] = currentScale && action.scaleFromCurrent ? currentScale : action.scaleFrom!
   const [toX, toY] = action.scaleTo!
   const completedRepeats = action.scaleAccumulate
     ? completedAnimationRepeats(action, iterationIndex) * (action.reversePlayback ? -1 : 1)
@@ -3868,7 +4114,11 @@ function animationScaleValue(action: RenderAnimation, progress: number, iteratio
       else high = middle
     }
     if (low === 0) return frames[0]!.value
-    if (low === frames.length) return frames.at(-1)!.value
+    if (low === frames.length) {
+      if (action.scaleKeyframeMode === 'discrete' || frames.length < 2) return frames.at(-1)!.value
+      const before = frames.at(-2)!, after = frames.at(-1)!
+      return before.value + (after.value - before.value) * (progress - before.offset) / (after.offset - before.offset)
+    }
     const before = frames[low - 1]!
     const after = frames[low]!
     if (action.scaleKeyframeMode === 'discrete') return progress === after.offset ? after.value : before.value
@@ -3891,14 +4141,20 @@ function animationRotation(element: PptxElement): number {
       continue
     }
     if (progress === null || progress < 0 || action.rotationFrom === undefined || action.rotationTo === undefined) continue
-    const delta = action.rotationTo - action.rotationFrom
-    const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action)
-    const rotation = (action.rotationKeyframes?.length
-      ? animationKeyframeValue(action.rotationKeyframes, action.rotationKeyframeMode, progress)
-      : action.rotationFrom + delta * progress) + repeatOffset
+    const rotation = animationRotationValue(action, progress, value)
     value = action.rotationRelative || action.rotationAdditive ? value + rotation : rotation
   }
   return value
+}
+
+function animationRotationValue(action: RenderAnimation, progress: number, currentRotation: number, iterationIndex?: number): number {
+  const from = action.rotationFromCurrent ? currentRotation : action.rotationFrom!
+  const delta = action.rotationTo! - from
+  const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action, iterationIndex)
+  const value = action.rotationKeyframes?.length
+    ? animationKeyframeValue(action.rotationKeyframes, action.rotationKeyframeMode, progress)
+    : from + delta * progress
+  return value + repeatOffset
 }
 
 function animationKeyframeValue(keyframes: Array<{ offset: number; value: number }>, mode: 'lin' | 'discrete' | undefined, progress: number): number {
@@ -3912,7 +4168,12 @@ function animationKeyframeValue(keyframes: Array<{ offset: number; value: number
   }
   const nextIndex = keyframes.findIndex(frame => frame.offset >= progress)
   if (nextIndex === 0) return keyframes[0]!.value
-  if (nextIndex < 0) return keyframes.at(-1)!.value
+  if (nextIndex < 0) {
+    if (keyframes.length < 2) return keyframes.at(-1)!.value
+    const from = keyframes.at(-2)!, to = keyframes.at(-1)!
+    const segmentProgress = (progress - from.offset) / (to.offset - from.offset)
+    return from.value + (to.value - from.value) * segmentProgress
+  }
   const from = keyframes[nextIndex - 1]!, to = keyframes[nextIndex]!
   const segmentProgress = (progress - from.offset) / (to.offset - from.offset)
   return from.value + (to.value - from.value) * segmentProgress
@@ -3939,18 +4200,26 @@ function animationOpacity(
   for (const action of actions) {
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
     const progress = animationProgress(action, iterationIndex)
-    if (progress === -2) {
-      opacity = 1
-      continue
-    }
+    if (progress === -2) continue
     if (progress === null || progress < 0 || action.opacityFrom === undefined || action.opacityTo === undefined) continue
     const formulaSamples = action.opacityFormulaSamples
     const keyframes = action.opacityKeyframes
-    if (formulaSamples?.length) opacity = animationKeyframeValue(formulaSamples, 'lin', progress)
-    else if (keyframes?.length) opacity = animationKeyframeValue(keyframes, action.opacityKeyframeMode, progress)
-    else opacity = action.opacityFrom + (action.opacityTo - action.opacityFrom) * progress
+    let animatedOpacity: number
+    if (formulaSamples?.length) animatedOpacity = animationKeyframeValue(formulaSamples, 'lin', progress)
+    else if (keyframes?.length) animatedOpacity = animationKeyframeValue(keyframes, action.opacityKeyframeMode, progress)
+    else animatedOpacity = action.opacityFrom + (action.opacityTo - action.opacityFrom) * progress
+    if (action.opacityAccumulate) {
+      // Each completed cycle adds one endpoint delta before composing the animation value.
+      const completedRepeats = completedAnimationRepeats(action, iterationIndex) * (action.reversePlayback ? -1 : 1)
+      animatedOpacity += (action.opacityTo - action.opacityFrom) * completedRepeats
+    }
+    opacity = action.opacityAdditive === 'sum'
+      ? opacity + animatedOpacity
+      : action.opacityAdditive === 'mult'
+        ? opacity * animatedOpacity
+        : animatedOpacity
   }
-  return opacity
+  return Math.max(0, Math.min(1, opacity))
 }
 
 function animationOnOff(element: PptxElement, property: NonNullable<PptxAnimation['onOffProperty']>): boolean {
@@ -4023,7 +4292,7 @@ function animationStrokeWidth(element: PptxElement): number {
   return strokeWidth
 }
 
-function animationColor(element: PptxElement, property: NonNullable<PptxAnimation['colorProperty']>, paragraphIndex?: number, characterStart?: number, characterEnd?: number): string | undefined {
+function animationColor(element: PptxElement, property: NonNullable<PptxAnimation['colorProperty']>, paragraphIndex?: number, characterStart?: number, characterEnd?: number, baselineColor?: string): string | undefined {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'color' || action.colorProperty !== property) return false
     const paragraphRange = action.paragraphRange
@@ -4041,30 +4310,98 @@ function animationColor(element: PptxElement, property: NonNullable<PptxAnimatio
       color = undefined
       continue
     }
-    const from = action.colorFrom, to = action.colorTo
+    let from = action.colorFrom, to = action.colorTo
+    if (action.colorFromCurrent) {
+      const source = property === 'style.color' ? baselineColor : property === 'fillcolor' ? element.fill : property === 'stroke.color' ? element.stroke : undefined
+      const baseline = animationColorChannelsFromCss(source)
+      if (baseline) {
+        const [hue, saturation, lightness] = rgbToHsl(baseline[0], baseline[1], baseline[2])
+        from = action.colorSpace === 'hsl'
+          ? [hue, saturation, lightness, baseline[3]]
+          : baseline
+        if (action.colorBy) {
+          const offset = action.colorBy
+          to = from.map((channel, index) => {
+            if (index === 3) return channel
+            const sum = channel + offset[index]!
+            return index === 0 && action.colorSpace === 'hsl' ? sum : Math.max(0, Math.min(index === 0 ? 1 : action.colorSpace === 'rgb' && index < 3 ? 255 : 1, sum))
+          }) as [number, number, number, number]
+        }
+      }
+    }
+    const keyframes = action.colorKeyframes
     if (progress === null || progress < 0 || !from || !to) continue
+    let colorProgress: number = progress
+    if (keyframes?.length) {
+      if (action.colorKeyframeMode === 'discrete') {
+        let selected = keyframes[0]!
+        for (const frame of keyframes) {
+          if (frame.offset > progress) break
+          selected = frame
+        }
+        from = selected.value
+        to = selected.value
+        colorProgress = 0
+      } else {
+        let start = keyframes[0]!
+        let end = keyframes.at(-1)!
+        if (progress <= start.offset) {
+          end = start
+        } else if (progress < end.offset) {
+          for (let index = 1; index < keyframes.length; index++) {
+            const next = keyframes[index]!
+            if (progress <= next.offset) {
+              start = keyframes[index - 1]!
+              end = next
+              break
+            }
+          }
+        } else {
+          start = keyframes.at(-2) || end
+        }
+        from = start.value
+        to = end.value
+        colorProgress = end.offset === start.offset ? 0 : (progress - start.offset) / (end.offset - start.offset)
+      }
+    }
     let channels: [number, number, number, number]
     if (action.colorSpace === 'hsl') {
       const hueDelta = ((to[0] - from[0]) % 1 + 1) % 1
       const huePath = action.colorDirection === 'ccw' && hueDelta ? hueDelta - 1 : hueDelta
-      const [r, g, b] = hslToRgb(from[0] + huePath * progress, from[1] + (to[1] - from[1]) * progress, from[2] + (to[2] - from[2]) * progress)
-      channels = [r, g, b, from[3] + (to[3] - from[3]) * progress]
+      const [r, g, b] = hslToRgb(from[0] + huePath * colorProgress, from[1] + (to[1] - from[1]) * colorProgress, from[2] + (to[2] - from[2]) * colorProgress)
+      channels = [r, g, b, from[3] + (to[3] - from[3]) * colorProgress]
     } else {
-      channels = [0, 1, 2, 3].map(index => from[index]! + (to[index]! - from[index]!) * progress) as [number, number, number, number]
+      channels = [0, 1, 2, 3].map(index => from[index]! + (to[index]! - from[index]!) * colorProgress) as [number, number, number, number]
     }
     color = `rgba(${channels.slice(0, 3).map(channel => Math.round(Math.max(0, Math.min(channel, 255)))).join(', ')}, ${Math.max(0, Math.min(channels[3], 1))})`
   }
   return color
 }
 
-function textColorAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
-  const color = animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd)
+function animationColorChannelsFromCss(value?: string): [number, number, number, number] | undefined {
+  const color = value?.trim()
+  if (!color) return undefined
+  const hex = /^#([\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.exec(color)?.[1]
+  if (hex) {
+    const expand = (channel: string) => channel.length === 1 ? Number.parseInt(channel + channel, 16) : Number.parseInt(channel, 16)
+    const channels = hex.length <= 4 ? [...hex].map(expand) : [hex.slice(0, 2), hex.slice(2, 4), hex.slice(4, 6), ...(hex.length === 8 ? [hex.slice(6, 8)] : [])].map(expand)
+    return [channels[0]!, channels[1]!, channels[2]!, channels.length === 4 ? channels[3]! / 255 : 1]
+  }
+  const match = /^rgba?\(\s*(\d+(?:\.\d+)?%?)\s*,\s*(\d+(?:\.\d+)?%?)\s*,\s*(\d+(?:\.\d+)?%?)(?:\s*,\s*(\d+(?:\.\d+)?%?))?\s*\)$/i.exec(color)
+  if (!match) return undefined
+  const channel = (raw: string) => raw.endsWith('%') ? Number(raw.slice(0, -1)) * 2.55 : Number(raw)
+  const alpha = match[4] ? (match[4].endsWith('%') ? Number(match[4].slice(0, -1)) / 100 : Number(match[4])) : 1
+  return [channel(match[1]!), channel(match[2]!), channel(match[3]!), alpha]
+}
+
+function textColorAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number, baselineColor?: string): CSSProperties {
+  const color = animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd, baselineColor)
   if (!color) return {}
   return { color: animatedRunColor(color, animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)) }
 }
 
 function runHasTextFill(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): boolean {
-  return Boolean(run.fillPattern || run.fillGradient) && !animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd)
+  return Boolean(run.fillPattern || run.fillGradient) && !animationColor(element, 'style.color', paragraphIndex, characterStart, characterEnd, run.color)
 }
 
 function textRangeOpacityAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
@@ -4119,8 +4456,9 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
       continue
     }
     if (action.fontWeightFrom === undefined || action.fontWeightTo === undefined) continue
-    weight = action.fontWeightFormulaSamples?.length
-      ? animationKeyframeValue(action.fontWeightFormulaSamples, 'lin', progress)
+    const formulaSamples = action.fontWeightFormulaSamplesByBaseline?.find(entry => entry.baseline === baseFontWeight)?.samples || action.fontWeightFormulaSamples
+    weight = formulaSamples?.length
+      ? animationKeyframeValue(formulaSamples, 'lin', progress)
       : action.fontWeightKeyframes?.length
       ? animationKeyframeValue(action.fontWeightKeyframes, action.fontWeightKeyframeMode, progress)
       : action.fontWeightFrom + (action.fontWeightTo - action.fontWeightFrom) * progress
@@ -4131,6 +4469,7 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
   let lineThrough: boolean | undefined
   let verticalAlign: CSSProperties['verticalAlign'] | undefined
   let verticalAlignChanged = false
+  let textTransformScale = 1
   let textShadow: CSSProperties['textShadow']
   let textShadowChanged = false
   let textEmbossEnabled = false
@@ -4159,6 +4498,7 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
     } else if (progress === -2 && action.textStyleProperty === 'textTransform') {
       verticalAlign = run.baselineOffsetEm === undefined ? 'baseline' : `${run.baselineOffsetEm}em`
       verticalAlignChanged = true
+      textTransformScale = 1
       continue
     } else if (progress === -2 && action.textStyleProperty === 'outline') {
       textOutline = baseTextOutline
@@ -4196,6 +4536,10 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
     else if (action.textStyleProperty === 'textTransform') {
       verticalAlign = value === 'sub' || value === 'super' ? value : 'baseline'
       verticalAlignChanged = true
+      // Match CSS2's conventional sub/superscript size alongside the baseline shift.
+      // https://www.w3.org/TR/2008/REC-CSS2-20080411/css2.html#appendix-d
+      // https://www.w3.org/TR/CSS2/visudet.html#propdef-vertical-align
+      textTransformScale = value === 'sub' || value === 'super' ? 0.83 : 1
     } else if (action.textStyleProperty === 'outline') {
       textOutline = value === true ? baseTextOutline : '0px transparent'
       textOutlineChanged = true
@@ -4224,8 +4568,9 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
     !textShadowChanged || textShadow !== 'none' ? textInnerShadowFilterReference(element, run, paragraphIndex, characterStart, characterEnd, filterKey) : undefined,
     textEmbossChanged && textEmbossEnabled ? `drop-shadow(-${embossOffset}px -${embossOffset}px 0 rgba(255, 255, 255, 0.65)) drop-shadow(${embossOffset}px ${embossOffset}px 0 rgba(0, 0, 0, 0.65))` : undefined,
   ].filter(Boolean).join(' ')
+  const animatedFontSizeFactor = factor * textTransformScale
   return {
-    ...(factor === 1 ? {} : { fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value * factor}px` }),
+    ...(animatedFontSizeFactor === 1 ? {} : { fontSize: `${(run.fontSizePt || 18) * fontScale * EMU_PER_POINT * scale.value * animatedFontSizeFactor}px` }),
     ...(weight === undefined ? {} : { fontWeight: weight }),
     ...(fontFamily === undefined ? {} : { fontFamily }),
     ...(italic === undefined ? {} : { fontStyle: italic ? 'italic' : 'normal' }),
@@ -4240,35 +4585,39 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
 function textTransformAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => {
     const iterationIndex = iterationIndexFor(action, characterStart, characterEnd)
-    if (!['scale', 'rotation', 'motion', 'slide'].includes(action.effect) || !(action.paragraphRange || action.characterRange || action.iteration)) return false
+    if (!['scale', 'zoom', 'rotation', 'motion', 'slide'].includes(action.effect) || !(action.paragraphRange || action.characterRange || action.iteration)) return false
     return (!action.paragraphRange || paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
       && (!action.characterRange || characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
       && (!action.iteration || iterationIndex !== undefined && iterationIndex >= 0)
   }) || []
   if (!actions.length) return {}
-  let scaling: [number, number] = [1, 1]
+  const scaleLayers: AnimationScaleLayers = { dimensions: [1, 1], transform: [1, 1] }
   let rotation = 0
   const [motionX, motionY] = animationMotion(element, paragraphIndex, characterStart, characterEnd)
   const [slideX, slideY] = animationSlide(element, paragraphIndex, characterStart, characterEnd)
   for (const action of actions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
     if (progress === -2) {
-      if (action.effect === 'scale') scaling = [1, 1]
+      if (action.effect === 'scale' || action.effect === 'zoom') {
+        if (!action.scaleAdditive && !action.scaleMultiplicative) applyAnimationScaleLayer(scaleLayers, action, [1, 1])
+      }
       else if (action.effect === 'rotation') rotation = 0
       continue
     }
-    if (progress === null || progress < 0) continue
-    if (action.effect === 'scale' && action.scaleFrom && action.scaleTo) {
-      scaling = animationScaleValue(action, progress, iterationIndexFor(action, characterStart, characterEnd))
+    if (progress === null || progress < 0) {
+      if (action.effect === 'zoom' && action.direction === 'in' && action.scaleFrom) applyAnimationScaleLayer(scaleLayers, action, action.scaleFrom)
+      continue
+    }
+    if ((action.effect === 'scale' || action.effect === 'zoom') && action.scaleFrom && action.scaleTo) {
+      const currentScale = action.scaleLayer === 'dimensions' ? scaleLayers.dimensions : scaleLayers.transform
+      const animatedScale = animationScaleValue(action, progress, iterationIndexFor(action, characterStart, characterEnd), action.scaleFromCurrent ? currentScale : undefined)
+      applyAnimationScaleLayer(scaleLayers, action, animatedScale)
     } else if (action.effect === 'rotation' && action.rotationFrom !== undefined && action.rotationTo !== undefined) {
-      const delta = action.rotationTo - action.rotationFrom
-      const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action, iterationIndexFor(action, characterStart, characterEnd))
-      const angle = (action.rotationKeyframes?.length
-        ? animationKeyframeValue(action.rotationKeyframes, action.rotationKeyframeMode, progress)
-        : action.rotationFrom + delta * progress) + repeatOffset
+      const angle = animationRotationValue(action, progress, rotation, iterationIndexFor(action, characterStart, characterEnd))
       rotation = action.rotationRelative || action.rotationAdditive ? rotation + angle : angle
     }
   }
+  const scaling = composedAnimationScale(scaleLayers)
   const transforms = [
     motionX || motionY ? `translate(${motionX * scale.value}px, ${motionY * scale.value}px)` : '',
     slideX || slideY ? `translate(${slideX * scale.value}px, ${slideY * scale.value}px)` : '',
@@ -4287,26 +4636,47 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
         && (!action.characterRange || characterStart! < action.characterRange.end && characterEnd! > action.characterRange.start)
       : !action.paragraphRange && !action.characterRange && !action.iteration)) || []
   let value: [number, number] = [0, 0]
+  const applyMotionValue = (action: RenderAnimation, motion: [number, number]) => {
+    if (action.motionCoordinateProperties) {
+      const mapped: [number, number] = [0, 0]
+      for (const [index, property] of action.motionCoordinateProperties.entries()) {
+        const axis = property === 'ppt_x' ? 0 : 1
+        mapped[axis] += motion[index] || 0
+      }
+      value = action.motionAdditive ? [value[0] + mapped[0], value[1] + mapped[1]] : mapped
+    } else if (action.motionCoordinateProperty === 'ppt_x') value = [action.motionAdditive ? value[0] + motion[0] : motion[0], value[1]]
+    else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], action.motionAdditive ? value[1] + motion[1] : motion[1]]
+    else value = action.motionAdditive
+      ? [value[0] + motion[0], value[1] + motion[1]]
+      : motion
+  }
   for (const action of actions) {
     const iterationIndex = textRange ? iterationIndexFor(action, characterStart!, characterEnd!) : undefined
     const progress = animationProgress(action, iterationIndex)
     if (progress === -2) {
-      if (action.motionCoordinateProperty === 'ppt_x') value = [0, value[1]]
-      else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], 0]
-      else value = [0, 0]
+      if (!action.motionAdditive) {
+        if (action.motionCoordinateProperty === 'ppt_x') value = [0, value[1]]
+        else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], 0]
+        else value = [0, 0]
+      }
       continue
     }
     const samples = action.motionPathSamples
     if (progress !== null && progress >= 0 && samples?.length) {
-      const samplePosition = Math.min(samples.length - 1, progress * (samples.length - 1))
-      const from = samples[Math.floor(samplePosition)]!
-      const to = samples[Math.ceil(samplePosition)]!
-      const ratio = samplePosition - Math.floor(samplePosition)
+      if (samples.length === 1) {
+        const offset = motionAccumulationOffset(action, iterationIndex)
+        applyMotionValue(action, [samples[0]!.x + offset[0], samples[0]!.y + offset[1]])
+        continue
+      }
+      const samplePosition = progress * (samples.length - 1)
+      const fromIndex = Math.max(0, Math.min(samples.length - 2, Math.floor(samplePosition)))
+      const toIndex = Math.min(samples.length - 1, fromIndex + 1)
+      const from = samples[fromIndex]!
+      const to = samples[toIndex]!
+      const ratio = samplePosition - fromIndex
       const offset = motionAccumulationOffset(action, iterationIndex)
       const motion: [number, number] = [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]]
-      if (action.motionCoordinateProperty === 'ppt_x') value = [motion[0], value[1]]
-      else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], motion[1]]
-      else value = motion
+      applyMotionValue(action, motion)
       continue
     }
     const path = action.motionPath
@@ -4314,10 +4684,18 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
     const offset = motionAccumulationOffset(action, iterationIndex)
     if (path.length === 1) {
       const point = path[0]
-      if (point) value = [point.x + offset[0], point.y + offset[1]]
+      if (point) applyMotionValue(action, [point.x + offset[0], point.y + offset[1]])
       continue
     }
     const distance = (action.motionPathLength || 0) * progress
+    if (distance > (action.motionPathLength || 0) && path.length > 1) {
+      const from = path.at(-2)!, to = path.at(-1)!
+      const span = to.distance - from.distance
+      const ratio = span ? (distance - from.distance) / span : 1
+      const offset = motionAccumulationOffset(action, iterationIndex)
+      applyMotionValue(action, [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]])
+      continue
+    }
     let low = 0, high = path.length
     while (low < high) {
       const middle = (low + high) >>> 1
@@ -4328,12 +4706,12 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
     const from = path[low - 1], to = path[low]
     if (!from) continue
     if (!to) {
-      value = [from.x + offset[0], from.y + offset[1]]
+      applyMotionValue(action, [from.x + offset[0], from.y + offset[1]])
       continue
     }
     const span = to.distance - from.distance
     const ratio = span ? (distance - from.distance) / span : 0
-    value = [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]]
+    applyMotionValue(action, [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]])
   }
   return value
 }
@@ -4375,13 +4753,14 @@ function animationSlide(element: PptxElement, paragraphIndex?: number, character
 }
 
 function animationTargetsRange(action: PptxAnimation, paragraphIndex?: number, characterStart?: number, characterEnd?: number): boolean {
+  // p:iterate ranges are text offsets and can only be resolved for character-level calls.
   if (characterStart !== undefined && characterEnd !== undefined) {
     const overlaps = Boolean(action.characterRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
     const iterationIndex = action.iteration ? iterationIndexFor(action, characterStart, characterEnd) : undefined
     return overlaps || (iterationIndex !== undefined && iterationIndex >= 0)
   }
   if (paragraphIndex !== undefined) {
-    return Boolean(action.paragraphRange && !action.characterRange && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
+    return Boolean(action.paragraphRange && !action.characterRange && !action.iteration && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
   }
   return !action.paragraphRange && !action.characterRange && !action.iteration
 }
@@ -4393,7 +4772,8 @@ function animationIterationIndex(action: PptxAnimation, paragraphIndex?: number,
 
 function animationClipMaskStyle(element: PptxElement, clipPath: string, textRange: boolean): CSSProperties {
   if (!textRange) return { clipPath }
-  const mask = clipPathMaskImage(clipPath, element.width * scale.value, element.height * scale.value)
+  const { width, height } = elementRenderSize(element)
+  const mask = clipPathMaskImage(clipPath, width * scale.value, height * scale.value)
   if (!mask) return { clipPath }
   return {
     maskImage: mask, WebkitMaskImage: mask,
@@ -4411,8 +4791,8 @@ function animationWipe(element: PptxElement, paragraphIndex?: number, characterS
       return overlaps || (iterationIndex !== undefined && iterationIndex >= 0)
     }
     return paragraphIndex === undefined
-      ? !action.paragraphRange && !action.characterRange
-      : Boolean(action.paragraphRange && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
+      ? !action.paragraphRange && !action.characterRange && !action.iteration
+      : Boolean(action.paragraphRange && !action.iteration && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
   }) || []
   const first = actions[0]
   if (!first?.wipeDirection) return {}
@@ -4431,7 +4811,7 @@ function animationWipe(element: PptxElement, paragraphIndex?: number, characterS
     progress = action.direction === 'in' ? phase * 100 : (1 - phase) * 100
   }
   if (reset) return {}
-  const cssDirection = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : direction
+  const cssDirection = direction === 'up' ? 'bottom' : direction === 'down' ? 'top' : direction
   const mask = `linear-gradient(to ${cssDirection}, #000 var(--wipe-progress), transparent var(--wipe-progress))`
   return { '--wipe-progress': `${progress}%`, maskImage: mask, WebkitMaskImage: mask } as CSSProperties
 }
@@ -4444,10 +4824,11 @@ function animationBlinds(element: PptxElement, paragraphIndex?: number, characte
     }
     if (characterStart !== undefined && characterEnd !== undefined) {
       const overlaps = Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
-      const iteratesCharacter = Boolean(action.iteration && iterationIndexFor(action, characterStart, characterEnd) !== undefined)
+      const iterationIndex = action.iteration ? iterationIndexFor(action, characterStart, characterEnd) : undefined
+      const iteratesCharacter = iterationIndex !== undefined && iterationIndex >= 0
       return overlaps || iteratesCharacter
     }
-    return !action.characterRange && !action.paragraphRange
+    return !action.characterRange && !action.paragraphRange && !action.iteration
   }) || []
   const first = actions[0]
   if (!first?.blindsOrientation) return {}
@@ -4475,9 +4856,13 @@ function animationBlinds(element: PptxElement, paragraphIndex?: number, characte
 function animationChecker(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'checker') return false
-    if (paragraphIndex !== undefined) return Boolean(action.paragraphRange && !action.characterRange && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
-    if (characterStart !== undefined && characterEnd !== undefined) return Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
-    return !action.paragraphRange && !action.characterRange
+    if (paragraphIndex !== undefined) return Boolean(action.paragraphRange && !action.characterRange && !action.iteration && paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
+    if (characterStart !== undefined && characterEnd !== undefined) {
+      const overlaps = Boolean(action.characterRange && !action.paragraphRange && characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
+      const iterationIndex = action.iteration ? iterationIndexFor(action, characterStart, characterEnd) : undefined
+      return overlaps || (iterationIndex !== undefined && iterationIndex >= 0)
+    }
+    return !action.paragraphRange && !action.characterRange && !action.iteration
   }) || []
   const first = actions[0]
   if (!first?.checkerOrientation) return {}
@@ -4485,7 +4870,7 @@ function animationChecker(element: PptxElement, paragraphIndex?: number, charact
   let orientation = first.checkerOrientation
   let reset = false
   for (const action of actions) {
-    const phase = animationProgress(action)
+    const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
     if (phase === -2) {
       reset = true
       continue
@@ -4496,8 +4881,9 @@ function animationChecker(element: PptxElement, paragraphIndex?: number, charact
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  const width = element.width * scale.value
-  const height = element.height * scale.value
+  const { width: localWidth, height: localHeight } = elementRenderSize(element)
+  const width = localWidth * scale.value
+  const height = localHeight * scale.value
   const amount = Math.max(0, Math.min(progress, 1))
   if (paragraphIndex === undefined && characterStart === undefined) return { clipPath: gridTransitionClipPath(width, height, orientation, amount, true) }
   const mask = gridTransitionMaskImage(width, height, orientation, amount, true)
@@ -4535,7 +4921,8 @@ function animationShapeMask(element: PptxElement, paragraphIndex?: number, chara
     }
   }
   if (reset || !current) return {}
-  const clipPath = shapeEffectClipPath(current.shape, element.width * scale.value, element.height * scale.value, current.progress, current.direction)
+  const { width, height } = elementRenderSize(element)
+  const clipPath = shapeEffectClipPath(current.shape, width * scale.value, height * scale.value, current.progress, current.direction)
   return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
@@ -4557,7 +4944,8 @@ function animationDissolve(element: PptxElement, paragraphIndex?: number, charac
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  const clipPath = dissolveClipPath(element.width * scale.value, element.height * scale.value, progress, element.id)
+  const { width, height } = elementRenderSize(element)
+  const clipPath = dissolveClipPath(width * scale.value, height * scale.value, progress, element.id)
   return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
@@ -4581,7 +4969,8 @@ function animationWheel(element: PptxElement, paragraphIndex?: number, character
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  const clipPath = wheelClipPath(element.width * scale.value, element.height * scale.value, spokes, progress)
+  const { width, height } = elementRenderSize(element)
+  const clipPath = wheelClipPath(width * scale.value, height * scale.value, spokes, progress)
   return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
@@ -4606,7 +4995,8 @@ function animationRandomBars(element: PptxElement, paragraphIndex?: number, char
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  const clipPath = randomBarClipPath(element.width * scale.value, element.height * scale.value, orientation, progress, element.id)
+  const { width, height } = elementRenderSize(element)
+  const clipPath = randomBarClipPath(width * scale.value, height * scale.value, orientation, progress, element.id)
   return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
@@ -4631,7 +5021,8 @@ function animationStrips(element: PptxElement, paragraphIndex?: number, characte
     progress = action.direction === 'in' ? phase : 1 - phase
   }
   if (reset) return {}
-  const clipPath = stripsClipPath(element.width * scale.value, element.height * scale.value, direction, progress)
+  const { width, height } = elementRenderSize(element)
+  const clipPath = stripsClipPath(width * scale.value, height * scale.value, direction, progress)
   return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
@@ -4664,10 +5055,10 @@ function animationBarn(element: PptxElement, paragraphIndex?: number, characterS
 
 function animationCss(actions: RenderAnimation[] | undefined, characterStart?: number, characterEnd?: number): CSSProperties {
   if (props.thumbnail && !props.playbackPreview || !actions?.length) return {}
-  const visibilityActions = actions.filter(action => ['appear', 'fade', 'wipe', 'strips', 'barn', 'slide', 'visibility', 'zoom'].includes(action.effect))
+  const visibilityActions = actions.filter(action => ['appear', 'fade', 'wipe', 'strips', 'barn', 'slide', 'visibility', 'zoom'].includes(action.effect) || action.randomEffectFallback)
   const first = visibilityActions[0]
   if (!first) return {}
-  let opacity = first.effect === 'visibility' || first.effect === 'wipe' || first.effect === 'strips' || first.effect === 'barn' || first.effect === 'slide' || first.direction === 'out' ? 1 : 0
+  let opacity = first.effect === 'visibility' || first.randomEffectFallback || first.effect === 'wipe' || first.effect === 'strips' || first.effect === 'barn' || first.effect === 'slide' || first.direction === 'out' ? 1 : 0
   let visibility: 'visible' | 'hidden' = first.effect === 'visibility' ? first.visibilityFrom || 'visible' : first.direction === 'out' ? 'visible' : 'hidden'
   for (const action of visibilityActions) {
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
@@ -4693,6 +5084,13 @@ function animationCss(actions: RenderAnimation[] | undefined, characterStart?: n
         }
       } else if (progress >= 1) value = action.visibilityTo || value
       visibility = value
+    } else if (action.randomEffectFallback) {
+      visibility = action.direction === 'in'
+        ? progress > 0 ? 'visible' : 'hidden'
+        : progress >= 1 ? 'hidden' : 'visible'
+      opacity = action.effect === 'fade'
+        ? action.direction === 'in' ? progress : 1 - progress
+        : 1
     } else if (action.effect === 'wipe' || action.effect === 'strips' || action.effect === 'barn') {
       visibility = action.direction === 'in'
         ? progress > 0 ? 'visible' : 'hidden'
@@ -5020,7 +5418,15 @@ function usesRightToLeftColumns(element: PptxElement): boolean {
     && (!element.textOrientation || element.textOrientation === 'horz')
 }
 
+function hasRenderableText(element: PptxElement): boolean {
+  return element.paragraphs.some(paragraph => paragraph.runs.some(run => run.text.length > 0)
+    || paragraph.bullet?.kind === 'char' && paragraph.bullet.char.length > 0
+    || paragraph.bullet?.kind === 'number'
+    || paragraph.bullet?.kind === 'image' && Boolean(paragraph.bullet.url))
+}
+
 function textFrameStyle(element: PptxElement): CSSProperties {
+  const { scaleX, scaleY } = elementRenderSize(element)
   const verticalText = element.textOrientation === 'vert' || element.textOrientation === 'vert270'
   const eastAsianVerticalText = element.textOrientation === 'eaVert'
   const wordArtVerticalText = element.textOrientation === 'wordArtVert'
@@ -5052,10 +5458,12 @@ function textFrameStyle(element: PptxElement): CSSProperties {
   }
   return {
     position: rect ? 'absolute' : undefined,
-    left: rect ? `${rect.left * 100}%` : undefined,
-    top: rect ? `${rect.top * 100}%` : undefined,
-    width: rect ? `${(rect.right - rect.left) * 100}%` : undefined,
-    height: rect ? `${(rect.bottom - rect.top) * 100}%` : undefined,
+    left: rect ? `${rect.left / scaleX * 100}%` : undefined,
+    top: rect ? `${rect.top / scaleY * 100}%` : undefined,
+    width: `${(rect ? (rect.right - rect.left) * 100 : 100) / scaleX}%`,
+    height: `${(rect ? (rect.bottom - rect.top) * 100 : 100) / scaleY}%`,
+    transform: element.renderMatrix ? `scale(${scaleX},${scaleY})` : undefined,
+    transformOrigin: element.renderMatrix ? '0 0' : undefined,
     boxSizing: rect ? 'border-box' : undefined,
     display: ellipsisLineCount ? '-webkit-box' : columnCount > 1 ? 'block' : undefined,
     WebkitBoxOrient: ellipsisLineCount ? 'vertical' : undefined,
@@ -5132,9 +5540,9 @@ function textInnerShadowFilterReference(element: PptxElement, run: PptxElement['
   return textInnerShadows(run).length ? `url(#${textInnerShadowFilterId(element, paragraphIndex, characterStart, characterEnd, filterKey)})` : undefined
 }
 
-function textInnerShadowOffset(shadow: PptxShadow): {dx: number; dy: number} {
-  const angle = (shadow.angle || 0) * Math.PI / 180
-  return {dx: Math.cos(angle) * shadow.distance * scale.value, dy: Math.sin(angle) * shadow.distance * scale.value}
+function textInnerShadowOffset(element: PptxElement, shadow: PptxShadow, paragraphIndex: number, characterStart: number, characterEnd: number, shadowIndex: number): {dx: number; dy: number} {
+  const [x, y] = animationShadowOffset(element, shadow, shadowIndex, paragraphIndex, characterStart, characterEnd)
+  return {dx: x * scale.value, dy: y * scale.value}
 }
 
 function textInnerShadowColor(element: PptxElement, shadow: PptxShadow, paragraphIndex: number, characterStart: number, characterEnd: number): string {
@@ -5145,9 +5553,9 @@ function textInnerShadowColor(element: PptxElement, shadow: PptxShadow, paragrap
 function runTextShadowStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['runs'][number], paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties['textShadow'] {
   const shadows = (run.shadows?.length ? run.shadows : run.shadow ? [run.shadow] : []).filter(shadow => !shadow.inset)
   const glows = run.glows?.length ? run.glows : run.glow ? [run.glow] : []
-  const effects = shadows.map(shadow => {
+  const effects = shadows.map((shadow, shadowIndex) => {
     const shadowColor = animationColor(element, 'shadow.color', paragraphIndex, characterStart, characterEnd) || shadow.color
-    return shadowCss(shadow, animatedRunColor(shadowColor, animationOpacity(element, 'shadow.opacity', paragraphIndex, characterStart, characterEnd)) || shadowColor)
+    return shadowCss(shadow, animatedRunColor(shadowColor, animationOpacity(element, 'shadow.opacity', paragraphIndex, characterStart, characterEnd)) || shadowColor, 1, { scaleX: 1, scaleY: 1 }, animationShadowOffset(element, shadow, shadowIndex, paragraphIndex, characterStart, characterEnd))
   })
   effects.push(...glows.map(glow => `0 0 ${glow.radius * scale.value}px ${glow.color}`))
   return effects.length ? effects.join(', ') : undefined
@@ -5358,6 +5766,17 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
     ...(cell.textAnchorCenter ? { width: 'fit-content', maxWidth: '100%', marginLeft: 'auto', marginRight: 'auto' } : {}),
   }
 }
+
+function tableStyle(element: PptxElement): CSSProperties {
+  if (!element.renderMatrix) return {}
+  const { scaleX, scaleY } = elementRenderSize(element)
+  return {
+    width: `${100 / scaleX}%`,
+    height: `${100 / scaleY}%`,
+    transform: `scale(${scaleX},${scaleY})`,
+    transformOrigin: '0 0',
+  }
+}
 </script>
 
 <template>
@@ -5369,6 +5788,8 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
     :role="hasInteractiveMedia ? 'group' : 'img'"
     :aria-label="t('slideNumber', { number })"
   >
+    <div class="slide-background-layer" :style="backgroundStyle" aria-hidden="true" />
+    <div class="slide-content-layer">
     <div
       v-for="element in slide.elements"
       v-memo="elementMemoDependencies(element)"
@@ -5566,7 +5987,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         <img class="slide-image" :src="element.imageUrl" :alt="element.name" :style="imageStyle(element)">
         <div v-if="pictureInnerShadowStyle(element)" class="picture-inner-shadow" :style="pictureInnerShadowStyle(element)" aria-hidden="true"></div>
       </div>
-      <table v-else-if="element.kind === 'table' && element.table" class="slide-table">
+      <table v-else-if="element.kind === 'table' && element.table" class="slide-table" :style="tableStyle(element)">
         <colgroup>
           <col v-for="(column, columnIndex) in element.table.columns" :key="columnIndex" :style="{ width: `${column / Math.max(element.table.columns.reduce((sum, width) => sum + width, 0), 1) * 100}%` }">
         </colgroup>
@@ -5589,14 +6010,14 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
                         :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-fill': !segment.separateDecorations && runHasTextFill(element, run, paragraphIndex, segment.start, segment.end), 'text-run-highlight': Boolean(run.highlightColor) }]"
                         :data-char-start="segment.start"
                         :data-char-end="segment.end"
-                        :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), paragraphIndex, segment.start, segment.end, segment.separateDecorations, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRunAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), segment.script, segment.separateDecorations, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]"
+                :style="[runStyle(element, run, segment.script, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), paragraphIndex, segment.start, segment.end, segment.separateDecorations, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex), textColorAnimationStyle(element, paragraphIndex, segment.start, segment.end, run.color), textRangeOpacityAnimationStyle(element, paragraphIndex, segment.start, segment.end), characterAnimationStyle(element, paragraphIndex, segment.start, segment.end), textRunAnimationStyle(element, paragraphIndex, segment.start, segment.end, run, effectiveTableCellFontScale(element, rowIndex, cellIndex, cell), segment.script, segment.separateDecorations, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex), textTransformAnimationStyle(element, paragraphIndex, segment.start, segment.end)]"
                       >
                         <svg v-if="textInnerShadows(run).length" class="text-run-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
                           <defs>
                             <filter :id="textInnerShadowFilterId(element, paragraphIndex, segment.start, segment.end, 'table-' + rowIndex + '-' + cellIndex + '-' + runIndex)" x="-10%" y="-10%" width="120%" height="120%" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
                               <template v-for="(shadow, shadowIndex) in textInnerShadows(run)" :key="shadowIndex">
                                 <feGaussianBlur in="SourceAlpha" :stdDeviation="Math.max(0, shadow.blur * scale / 2)" :result="'inner-blur-' + shadowIndex" />
-                                <feOffset :in="'inner-blur-' + shadowIndex" :dx="textInnerShadowOffset(shadow).dx" :dy="textInnerShadowOffset(shadow).dy" :result="'inner-offset-' + shadowIndex" />
+                                <feOffset :in="'inner-blur-' + shadowIndex" :dx="textInnerShadowOffset(element, shadow, paragraphIndex, segment.start, segment.end, shadowIndex).dx" :dy="textInnerShadowOffset(element, shadow, paragraphIndex, segment.start, segment.end, shadowIndex).dy" :result="'inner-offset-' + shadowIndex" />
                                 <feComposite in="SourceAlpha" :in2="'inner-offset-' + shadowIndex" operator="out" :result="'inner-mask-' + shadowIndex" />
                                 <feFlood :flood-color="textInnerShadowColor(element, shadow, paragraphIndex, segment.start, segment.end)" :result="'inner-color-' + shadowIndex" />
                                 <feComposite :in="'inner-color-' + shadowIndex" :in2="'inner-mask-' + shadowIndex" operator="in" :result="'inner-shadow-' + shadowIndex" />
@@ -5620,7 +6041,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         </tbody>
       </table>
       <span v-else-if="element.kind === 'placeholder'">{{ t(element.mediaType ? 'mediaUnavailable' : 'imageUnavailable') }}</span>
-      <div v-if="element.paragraphs.length" class="text-frame" :data-element-id="element.id" :data-autofit="element.textAutoFit === 'shape' ? 'shape' : element.textAutoFitDynamic ? 'normal' : undefined" :data-text-overflow="supportsTextVerticalEllipsis(element) ? 'ellipsis' : undefined" :style="textFrameStyle(element)">
+      <div v-if="hasRenderableText(element)" class="text-frame" :class="{ 'text-frame-no-wrap': element.textWrap === 'none' }" :data-element-id="element.id" :data-autofit="element.textAutoFit === 'shape' ? 'shape' : element.textAutoFitDynamic ? 'normal' : undefined" :data-text-overflow="supportsTextVerticalEllipsis(element) ? 'ellipsis' : undefined" :style="textFrameStyle(element)">
         <div class="text-bounds" :style="textBoundsStyle(element)">
           <div
             v-for="(entry, index) in paragraphEntries(element.paragraphs)"
@@ -5641,14 +6062,14 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
                 :class="['text-run', { 'text-run-hyperlink': canActivateHyperlink(run.hyperlink), 'text-run-break': segment.text === '\n', 'text-run-fill': !segment.separateDecorations && runHasTextFill(element, run, index, segment.start, segment.end), 'text-run-highlight': Boolean(run.highlightColor) }]"
                 :data-char-start="segment.start"
                 :data-char-end="segment.end"
-                :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element), index, segment.start, segment.end, segment.separateDecorations, 'text-' + runIndex), textColorAnimationStyle(element, index, segment.start, segment.end), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, index, segment.start, segment.end), textRunAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element), segment.script, segment.separateDecorations, 'text-' + runIndex), textTransformAnimationStyle(element, index, segment.start, segment.end)]"
+                :style="[runStyle(element, run, segment.script, effectiveTextFontScale(element), index, segment.start, segment.end, segment.separateDecorations, 'text-' + runIndex), textColorAnimationStyle(element, index, segment.start, segment.end, run.color), textRangeOpacityAnimationStyle(element, index, segment.start, segment.end), characterAnimationStyle(element, index, segment.start, segment.end), textRunAnimationStyle(element, index, segment.start, segment.end, run, effectiveTextFontScale(element), segment.script, segment.separateDecorations, 'text-' + runIndex), textTransformAnimationStyle(element, index, segment.start, segment.end)]"
               >
                 <svg v-if="textInnerShadows(run).length" class="text-run-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
                   <defs>
                     <filter :id="textInnerShadowFilterId(element, index, segment.start, segment.end, 'text-' + runIndex)" x="-10%" y="-10%" width="120%" height="120%" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
                       <template v-for="(shadow, shadowIndex) in textInnerShadows(run)" :key="shadowIndex">
                         <feGaussianBlur in="SourceAlpha" :stdDeviation="Math.max(0, shadow.blur * scale / 2)" :result="'inner-blur-' + shadowIndex" />
-                        <feOffset :in="'inner-blur-' + shadowIndex" :dx="textInnerShadowOffset(shadow).dx" :dy="textInnerShadowOffset(shadow).dy" :result="'inner-offset-' + shadowIndex" />
+                        <feOffset :in="'inner-blur-' + shadowIndex" :dx="textInnerShadowOffset(element, shadow, index, segment.start, segment.end, shadowIndex).dx" :dy="textInnerShadowOffset(element, shadow, index, segment.start, segment.end, shadowIndex).dy" :result="'inner-offset-' + shadowIndex" />
                         <feComposite in="SourceAlpha" :in2="'inner-offset-' + shadowIndex" operator="out" :result="'inner-mask-' + shadowIndex" />
                         <feFlood :flood-color="textInnerShadowColor(element, shadow, index, segment.start, segment.end)" :result="'inner-color-' + shadowIndex" />
                         <feComposite :in="'inner-color-' + shadowIndex" :in2="'inner-mask-' + shadowIndex" operator="in" :result="'inner-shadow-' + shadowIndex" />
@@ -5681,6 +6102,18 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
         <line v-else x1="0" :y1="element.geometry === 'lineInv' ? 1000 : 0" :x2="element.width > 0 ? 1000 : 0" :y2="element.height > 0 ? (element.geometry === 'lineInv' ? 0 : 1000) : 0" :stroke="lineStrokeColor(element)" :stroke-width="customGeometryStrokeWidth(element)" :style="customGeometryStrokeStyle(element)" :marker-start="lineEndUrl(element, 'head')" :marker-end="lineEndUrl(element, 'tail')" vector-effect="non-scaling-stroke" />
       </svg>
     </div>
+    </div>
+    <audio
+      v-for="action in embeddedSoundActions"
+      :key="action.mediaActionKey || action.targetId"
+      class="animation-sound"
+      data-animation-sound
+      :data-media-id="action.targetId"
+      :src="action.mediaSourceUrl"
+      preload="none"
+      aria-hidden="true"
+      @ended="finishTimedMedia(action.targetId, true, true)"
+    />
     <span v-if="backgroundTileWarning" class="media-warning" role="status">{{ t(backgroundTileWarning) }}</span>
     <span v-if="textOverflowWarning && (!thumbnail || playbackPreview)" class="media-warning" role="status">{{ t(textOverflowWarning) }}</span>
   </div>
@@ -5693,6 +6126,7 @@ function tableCellTextStyle(cell: PptxTableCell, rowHeight: number): CSSProperti
 .custom-geometry, .preset-outline { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .slide-image { position: absolute; max-width: none; }
 .slide-video { position: absolute; max-width: none; object-fit: fill; }
+.animation-sound { display: none; }
 .audio-viewport { position: relative; width: 100%; height: 100%; display: grid; align-items: center; }
 .slide-audio { width: 100%; max-width: 100%; }
 .media-warning { position: absolute; inset: auto 0 0; padding: 4px 8px; background: #7f1d1d; color: white; font: 12px/1.3 sans-serif; }

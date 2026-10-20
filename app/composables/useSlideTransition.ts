@@ -11,6 +11,44 @@ interface SlideTransitionOptions {
   playback: Readonly<Ref<PptxTransitionPlayback | null>>
 }
 
+type ConcreteTransitionEffect = Exclude<NonNullable<PptxSlide['transition']>['effect'], 'random' | 'preset'>
+
+const randomTransitionEffects: readonly ConcreteTransitionEffect[] = [
+  'fade', 'wipe', 'zoom', 'cover', 'pull', 'split', 'circle', 'diamond', 'plus', 'wedge',
+  'newsflash', 'doors', 'window', 'prism', 'pan', 'vortex', 'ferris', 'gallery', 'conveyor', 'ripple',
+  'glitter', 'shred', 'flythrough', 'warp', 'flip', 'switch', 'reveal', 'wheel', 'morph', 'cut',
+  'honeycomb', 'blinds', 'checker', 'comb', 'dissolve', 'wheelReverse', 'randomBar', 'flash', 'strips', 'push',
+]
+
+type SlideTransition = NonNullable<PptxSlide['transition']>
+
+// p:random has no concrete effect attributes, so selected effects need their own schema defaults.
+const randomTransitionDefaults: Partial<Record<ConcreteTransitionEffect, Partial<SlideTransition>>> = {
+  zoom: { direction: 'in' },
+  split: { direction: 'out', orientation: 'horz' },
+  doors: { orientation: 'horz' },
+  window: { orientation: 'horz' },
+  prism: { isInverted: false, isContent: false },
+  ripple: { direction: 'center' },
+  glitter: { direction: 'l', pattern: 'diamond' },
+  shred: { direction: 'in', shredPattern: 'strip' },
+  flythrough: { direction: 'in', hasBounce: false },
+  warp: { direction: 'out' },
+  morph: { morphOption: 'byObject' },
+  blinds: { orientation: 'horz' },
+  checker: { orientation: 'horz' },
+  comb: { orientation: 'horz' },
+  wheel: { spokes: 4 },
+  wheelReverse: { spokes: 4 },
+  randomBar: { barOrientation: 'horizontal' },
+  strips: { direction: 'ld' },
+}
+
+function resolveRandomTransition(transition: NonNullable<PptxSlide['transition']>) {
+  const effect = randomTransitionEffects[Math.floor(Math.random() * randomTransitionEffects.length)] || 'fade'
+  return { ...transition, ...randomTransitionDefaults[effect], effect }
+}
+
 function honeycombClipPath(width: number, height: number, collapsed: boolean): string {
   const side = Math.sqrt(width * height / 340)
   const halfWidth = Math.sqrt(3) * side / 2
@@ -196,13 +234,24 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
     snapshot.style.transform = style.transform
     snapshot.style.opacity = style.opacity
     snapshot.style.clipPath = style.clipPath
+    const currentContent = current.querySelector<HTMLElement>('.slide-content-layer')
+    const snapshotContent = snapshot.querySelector<HTMLElement>('.slide-content-layer')
+    if (currentContent && snapshotContent) {
+      const contentStyle = getComputedStyle(currentContent)
+      snapshotContent.style.transform = contentStyle.transform
+      snapshotContent.style.opacity = contentStyle.opacity
+    }
+    const currentBackground = current.querySelector<HTMLElement>('.slide-background-layer')
+    const snapshotBackground = snapshot.querySelector<HTMLElement>('.slide-background-layer')
+    if (currentBackground && snapshotBackground) snapshotBackground.style.opacity = getComputedStyle(currentBackground).opacity
     underlay.value?.append(snapshot)
   }, { flush: 'sync' })
 
   watch(slide, async (activeSlide, previousSlide) => {
     if (!activeSlide || activeSlide.id === previousSlide?.id) return
     const currentPlayback = playback.value?.slideId === activeSlide.id ? playback.value : null
-    const transition = currentPlayback?.transition
+    const sourceTransition = currentPlayback?.transition
+    const transition = sourceTransition?.effect === 'random' ? resolveRandomTransition(sourceTransition) : sourceTransition
     await nextTick()
     if (slide.value?.id !== activeSlide.id) return
     const animationDelay = currentPlayback ? Math.min(0, currentPlayback.startedAtEpoch - (performance.timeOrigin + performance.now())) : 0
@@ -430,6 +479,15 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
       underlay.value?.replaceChildren()
       return
     }
+    const separatePrismContent = effect === 'prism' && transition.isContent === true
+    const incomingPlane = separatePrismContent ? incoming.querySelector<HTMLElement>('.slide-content-layer') : incoming
+    const outgoingPlane = separatePrismContent ? outgoing.querySelector<HTMLElement>('.slide-content-layer') : outgoing
+    const incomingBackground = separatePrismContent ? incoming.querySelector<HTMLElement>('.slide-background-layer') : null
+    const outgoingBackground = separatePrismContent ? outgoing.querySelector<HTMLElement>('.slide-background-layer') : null
+    if (!incomingPlane || !outgoingPlane || (separatePrismContent && (!incomingBackground || !outgoingBackground))) {
+      underlay.value?.replaceChildren()
+      return
+    }
     const rotations: Record<string, { axis: string; angle: number }> = {
       l: { axis: '0, 1, 0', angle: 90 }, r: { axis: '0, 1, 0', angle: -90 },
       u: { axis: '1, 0, 0', angle: -90 }, d: { axis: '1, 0, 0', angle: 90 },
@@ -440,8 +498,8 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
       ? rotations[direction] || rotations.l!
       : { axis: '0, 1, 0', angle: (direction === 'r' ? 1 : -1) * (effect === 'flip' ? 180 : 90) }
     const angle = rotation.angle * (effect === 'prism' && transition.isInverted ? -1 : 1)
-    const incomingBase = incoming.style.transform || 'none'
-    const outgoingBase = outgoing.style.transform || 'none'
+    const incomingBase = incomingPlane.style.transform || 'none'
+    const outgoingBase = outgoingPlane.style.transform || 'none'
     const base = (transform: string) => transform === 'none' ? '' : `${transform} `
     const side = direction === 'r' ? -1 : 1
     const startTransform = effect === 'ferris'
@@ -461,11 +519,15 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
     const transitionClass = effect === 'prism' ? 'is-prism-transition' : effect === 'flip' ? 'is-flip-transition' : effect === 'switch' ? 'is-switch-transition' : `is-${effect}-transition`
     stage.classList.add(transitionClass)
     const timing: KeyframeAnimationOptions = { duration: transition.durationMs, easing: 'ease-in-out', fill: 'both', delay: animationDelay }
-    const incomingAnimation = incoming.animate([{ transform: startTransform }, { transform: incomingBase }], timing)
-    const outgoingAnimation = outgoing.animate([{ transform: outgoingBase }, { transform: endTransform }], timing)
+    const incomingAnimation = incomingPlane.animate([{ transform: startTransform }, { transform: incomingBase }], timing)
+    const outgoingAnimation = outgoingPlane.animate([{ transform: outgoingBase }, { transform: endTransform }], timing)
+    const backgroundAnimations = separatePrismContent
+      ? [incomingBackground!.animate([{ opacity: 0 }, { opacity: 1 }], timing), outgoingBackground!.animate([{ opacity: getComputedStyle(outgoingBackground!).opacity }, { opacity: 0 }], timing)]
+      : []
     incomingAnimation.onfinish = () => {
       incomingAnimation.cancel()
       outgoingAnimation.cancel()
+      backgroundAnimations.forEach(animation => animation.cancel())
       if (slide.value?.id === activeSlide.id) {
         underlay.value?.replaceChildren()
         stage.classList.remove(transitionClass)

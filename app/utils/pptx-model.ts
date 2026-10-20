@@ -282,7 +282,6 @@ export interface PptxElement {
     flipH: boolean
     flipV: boolean
     renderMatrix?: [number, number, number, number, number, number]
-    motionParent?: {matrix: [number, number, number, number, number, number]; x: number; y: number}
     fill: string
     stroke: string
     strokePattern?: string
@@ -429,6 +428,7 @@ export interface PptxSlide {
         isContent?: boolean
         throughBlack?: boolean
         durationMs: number
+        soundActions?: Array<{type: 'end'} | {type: 'start'; url: string; loop: boolean}>
     }
 }
 
@@ -445,6 +445,7 @@ export type TextStyleAnimationValue = boolean | 'none' | 'normal' | 'sub' | 'sup
 export type AnimatedVisibility = 'visible' | 'hidden'
 
 export type AnimationOnOffProperty = 'fill.on' | 'stroke.on' | 'shadow.on'
+export type AnimationShadowOffsetProperty = 'shadow.offset.x' | 'shadow.offset.y'
 
 export type AnimatedStrokeDashStyle = 'solid' | 'dot' | 'dash' | 'dashDot' | 'lgDash' | 'lgDashDot' | 'lgDashDotDot'
 
@@ -462,11 +463,13 @@ type AnimatedImageToneProperty = 'gain' | 'blacklevel' | 'gamma'
 
 export interface PptxAnimation {
     targetId: string
+    sourceTimeNodeId?: string
     paragraphRange?: {start: number; end: number}
     characterRange?: {start: number; end: number}
     iteration?: {intervalMs: number; ranges: Array<{start: number; end: number}>; backwards?: boolean}
     effectProgress?: number
-    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'zoom' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
+    randomEffectFallback?: boolean
+    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'zoom' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'shadowOffset' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
     direction: 'in' | 'out'
     durationMs: number
     delayMs: number
@@ -474,6 +477,7 @@ export interface PptxAnimation {
     fillMode?: 'hold' | 'freeze' | 'remove'
     sequenceKey?: string
     sequenceOrder?: number
+    fillSequenceScopes?: Array<{key: string; order: number}>
     repeatCount?: number
     repeatDurationMs?: number
     autoReverse?: boolean
@@ -489,12 +493,18 @@ export interface PptxAnimation {
     slideFrom?: 'left' | 'right' | 'top' | 'bottom' | 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
     wheelSpokes?: 1 | 2 | 3 | 4 | 8
     scaleFrom?: [number, number]
+    scaleFromCurrent?: boolean
     scaleTo?: [number, number]
     scaleAxis?: 'x' | 'y'
+    scaleLayer?: 'dimensions' | 'transform'
+    scaleAdditive?: boolean
+    scaleBaseAdditive?: boolean
+    scaleMultiplicative?: boolean
     scaleKeyframes?: Array<{offset: number; value: number}>
     scaleKeyframeMode?: 'lin' | 'discrete'
     scaleAccumulate?: boolean
     rotationFrom?: number
+    rotationFromCurrent?: boolean
     rotationTo?: number
     rotationKeyframes?: Array<{offset: number; value: number}>
     rotationKeyframeMode?: 'lin' | 'discrete'
@@ -503,8 +513,13 @@ export interface PptxAnimation {
     rotationAccumulate?: boolean
     colorProperty?: 'fillcolor' | 'style.color' | 'stroke.color' | 'shadow.color'
     opacityProperty?: 'style.opacity' | 'fill.opacity' | 'stroke.opacity' | 'shadow.opacity'
+    opacityAdditive?: 'sum' | 'mult'
     colorFrom?: [number, number, number, number]
     colorTo?: [number, number, number, number]
+    colorBy?: [number, number, number, number]
+    colorFromCurrent?: boolean
+    colorKeyframes?: Array<{offset: number; value: [number, number, number, number]}>
+    colorKeyframeMode?: 'lin' | 'discrete'
     colorSpace?: 'rgb' | 'hsl'
     colorDirection?: 'cw' | 'ccw'
     fontSizeFrom?: number
@@ -518,11 +533,19 @@ export interface PptxAnimation {
     fontWeightKeyframes?: Array<{offset: number; value: number}>
     fontWeightKeyframeMode?: 'lin' | 'discrete'
     fontWeightFormulaSamples?: Array<{offset: number; value: number}>
+    fontWeightFormulaSamplesByBaseline?: Array<{baseline: number; samples: Array<{offset: number; value: number}>}>
     strokeWidthFrom?: number
     strokeWidthTo?: number
     strokeWidthKeyframes?: Array<{offset: number; value: number}>
     strokeWidthKeyframeMode?: 'lin' | 'discrete'
     strokeWidthFormulaSamples?: Array<{offset: number; value: number}>
+    shadowOffsetProperty?: AnimationShadowOffsetProperty
+    shadowOffsetFrom?: number
+    shadowOffsetTo?: number
+    shadowOffsetKeyframes?: Array<{offset: number; value: number}>
+    shadowOffsetKeyframeMode?: 'lin' | 'discrete'
+    shadowOffsetFormulaSamples?: Array<{offset: number; value: number}>
+    shadowOffsetAccumulate?: boolean
     strokeDashFrom?: AnimatedStrokeDashStyle
     strokeDashTo?: AnimatedStrokeDashStyle
     strokeDashKeyframes?: Array<{offset: number; value: AnimatedStrokeDashStyle}>
@@ -563,7 +586,9 @@ export interface PptxAnimation {
     opacityKeyframes?: Array<{offset: number; value: number}>
     opacityKeyframeMode?: 'lin' | 'discrete'
     opacityFormulaSamples?: Array<{offset: number; value: number}>
+    opacityAccumulate?: boolean
     mediaCommand?: 'play' | 'pause' | 'togglePause' | 'stop' | 'stopAudio'
+    mediaSourceUrl?: string
     mediaActionKey?: string
     mediaDurationMs?: number
     mediaSlideCount?: number
@@ -575,12 +600,16 @@ export interface PptxAnimation {
     mediaMuted?: boolean
     mediaIsNarration?: boolean
     motionCoordinateProperty?: 'ppt_x' | 'ppt_y'
+    motionCoordinateProperties?: ['ppt_x' | 'ppt_y', 'ppt_x' | 'ppt_y']
     motionPath?: Array<{x: number; y: number; distance: number}>
     motionPathLength?: number
     motionPathSamples?: Array<{progress: number; x: number; y: number}>
+    motionAdditive?: boolean
     motionAccumulate?: boolean
     acceleration?: number
     deceleration?: number
+    bounceEndRatio?: number
+    timeFilter?: TimingCurve['timeFilter']
     playbackSpeed?: number
     reversePlayback?: boolean
     timingWarp?: TimingCurve & {
@@ -590,6 +619,7 @@ export interface PptxAnimation {
         groupReversePlayback: boolean
         groupAutoReverse: boolean
         groupPlaybackDurationMs: number
+        groupPerIteration?: boolean
         childOffsetMs: number
         groupEndDelayMs: number
     }
