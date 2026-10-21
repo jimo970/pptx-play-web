@@ -597,7 +597,7 @@ export function useSlideTransition({ slide, shell, incomingHost, underlay, flash
     const { width, height } = incoming.getBoundingClientRect()
     const progressValues = [0, 0.25, 0.5, 0.75, 1]
     frames = progressValues.map((progress, index) => ({
-      clipPath: dissolveClipPath(width, height, progress),
+      clipPath: dissolveClipPath(width, height, progress, activeSlide.id, 16),
       offset: index / (progressValues.length - 1),
     }))
   } else if (effect === 'comb') {

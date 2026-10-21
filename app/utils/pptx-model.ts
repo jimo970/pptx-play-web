@@ -469,7 +469,7 @@ export interface PptxAnimation {
     iteration?: {intervalMs: number; ranges: Array<{start: number; end: number}>; backwards?: boolean}
     effectProgress?: number
     randomEffectFallback?: boolean
-    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'slide' | 'zoom' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'shadowOffset' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
+    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'wedge' | 'slide' | 'zoom' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'shadowOffset' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
     direction: 'in' | 'out'
     durationMs: number
     delayMs: number

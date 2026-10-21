@@ -5873,7 +5873,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             }
             // p:iterate applies child animation behavior to each letter or word.
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.iterate.type?view=openxml-3.0.1
-            if (!['appear', 'fade', 'blinds', 'checker', 'dissolve', 'wheel', 'randomBars', 'shape', 'barn', 'wipe', 'slide', 'strips', 'scale', 'zoom', 'rotation', 'motion', 'fontSize', 'fontWeight', 'textStyle', 'opacity', 'shadowOffset', 'visibility'].includes(action.effect) && !(action.effect === 'color' && ['style.color', 'shadow.color'].includes(action.colorProperty || ''))) {
+            if (!['appear', 'fade', 'blinds', 'checker', 'dissolve', 'wheel', 'wedge', 'randomBars', 'shape', 'barn', 'wipe', 'slide', 'strips', 'scale', 'zoom', 'rotation', 'motion', 'fontSize', 'fontWeight', 'textStyle', 'opacity', 'shadowOffset', 'visibility'].includes(action.effect) && !(action.effect === 'color' && ['style.color', 'shadow.color'].includes(action.colorProperty || ''))) {
                 warnings.add(action.effect === 'color'
                     ? `Text iteration for ${action.colorProperty || 'color'} animation is not rendered yet.`
                     : `Text iteration for ${action.effect} animation is not rendered yet.`)
@@ -6257,7 +6257,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                     paragraphRange: animationTarget.paragraphRange,
                     characterRange: animationTarget.characterRange,
                     effectProgress,
-                    effect: fadeFallback || presetFade ? 'fade' : presetZoomDirection ? 'zoom' : wheel || wedge || presetWheel || presetWedge ? 'wheel' : slide || presetFlyDirection || presetPeekDirection ? 'slide' : strips || presetStrips ? 'strips' : barn || presetSplit ? 'barn' : dissolve || presetDissolve ? 'dissolve' : shapeFilter || presetShape ? 'shape' : randomBar || presetRandomBar ? 'randomBars' : checker || presetChecker ? 'checker' : blinds || presetBlinds ? 'blinds' : wipe || presetWipe ? 'wipe' : filter === 'fade' ? 'fade' : 'appear',
+                    effect: fadeFallback || presetFade ? 'fade' : presetZoomDirection ? 'zoom' : wedge || presetWedge ? 'wedge' : wheel || presetWheel ? 'wheel' : slide || presetFlyDirection || presetPeekDirection ? 'slide' : strips || presetStrips ? 'strips' : barn || presetSplit ? 'barn' : dissolve || presetDissolve ? 'dissolve' : shapeFilter || presetShape ? 'shape' : randomBar || presetRandomBar ? 'randomBars' : checker || presetChecker ? 'checker' : blinds || presetBlinds ? 'blinds' : wipe || presetWipe ? 'wipe' : filter === 'fade' ? 'fade' : 'appear',
                     direction: presetZoomDirection || normalizedTransition as 'in' | 'out',
                     scaleFrom: presetZoomDirection === 'in' ? [0, 0] : presetZoomDirection === 'out' ? [1, 1] : undefined,
                     scaleTo: presetZoomDirection === 'in' ? [1, 1] : presetZoomDirection === 'out' ? [0, 0] : undefined,
@@ -6274,7 +6274,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                     shapeFilter: (shapeFilter?.[1] as PptxAnimation['shapeFilter'] | undefined) ?? presetShape,
                     shapeDirection: (shapeFilter?.[2] as PptxAnimation['shapeDirection'] | undefined) ?? presetShapeDirection,
                     slideFrom: (slide?.[1]?.toLowerCase() as PptxAnimation['slideFrom'] | undefined) || presetFlyDirection || presetPeekDirection,
-                    wheelSpokes: wheel ? (Number(wheel[1]) as PptxAnimation['wheelSpokes']) : wedge || presetWedge ? 1 : presetWheelSpokes
+                    wheelSpokes: wheel ? (Number(wheel[1]) as PptxAnimation['wheelSpokes']) : presetWheelSpokes
                 })
                 handledEffects.add(effect)
             } else {
@@ -6310,20 +6310,16 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 handledScales.add(animation)
                 continue
             }
-            // Office starts to-only scale animations at (0, 0), while by-only starts at (1, 1).
+            // OOXML's raw to-only scale default is (0, 0), while by-only starts at (1, 1).
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/358c6de3-2cd7-459b-8eb9-b90f3721fd12
             const explicitFrom = fromNode ? pair(fromNode) : undefined
             const explicitTo = toNode ? pair(toNode) : undefined
             const scaleFrom = explicitFrom ?? (explicitTo ? ([0, 0] as [number, number]) : ([1, 1] as [number, number]))
-            // A previously held scale becomes the base value for a later base-additive to-only track.
-            const scaleFromCurrent = !explicitFrom && Boolean(explicitTo) && (scaleAdditive === null || scaleAdditive === 'base')
-                && [...actions.values()].some(action => ['scale', 'zoom'].includes(action.effect)
-                    && action.targetId === animationTarget.targetId
-                    && action.scaleLayer === undefined
-                    && (!action.paragraphRange || !animationTarget.paragraphRange
-                        || action.paragraphRange.start <= animationTarget.paragraphRange.end && animationTarget.paragraphRange.start <= action.paragraphRange.end)
-                    && (!action.characterRange || !animationTarget.characterRange
-                        || action.characterRange.start < animationTarget.characterRange.end && animationTarget.characterRange.start < action.characterRange.end))
+            // Keep the OOXML default (0, 0) as the raw from-value, but compose a base-additive
+            // to-only scale track from the currently rendered scale, including its first track.
+            // Native PowerPoint/WPS playback starts the Bounce landing from the shape's existing size.
+            const iteratedTextScale = ['lt', 'wd'].includes(iterate?.getAttribute('type') || '') && Boolean(element.paragraphs.length)
+            const scaleFromCurrent = iteratedTextScale && !explicitFrom && Boolean(explicitTo) && (scaleAdditive === null || scaleAdditive === 'base')
             const by = byNode ? pair(byNode) : undefined
             const scaleTo = explicitTo ?? (by ? ([scaleFrom[0] * by[0], scaleFrom[1] * by[1]] as [number, number]) : undefined)
             // MS-OI29500 permits scale percentages up to 2,147,483,625 thousandths.
@@ -8177,16 +8173,34 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                             first = point(...control1),
                             second = point(...control2),
                             to = point(...end)
-                        // ponytail: 32 samples per cubic bound per-frame lookup size; increase or make adaptive if subpixel pacing error appears in calibrated decks.
-                        for (let step = 1; step <= 32; step++) {
-                            const t = step / 32,
-                                inverse = 1 - t
-                            const x = inverse ** 3 * from[0] + 3 * inverse ** 2 * t * first[0] + 3 * inverse * t ** 2 * second[0] + t ** 3 * to[0]
-                            const y = inverse ** 3 * from[1] + 3 * inverse ** 2 * t * first[1] + 3 * inverse * t ** 2 * second[1] + t ** 3 * to[1]
-                            const previous = pathPoints.at(-1)
-                            if (previous) distance += Math.hypot(x - previous.x, y - previous.y)
-                            pathPoints.push({x, y, distance})
+                        const curveTolerance = Math.max(slideWidth, slideHeight) / 10_000
+                        const appendCurve = (p0: [number, number], p1: [number, number], p2: [number, number], p3: [number, number], depth = 0) => {
+                            const chord = Math.hypot(p3[0] - p0[0], p3[1] - p0[1])
+                            const controlLength = Math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+                                + Math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+                                + Math.hypot(p3[0] - p2[0], p3[1] - p2[1])
+                            const controlDeviation = chord > 0
+                                ? Math.max(
+                                    Math.abs((p3[0] - p0[0]) * (p0[1] - p1[1]) - (p0[0] - p1[0]) * (p3[1] - p0[1])) / chord,
+                                    Math.abs((p3[0] - p0[0]) * (p0[1] - p2[1]) - (p0[0] - p2[0]) * (p3[1] - p0[1])) / chord
+                                )
+                                : Math.max(Math.hypot(p1[0] - p0[0], p1[1] - p0[1]), Math.hypot(p2[0] - p0[0], p2[1] - p0[1]))
+                            if (depth >= 7 || (controlDeviation <= curveTolerance && controlLength - chord <= curveTolerance)) {
+                                if (depth >= 7 && (controlDeviation > curveTolerance || controlLength - chord > curveTolerance)) {
+                                    warnings.add('A high-curvature motion path reached its adaptive sampling limit.')
+                                }
+                                const previous = pathPoints.at(-1)
+                                if (previous) distance += Math.hypot(p3[0] - previous.x, p3[1] - previous.y)
+                                pathPoints.push({x: p3[0], y: p3[1], distance})
+                                return
+                            }
+                            const midpoint = (a: [number, number], b: [number, number]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+                            const p01 = midpoint(p0, p1), p12 = midpoint(p1, p2), p23 = midpoint(p2, p3)
+                            const p012 = midpoint(p01, p12), p123 = midpoint(p12, p23), split = midpoint(p012, p123)
+                            appendCurve(p0, p01, p012, split, depth + 1)
+                            appendCurve(split, p123, p23, p3, depth + 1)
                         }
+                        appendCurve(from, first, second, to)
                         current = end
                         drawingSegments++
                     } else if (action.toLowerCase() === 'z') {

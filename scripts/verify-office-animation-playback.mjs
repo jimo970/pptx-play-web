@@ -17,7 +17,20 @@ await mkdir(outputRoot, { recursive: true })
 const fixtureDirectory = dirname(fixture)
 const metadataFile = existsSync(join(fixtureDirectory, 'fixture-metadata.json')) ? 'fixture-metadata.json' : 'metadata.json'
 const metadata = JSON.parse(await readFile(join(fixtureDirectory, metadataFile), 'utf8'))
-assert.ok(['Motion', 'Iterated', 'Word', 'CommonPresets', 'Emphasis'].includes(metadata.Suite), 'Generate a supported suite with create-office-animation-fixture.ps1.')
+assert.ok(['Motion', 'Iterated', 'Word', 'CommonPresets', 'Emphasis', 'Transitions'].includes(metadata.Suite), 'Generate a supported suite with create-office-animation-fixture.ps1.')
+const bounceOnly = process.env.DECKLINE_VERIFY_BOUNCE_ONLY === '1'
+assert.ok(!bounceOnly || metadata.Suite === 'Motion', 'The Bounce-only verification requires a Motion-suite fixture.')
+const requestedMotionPathTimes = process.env.DECKLINE_VERIFY_MOTION_PATH_TIMES_MS
+  ?.split(',')
+  .map(value => Number(value.trim()))
+assert.ok(!requestedMotionPathTimes || requestedMotionPathTimes.length > 0 && requestedMotionPathTimes.every(value => Number.isInteger(value) && value >= 0), 'Motion path probe times must be non-negative integers separated by commas.')
+const motionPathProbeTimes = requestedMotionPathTimes || [500, 1000, 1500, 2000]
+const requestedTransitionTimes = process.env.DECKLINE_VERIFY_TRANSITION_TIMES_MS
+  ?.split(',')
+  .map(value => Number(value.trim()))
+assert.ok(!requestedTransitionTimes || requestedTransitionTimes.length > 0 && requestedTransitionTimes.every(value => Number.isInteger(value) && value >= 0), 'Transition probe times must be non-negative integers separated by commas.')
+const transitionProbeTimes = requestedTransitionTimes || [0]
+const requestedCaseName = process.env.DECKLINE_VERIFY_CASE_NAME
 const runtimeProcess = metadata.NativeProcesses?.find(process => process.Path?.toLowerCase().startsWith(metadata.ApplicationPath?.toLowerCase()))
 const nativeRuntime = runtimeProcess ? {company: runtimeProcess.Company, productVersion: runtimeProcess.ProductVersion, executable: runtimeProcess.Path} : null
 const isWpsRuntime = /kingsoft|wps/i.test([runtimeProcess?.Company, runtimeProcess?.Path].filter(Boolean).join(' '))
@@ -26,6 +39,109 @@ const zip = await JSZip.loadAsync(fixtureBytes)
 const parse = source => new DOMParser().parseFromString(source, 'text/xml')
 const descendants = (node, name) => [...node.getElementsByTagName('*')].filter(element => element.localName === name)
 const filterPoints = raw => raw.split(';').map(pair => pair.split(',').map(Number))
+const clipPathPoints = path => {
+  const values = path?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || []
+  return Array.from({length: Math.floor(values.length / 2)}, (_, index) => [values[index * 2], values[index * 2 + 1]])
+}
+function pointInPolygon([x, y], points) {
+  let inside = false
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+    const [currentX, currentY] = points[index]
+    const [previousX, previousY] = points[previous]
+    if ((currentY > y) !== (previousY > y) && x < (previousX - currentX) * (y - currentY) / (previousY - currentY) + currentX) inside = !inside
+  }
+  return inside
+}
+function motionPathPosition(path, slideWidth, slideHeight, progress) {
+  const tokens = path.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?|[MLCZE]/gi) || []
+  const numberPattern = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i
+  const points = []
+  const scale = ([x, y]) => [x * slideWidth, y * slideHeight]
+  let cursor = 0
+  let current = [0, 0]
+  let pathStart
+  let distance = 0
+  const append = (point, snap = false) => {
+    const [x, y] = point
+    const previous = points.at(-1)
+    if (previous && !snap) distance += Math.hypot(x - previous.x, y - previous.y)
+    points.push({x, y, distance})
+  }
+  const readPoint = () => {
+    const x = tokens[cursor++], y = tokens[cursor++]
+    if (!numberPattern.test(x || '') || !numberPattern.test(y || '')) throw new Error(`Invalid native motion-path coordinate in ${path}`)
+    return [Number(x), Number(y)]
+  }
+  while (cursor < tokens.length) {
+    const action = tokens[cursor++]
+    const normalized = action.toUpperCase()
+    if (normalized === 'E') break
+    if (normalized === 'M') {
+      const coordinates = readPoint()
+      current = action === normalized ? coordinates : [current[0] + coordinates[0], current[1] + coordinates[1]]
+      pathStart = [...current]
+      append(scale(current), true)
+      continue
+    }
+    if (normalized === 'L') {
+      const coordinates = readPoint()
+      current = action === normalized ? coordinates : [current[0] + coordinates[0], current[1] + coordinates[1]]
+      append(scale(current))
+      continue
+    }
+    if (normalized === 'C') {
+      const control1Input = readPoint(), control2Input = readPoint(), endInput = readPoint()
+      const relative = action !== normalized
+      const control1 = relative ? [current[0] + control1Input[0], current[1] + control1Input[1]] : control1Input
+      const control2 = relative ? [current[0] + control2Input[0], current[1] + control2Input[1]] : control2Input
+      const end = relative ? [current[0] + endInput[0], current[1] + endInput[1]] : endInput
+      const from = scale(current), first = scale(control1), second = scale(control2), to = scale(end)
+      for (let step = 1; step <= 4096; step++) {
+        const t = step / 4096, inverse = 1 - t
+        append([
+          inverse ** 3 * from[0] + 3 * inverse ** 2 * t * first[0] + 3 * inverse * t ** 2 * second[0] + t ** 3 * to[0],
+          inverse ** 3 * from[1] + 3 * inverse ** 2 * t * first[1] + 3 * inverse * t ** 2 * second[1] + t ** 3 * to[1]
+        ])
+      }
+      current = end
+      continue
+    }
+    if (normalized === 'Z') {
+      if (!pathStart) throw new Error(`Native motion path closes before its first move: ${path}`)
+      current = [...pathStart]
+      append(scale(current))
+      continue
+    }
+    throw new Error(`Unsupported native motion-path command ${action} in ${path}`)
+  }
+  assert.ok(points.length > 0 && distance > 0, `Native motion path must have measurable travel: ${path}`)
+  const targetDistance = distance * progress
+  const right = points.findIndex(point => point.distance >= targetDistance)
+  if (right <= 0) return {x: points[0].x / slideWidth, y: points[0].y / slideHeight}
+  const before = points[right - 1], after = points[right]
+  const ratio = after.distance > before.distance ? (targetDistance - before.distance) / (after.distance - before.distance) : 0
+  return {
+    x: (before.x + (after.x - before.x) * ratio) / slideWidth,
+    y: (before.y + (after.y - before.y) * ratio) / slideHeight
+  }
+}
+function motionPathProgress(reference, progress) {
+  const accelerationProgress = (curve, input) => {
+    const acceleration = curve.acceleration || 0
+    const deceleration = curve.deceleration || 0
+    const area = 1 - (acceleration + deceleration) / 2
+    if (acceleration && input < acceleration) return input ** 2 / (2 * acceleration * area)
+    if (deceleration && input > 1 - deceleration) {
+      const tail = input - (1 - deceleration)
+      return (1 - deceleration - acceleration / 2 + tail - tail ** 2 / (2 * deceleration)) / area
+    }
+    return (acceleration / 2 + input - acceleration) / area
+  }
+  return reference.timingCurves.reduce((mapped, curve) => {
+    const accelerated = accelerationProgress(curve, mapped)
+    return curve.filter ? filteredProgress(curve.filter, accelerated) : accelerated
+  }, progress)
+}
 let accent2Rgb
 const themePath = Object.keys(zip.files).find(path => /^ppt\/theme\/theme\d+\.xml$/i.test(path))
 if (themePath) {
@@ -35,6 +151,7 @@ if (themePath) {
   if (color && /^[0-9a-f]{6}$/i.test(color)) accent2Rgb = color.match(/.{2}/g).map(channel => parseInt(channel, 16))
 }
 const presentation = parse(await zip.file('ppt/presentation.xml').async('string'))
+const slideWidth = Number(descendants(presentation, 'sldSz')[0].getAttribute('cx'))
 const slideHeight = Number(descendants(presentation, 'sldSz')[0].getAttribute('cy'))
 const cases = new Map()
 for (const [index, item] of metadata.Cases.entries()) {
@@ -43,8 +160,42 @@ for (const [index, item] of metadata.Cases.entries()) {
   const shapeName = descendants(doc, 'cNvPr').map(node => node.getAttribute('name')).find(Boolean)
   const shape = descendants(doc, 'sp').find(node => descendants(node, 'cNvPr').some(property => property.getAttribute('name') === shapeName))
   const offset = shape && descendants(shape, 'off')[0]
+  const extent = shape && descendants(shape, 'ext')[0]
   assert.ok(offset, `${item.Name} must have a shape position in the native fixture`)
   const effectFilter = descendants(doc, 'animEffect')[0]?.getAttribute('filter')
+  let motionPathReference
+  if (item.Name.startsWith('Path')) {
+    const motion = descendants(doc, 'animMotion')[0]
+    const timing = motion && descendants(motion, 'cTn')[0]
+    const parseTimingCurve = clock => ({
+      acceleration: Number(clock.getAttribute('accel') || 0) / 100_000,
+      deceleration: Number(clock.getAttribute('decel') || 0) / 100_000,
+      filter: clock.getAttribute('tmFilter') ? filterPoints(clock.getAttribute('tmFilter')) : undefined
+    })
+    const parentTimingNodes = []
+    for (let parent = motion?.parentElement; parent; parent = parent.parentElement) {
+      if (parent.namespaceURI === 'http://schemas.openxmlformats.org/presentationml/2006/main' && parent.localName === 'cTn') parentTimingNodes.push(parent)
+    }
+    const timingCurves = [...parentTimingNodes.reverse(), ...(timing ? [timing] : [])]
+      .filter(clock => ['accel', 'decel', 'tmFilter'].some(attribute => clock.hasAttribute(attribute)))
+      .map(parseTimingCurve)
+    const expectedPathEditMode = item.Relative === false ? 'fixed' : 'relative'
+    assert.ok(motion?.getAttribute('path'), `${item.Name} must export a native p:animMotion path`)
+    assert.equal(motion.getAttribute('origin'), 'layout', `${item.Name} must retain the WPS layout origin`)
+    assert.equal(motion.getAttribute('pathEditMode'), expectedPathEditMode, `${item.Name} must preserve its WPS relative/absolute path mode`)
+    assert.equal(Number(timing?.getAttribute('dur')), 2000, `${item.Name} must preserve its two-second native path duration`)
+    assert.ok(extent, `${item.Name} must retain its native shape dimensions`)
+    motionPathReference = {
+      path: motion.getAttribute('path'),
+      pathEditMode: expectedPathEditMode,
+      durationMs: Number(timing.getAttribute('dur')),
+      timingCurves,
+      shapeCenter: {
+        x: (Number(offset.getAttribute('x')) + Number(extent.getAttribute('cx')) / 2) / slideWidth,
+        y: (Number(offset.getAttribute('y')) + Number(extent.getAttribute('cy')) / 2) / slideHeight
+      }
+    }
+  }
   let peekReference
   let scaleTiming
   if (item.Name === 'FlashBulb') {
@@ -89,7 +240,7 @@ for (const [index, item] of metadata.Cases.entries()) {
   const iterated = descendants(doc, 'iterate').length > 0
   const iterationType = descendants(doc, 'iterate')[0]?.getAttribute('type')
   const expectedIterated = item.ByWord === true || item.ByCharacter !== false
-  if (!['CommonPresets', 'Emphasis'].includes(metadata.Suite)) assert.equal(iterated, expectedIterated, `${item.Name} must preserve the requested text-unit animation`)
+  if (!['CommonPresets', 'Emphasis', 'Transitions'].includes(metadata.Suite)) assert.equal(iterated, expectedIterated, `${item.Name} must preserve the requested text-unit animation`)
   if (iterated) assert.equal(iterationType, item.ByWord ? 'wd' : 'lt', `${item.Name} must preserve its character or word iteration type`)
   let rotationStartDegrees
   if (item.Name === 'Swish') {
@@ -128,7 +279,13 @@ for (const [index, item] of metadata.Cases.entries()) {
   let iterationIntervalMs
   let childStyleDelayMs
   if (iterated && ['Iterated', 'Word'].includes(metadata.Suite)) {
-    const timing = descendants(doc, 'cTn').find(node => node.hasAttribute('dur') && Number.isFinite(Number(node.getAttribute('dur'))))
+    // PowerPoint may place a 1ms cTn on the click group before the effect's own clock.
+    // Derive the reference duration from the actual visual behavior, not an ancestor clock.
+    const textUnitAnimation = ['animEffect', 'animClr', 'animScale', 'animRot', 'animMotion', 'anim']
+      .map(name => descendants(doc, name)[0])
+      .find(Boolean)
+    const timing = textUnitAnimation && descendants(textUnitAnimation, 'cTn').find(node =>
+      node.hasAttribute('dur') && Number.isFinite(Number(node.getAttribute('dur'))) && Number(node.getAttribute('dur')) > 0)
     const interval = descendants(doc, 'iterate').flatMap(node => descendants(node, 'tmPct'))[0]
     effectDurationMs = Number(timing?.getAttribute('dur'))
     iterationIntervalMs = effectDurationMs * Number(interval?.getAttribute('val')) / 100000
@@ -163,7 +320,7 @@ for (const [index, item] of metadata.Cases.entries()) {
       && colorDurationMs === effectDurationMs && fillDurationMs > 0 && iterationIntervalMs > 0,
       'GrowWithColor must retain its childStyle, fill-color, and iterated timing tracks')
   }
-  if (isWpsRuntime && item.Name === 'Bounce') {
+  if (metadata.Suite === 'Motion' && item.Name === 'Bounce') {
     const coordinates = descendants(doc, 'anim').map(animation => {
       const clock = descendants(animation, 'cTn')[0]
       const values = descendants(animation, 'tav')
@@ -184,18 +341,21 @@ for (const [index, item] of metadata.Cases.entries()) {
       track.divisor = Number(track.formula.split('/').at(-1))
       assert.ok(track.input.every(Number.isFinite) && track.duration > 0, 'Bounce reference inputs must be finite')
     }
-    const scales = descendants(doc, 'animScale').map((animation, index) => {
+    const scales = descendants(doc, 'animScale').map(animation => {
       const clock = descendants(animation, 'cTn')[0]
       const destination = descendants(animation, 'to')[0]
+      const additive = descendants(animation, 'cBhvr')[0]?.getAttribute('additive')
       assert.equal(descendants(animation, 'from').length, 0, 'This reference uses documented to-only scale behavior')
+      assert.ok(additive === null || additive === 'base', 'The native Bounce scale tracks must use base-additive composition')
       return {
         duration: Number(clock.getAttribute('dur')), delay: Number(descendants(clock, 'cond')[0]?.getAttribute('delay') || 0),
         deceleration: Number(clock.getAttribute('decel') || 0) / 100000,
         to: ['x', 'y'].map(axis => Number(destination.getAttribute(axis)) / 100000),
-        fromCurrent: index > 0
+        fromCurrent: true
       }
     })
     assert.equal(scales.length, 8, 'The native Bounce reference must preserve all eight landing scale tracks')
+    assert.ok(scales.every(track => track.fromCurrent), 'Every native base-additive to-only Bounce scale track must start from the currently rendered shape scale')
     const preset = descendants(doc, 'cTn').find(node => node.getAttribute('nodeType') === 'clickEffect')
     const iterationNode = descendants(preset, 'iterate')[0]
     const intervalNode = descendants(iterationNode, 'tmPct')[0]
@@ -221,7 +381,7 @@ for (const [index, item] of metadata.Cases.entries()) {
   const fontStyleTo = fontStyleSet && descendants(fontStyleSet, 'strVal')[0]?.getAttribute('val')
   const fontWeightSet = descendants(doc, 'set').find(node => descendants(node, 'attrName')[0]?.textContent === 'style.fontWeight')
   const fontWeightTo = fontWeightSet && descendants(fontWeightSet, 'strVal')[0]?.getAttribute('val')
-  cases.set(item.Name, { slide: index + 1, shapeName, y: Number(offset.getAttribute('y')), effectFilter, iterated, randomEffectPlaceholder, bounceReference, effectDurationMs, iterationIntervalMs, childStyleDelayMs, rotationStartDegrees, rotationKeyframes, fillColorTiming, peekReference, scaleTiming, fontSizePt: Number(fontSizeNode?.getAttribute('sz')) / 100, staticTextColorRgb, fontFamilyTo, fontStyleTo, fontWeightTo })
+  cases.set(item.Name, {...item, slide: index + 1, shapeName, y: Number(offset.getAttribute('y')), effectFilter, iterated, randomEffectPlaceholder, bounceReference, motionPathReference, effectDurationMs, iterationIntervalMs, childStyleDelayMs, rotationStartDegrees, rotationKeyframes, fillColorTiming, peekReference, scaleTiming, fontSizePt: Number(fontSizeNode?.getAttribute('sz')) / 100, staticTextColorRgb, fontFamilyTo, fontStyleTo, fontWeightTo})
 }
 const motionProbes = [
   ['Fly', 500], ['Bounce', 500], ['Bounce', 658], ['Bounce', 750], ['Bounce', 1000],
@@ -229,6 +389,9 @@ const motionProbes = [
   ['Bounce', 1816], ['Bounce', 1900], ['Bounce', 2700],
   ['Spin', 500], ['GrowShrink', 500], ['GrowAndTurn', 500], ['Blast', 500], ['Blast', 2700], ['RandomEffects', 500], ['RandomEffects', 2700], ['VerticalGrow', 500], ['VerticalGrow', 4000], ['Swivel', 1200], ['Swish', 500], ['FadedSwivel', 1200],
   ['FadeExit', 500], ['ZoomExit', 500], ['FlyExit', 500],
+  ...[...cases.values()]
+    .filter(item => item.Supported !== false && item.Name.startsWith('Path'))
+    .flatMap(item => motionPathProbeTimes.map(targetMs => [item.Name, targetMs])),
   ['FadeExit', 2700], ['ZoomExit', 2700], ['FlyExit', 2700]
 ]
 const iteratedNames = ['Fade', 'Zoom', 'Checkerboard', 'Blinds', 'Dissolve', 'Wheel', 'Box', 'RandomBars', 'Strips', 'Wipe']
@@ -241,6 +404,12 @@ const commonPresetProbes = [
   ...commonPresetNames.map(name => [name, 7000]),
   ['Swish', 2700], ['Swish', 6000], ['VerticalGrow', 2700], ['VerticalGrow', 4000]
 ]
+const transitionProbes = metadata.Cases
+  .map((item, index) => ({item, slide: index + 1}))
+  .filter(({item}) => item.Supported !== false)
+  .flatMap(({item, slide}) => slide === 1
+    ? [[item.Name, 0, slide]]
+    : transitionProbeTimes.map(targetMs => [item.Name, targetMs, slide]))
 const supportedCases = metadata.Cases.filter(item => item.Supported !== false)
 const emphasisNames = supportedCases.map(item => item.Name)
 const emphasisProbes = [
@@ -249,21 +418,28 @@ const emphasisProbes = [
   ...(emphasisNames.includes('BoldFlash') ? [['BoldFlash', 1100]] : []),
   ...(emphasisNames.includes('FlashBulb') ? [['FlashBulb', 2000], ['FlashBulb', 4500]] : []),
 ]
-const probes = metadata.Suite === 'Iterated' ? iteratedProbes : metadata.Suite === 'Word' ? wordProbes : metadata.Suite === 'CommonPresets' ? commonPresetProbes : metadata.Suite === 'Emphasis' ? emphasisProbes : motionProbes
-const report = {suite: metadata.Suite, fixture: resolve(fixture), fixtureSha256: createHash('sha256').update(fixtureBytes).digest('hex'), application: metadata.ApplicationPath, nativeRuntime, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'UNSPECIFIED', clockMode: 'controlled', probes: [], unsupportedNativeCases: metadata.Cases.filter(item => item.Supported === false).map(item => ({name: item.Name, effectId: item.Id, reason: item.SupportError})), result: 'RUNNING', limitations: ['Browser playback of native-exported OOXML is checked with a controlled performance.now clock; this does not establish real-time frame cadence or native Office/WPS animation-frame pixel parity.']}
+const suiteProbes = metadata.Suite === 'Transitions' ? transitionProbes : metadata.Suite === 'Iterated' ? iteratedProbes : metadata.Suite === 'Word' ? wordProbes : metadata.Suite === 'CommonPresets' ? commonPresetProbes : metadata.Suite === 'Emphasis' ? emphasisProbes : motionProbes
+const selectedSuiteProbes = requestedCaseName ? suiteProbes.filter(([name]) => name === requestedCaseName) : suiteProbes
+assert.ok(!requestedCaseName || selectedSuiteProbes.length > 0, `No ${metadata.Suite} probes matched DECKLINE_VERIFY_CASE_NAME=${requestedCaseName}.`)
+const probes = bounceOnly ? selectedSuiteProbes.filter(([name]) => name === 'Bounce') : selectedSuiteProbes
+const report = {suite: metadata.Suite, fixture: resolve(fixture), fixtureSha256: createHash('sha256').update(fixtureBytes).digest('hex'), application: metadata.ApplicationPath, nativeRuntime, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'UNSPECIFIED', clockMode: 'controlled', probes: [], unsupportedNativeCases: metadata.Cases.filter(item => item.Supported === false).map(item => ({name: item.Name, effectId: item.Id ?? item.EntryEffect, reason: item.SupportError})), result: 'RUNNING', limitations: [metadata.Suite === 'Transitions' ? 'Transition samples seek WAAPI currentTime after explicit navigation from the preceding slide; they verify browser keyframe interpolation, not native Office/WPS frame cadence or native pixel parity.' : 'Browser playback of native-exported OOXML is checked with a controlled performance.now clock; this does not establish real-time frame cadence or native Office/WPS animation-frame pixel parity.']}
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const captureEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('DECKLINE_VERIFY_')))
 const randomEffectMidStates = new Map()
 
 async function capture(name, elapsedMs, item) {
   const imagePath = join(outputRoot, `${name.toLowerCase()}-${elapsedMs}.png`)
+  const isTransition = metadata.Suite === 'Transitions'
+  const transitionStartsOnClick = isTransition && item.slide > 1
+  const captureSlideNumber = transitionStartsOnClick ? item.slide - 1 : item.slide
+  const animationClock = 'controlled'
   const attempts = []
   let result
   for (let attempt = 0; attempt < 3; attempt++) {
     result = await new Promise((resolveResult, reject) => {
       const child = spawn(process.execPath, [join(projectRoot, 'scripts/verify-animation.mjs')], {
         cwd: projectRoot,
-        env: {...captureEnvironment, DECKLINE_INPUT_PPTX: resolve(fixture), DECKLINE_CAPTURE_ONLY: '1', DECKLINE_CAPTURE_SLIDE_NUMBER: String(item.slide), DECKLINE_CAPTURE_ANIMATION_MS: String(elapsedMs), DECKLINE_CAPTURE_ANIMATION_CLOCK: 'controlled', DECKLINE_CAPTURE_SLIDE_PATH: imagePath},
+        env: {...captureEnvironment, DECKLINE_INPUT_PPTX: resolve(fixture), DECKLINE_CAPTURE_ONLY: '1', DECKLINE_CAPTURE_SLIDE_NUMBER: String(captureSlideNumber), DECKLINE_CAPTURE_ANIMATION_MS: String(elapsedMs), DECKLINE_CAPTURE_ANIMATION_CLOCK: animationClock, ...(transitionStartsOnClick ? {DECKLINE_CAPTURE_START_ANIMATION: '1', DECKLINE_CAPTURE_ADVANCE_SLIDE: '1', DECKLINE_CAPTURE_WAIT_FOR_TRANSITION: '1', DECKLINE_CAPTURE_SEEK_TRANSITION_MS: String(elapsedMs)} : {}), DECKLINE_CAPTURE_SLIDE_PATH: imagePath},
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
       })
@@ -329,16 +505,104 @@ function bounceAt(reference, elapsedMs) {
 }
 
 try {
-  for (const [name, targetMs] of probes) {
+  for (const [name, targetMs, transitionSlide] of probes) {
     const item = cases.get(name)
     assert.ok(item, `Missing native case ${name}`)
     const captureResult = await capture(name, targetMs, item)
     const frame = captureResult.frameRect
     const state = captureResult.captureAnimation
+    if (metadata.Suite === 'Transitions' && transitionSlide > 1) {
+      const elementNames = state.elements.map(element => element.name)
+      assert.ok(elementNames.includes(item.shapeName), `${name} must sample the target slide content: ${JSON.stringify({slide: captureResult.slide, expected: item.shapeName, actual: elementNames})}`)
+    }
     assert.equal(state.clockMode, 'controlled', 'Short landing tracks require the controlled capture clock')
     close(state.elapsedMs, targetMs, 0.001, 'The rendered checkpoint must use the requested clock value')
+    if (metadata.Suite === 'Transitions') {
+      const transition = captureResult.transition
+      const effectForElement = {
+        fade: 'fade', dissolve: 'dissolve', wipe: 'wipe', zoom: 'zoom', checker: 'checker', cover: 'cover', pull: 'pull', push: 'push',
+        split: 'split', circle: 'circle', diamond: 'diamond', plus: 'plus', wedge: 'wedge', blinds: 'blinds', comb: 'comb', randomBar: 'randomBar',
+        wheel: 'wheel', strips: 'strips', doors: 'doors', window: 'window', honeycomb: 'honeycomb', flythrough: 'flythrough', conveyor: 'conveyor'
+      }
+      const expectedEffect = effectForElement[item.ExportedEffect]
+      assert.ok(expectedEffect, `${name} has an unrecognized exported transition element: ${item.ExportedEffect}`)
+      assert.equal(transition?.effect, expectedEffect, `${name} must parse to the exported ${expectedEffect} transition`)
+      const transitionXml = Array.isArray(item.ExportedTransitionXml) ? item.ExportedTransitionXml[0] : item.ExportedTransitionXml
+      assert.ok(transitionXml, `${name} must retain exported transition XML in fixture metadata`)
+      const transitionNode = parse(transitionXml).documentElement
+      const rawDuration = transitionNode.getAttributeNS('http://schemas.microsoft.com/office/powerpoint/2010/main', 'dur')
+        || transitionNode.getAttribute('p14:dur')
+      const explicitDuration = /^(\d+(?:\.\d+)?)(ms|s)?$/i.exec(rawDuration || '')
+      const speed = transitionNode.getAttribute('spd') || 'fast'
+      const expectedDurationMs = explicitDuration
+        ? Number(explicitDuration[1]) * (explicitDuration[2]?.toLowerCase() === 's' ? 1000 : 1)
+        : ({fast: 500, med: 750, slow: 1000}[speed] || 500)
+      if (transitionSlide === 1) {
+        report.probes.push({name, slide: transitionSlide, effect: transition.effect, expectedDurationMs, runtime: 'initial slide parsed; no incoming transition is played on startup', result: 'PASS', evidence: `${name.toLowerCase()}-0.png.json`})
+        console.log(`${name} parsed on the initial slide; startup has no incoming transition.`)
+        await writeFile(join(outputRoot, 'playback-verification.json'), JSON.stringify(report, null, 2))
+        continue
+      }
+      const incoming = transition?.incoming
+      const outgoing = transition?.outgoing
+      const durationMs = incoming?.duration ?? outgoing?.duration
+      assert.equal(durationMs, expectedDurationMs, `${name} must preserve the exported transition duration`)
+      const hasEffectTrack = [incoming?.keyframes, incoming?.opacityKeyframes, incoming?.clipKeyframes, outgoing?.keyframes, outgoing?.opacityKeyframes, outgoing?.clipKeyframes]
+        .some(keyframes => Array.isArray(keyframes) && keyframes.length > 1)
+      assert.ok(hasEffectTrack, `${name} must create a live incoming or outgoing Web Animation track`)
+      assert.ok(!captureResult.warnings.some(warning => /falls back to fade|unsupported .* transition|unsupported transition/i.test(warning)), `${name} must not degrade to a fallback transition`)
+      const currentTimeMs = incoming?.currentTime ?? outgoing?.currentTime
+      assert.ok(Number.isFinite(currentTimeMs), `${name} must expose its live transition animation time`)
+      if (targetMs > 0 && targetMs < durationMs) close(currentTimeMs, targetMs, 1, `${name} sought WAAPI currentTime`)
+      if (name === 'StripsDownLeft' && targetMs > 0 && targetMs < durationMs) {
+        assert.ok(incoming?.clipPath && incoming.clipPath !== incoming.clipKeyframes?.[0],
+          `StripsDownLeft must render an intermediate strip mask at ${targetMs}ms: ${JSON.stringify(incoming)}`)
+      }
+      report.probes.push({name, slide: transitionSlide, targetMs, effect: transition.effect, durationMs, currentTimeMs, clipPath: incoming?.clipPath, result: 'PASS', evidence: `${name.toLowerCase()}-${targetMs}.png.json`})
+      console.log(`${name} on slide ${transitionSlide} passed at ${Math.round(currentTimeMs)}ms of ${durationMs}ms.`)
+      await writeFile(join(outputRoot, 'playback-verification.json'), JSON.stringify(report, null, 2))
+      continue
+    }
     const target = item.iterated ? state.runs[0] : state.elements.find(element => element.name === item.shapeName)
     assert.ok(target && frame?.height > 0, `Missing rendered target for ${name}`)
+    let motionPathCheck
+    if (item.motionPathReference) {
+      const linearProgress = targetMs / item.motionPathReference.durationMs
+      const progress = motionPathProgress(item.motionPathReference, linearProgress)
+      const expected = motionPathPosition(item.motionPathReference.path, slideWidth, slideHeight, progress)
+      const expectedOffset = item.motionPathReference.pathEditMode === 'fixed'
+        ? [expected.x - item.motionPathReference.shapeCenter.x, expected.y - item.motionPathReference.shapeCenter.y]
+        : [expected.x, expected.y]
+      const expectedTranslation = [expectedOffset[0] * frame.width, expectedOffset[1] * frame.height]
+      const actualTranslation = [target.matrix[4], target.matrix[5]]
+      close(actualTranslation[0], expectedTranslation[0], 1.5, `${name} WPS path horizontal position at ${targetMs}ms`)
+      close(actualTranslation[1], expectedTranslation[1], 1.5, `${name} WPS path vertical position at ${targetMs}ms`)
+      assert.ok(!captureResult.warnings.some(warning => /motion path.*(skipped|unsupported)|unsupported.*motion path/i.test(warning)), `${name} must render the exported WPS path without fallback warnings`)
+      motionPathCheck = {pathEditMode: item.motionPathReference.pathEditMode, linearProgress, effectiveProgress: progress, expectedTranslationPx: expectedTranslation, actualTranslationPx: actualTranslation}
+    }
+    if (metadata.Suite === 'CommonPresets' && name === 'Wedge') {
+      assert.equal(item.effectFilter, 'wedge', 'The native WPS Wedge preset must export the wedge transition filter')
+      assert.ok(!captureResult.warnings.some(warning => /unsupported object-effect filter|approximated as a fade/.test(warning)), 'The native WPS Wedge preset must render without an unsupported-filter fallback')
+      const points = clipPathPoints(target.clipPath)
+      assert.ok(points.length >= 4, `The native WPS Wedge preset must produce a polygon clip path: ${JSON.stringify(target)}`)
+      if (targetMs < 2000) {
+        const [center, firstRadialPoint, lastRadialPoint] = [points[0], points[1], points.at(-1)]
+        const angle = ([x, y]) => (Math.atan2(y - center[1], x - center[0]) * 180 / Math.PI + 360) % 360
+        const startAngle = angle(firstRadialPoint)
+        const endAngle = angle(lastRadialPoint)
+        const sweep = (endAngle - startAngle + 360) % 360
+        const middleAngle = (startAngle + sweep / 2) % 360
+        const topOriginError = Math.min(Math.abs(middleAngle - 270), 360 - Math.abs(middleAngle - 270))
+        close(center[0], target.rect.width / 2, 2, 'Wedge mask horizontal origin')
+        close(center[1], target.rect.height / 2, 2, 'Wedge mask vertical origin')
+        assert.ok(sweep > 0 && sweep < 180 && topOriginError < 3,
+          `The WPS Wedge mask must open symmetrically from 12 o’clock: ${JSON.stringify({startAngle, endAngle, sweep, middleAngle, topOriginError, clipPath: target.clipPath})}`)
+      } else {
+        const corners = [[0, 0], [target.rect.width, 0], [target.rect.width, target.rect.height], [0, target.rect.height]]
+        assert.ok(corners.every(corner => pointInPolygon(corner, points)),
+          `The completed WPS Wedge mask must reveal every shape corner: ${JSON.stringify({corners, points, clipPath: target.clipPath})}`)
+      }
+    }
     if (metadata.Suite === 'Emphasis') {
       const run = state.runs[0]
       assert.ok(run && target.visibility === 'visible', `${name} must retain its text during emphasis`)
@@ -351,8 +615,8 @@ try {
         const translationY = runs.map(character => character.matrix[5])
         assert.equal(runs.length, 4, `Shimmer must retain its four iterated characters: ${JSON.stringify(runs.map(character => character.text))}`)
         assert.ok(scalesX.every(value => value > 0 && value < 1) && scalesY.every(value => value > 0 && value < 1)
-          && scalesX.every((value, index) => index === 0 || scalesX[index - 1] > value)
-          && scalesY.every((value, index) => index === 0 || scalesY[index - 1] > value),
+          && scalesX.every((value, index) => index === 0 || scalesX[index - 1] < value)
+          && scalesY.every((value, index) => index === 0 || scalesY[index - 1] < value),
         `Shimmer scale tracks must stagger across characters: ${JSON.stringify({scalesX, scalesY})}`)
         assert.ok(rotationTerms.every(value => value < 0)
           && rotationTerms.every((value, index) => index === 0 || Math.abs(rotationTerms[index - 1]) > Math.abs(value)),
@@ -365,8 +629,9 @@ try {
       }
       if (name === 'Shimmer' && targetMs === 2500) {
         assert.equal(state.runs.length, 4, `Shimmer must retain its four iterated characters after auto-reverse: ${JSON.stringify(state.runs.map(character => character.text))}`)
-        assert.ok(state.runs.every(character => character.matrix.every(value => Math.abs(value) < 0.01)),
-          `Shimmer auto-reverse must return every character to its zero-scale start: ${JSON.stringify(state.runs.map(character => ({text: character.text, matrix: character.matrix})))}`)
+        const identity = [1, 0, 0, 1, 0, 0]
+        assert.ok(state.runs.every(character => character.matrix.every((value, index) => Math.abs(value - identity[index]) < 0.01)),
+          `Shimmer auto-reverse must restore every character to its original transform: ${JSON.stringify(state.runs.map(character => ({text: character.text, matrix: character.matrix})))}`)
       }
       if (name === 'Transparency') {
         close(target.opacity, 0.5, 0.001, 'Native image opacity filter must hold 50% opacity')
@@ -653,11 +918,11 @@ try {
       }
     }
     assert.ok(!captureResult.warnings.some(warning => /generic .*formula.*skipped|unsupported time filter|generic object animation with an unsupported target/.test(warning)), `${name} must not skip its native property tracks`)
-    report.probes.push({name, iterated: item.iterated, targetMs, sampledMs: state.elapsedMs, wallElapsedMs: state.wallElapsedMs, result: 'PASS', evidence: `${name.toLowerCase()}-${targetMs}.png.json`})
+    report.probes.push({name, iterated: item.iterated, targetMs, sampledMs: state.elapsedMs, wallElapsedMs: state.wallElapsedMs, ...(motionPathCheck ? {motionPathCheck} : {}), result: 'PASS', evidence: `${name.toLowerCase()}-${targetMs}.png.json`})
     console.log(`${name} at ${Math.round(state.elapsedMs)}ms passed.`)
     await writeFile(join(outputRoot, 'playback-verification.json'), JSON.stringify(report, null, 2))
   }
-  report.result = 'PASS'
+    report.result = 'PASS'
 } catch (error) {
   report.result = 'FAIL'
   report.error = error instanceof Error ? error.message : String(error)

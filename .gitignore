@@ -1,7 +1,21 @@
 .nuxt
+.nuxt*/
 .output
+.output*/
 node_modules
 dist
 .env
 .env.*
 !.env.example
+
+# Local captures, fixtures, and playback diagnostics
+.tmp/
+
+# Isolated Codex performance runs and their large browser traces
+/.codex-perf-*/
+/*.trace.json
+
+# Local operating-system files
+.DS_Store
+Thumbs.db
+desktop.ini

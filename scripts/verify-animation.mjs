@@ -29,6 +29,7 @@ const grayscaleOnly = process.env.DECKLINE_VERIFY_GRAYSCALE === '1'
 const scaleCompositionOnly = process.env.DECKLINE_VERIFY_SCALE_COMPOSITION === '1'
 const indefiniteDurationOnly = process.env.DECKLINE_VERIFY_INDEFINITE_DURATION === '1'
 const bounceEndOnly = process.env.DECKLINE_VERIFY_BOUNCE_END === '1'
+const cutOnly = process.env.DECKLINE_VERIFY_CUT_EFFECTS === '1'
 const strokeWidthOnly = process.env.DECKLINE_VERIFY_STROKE_WIDTH === '1'
 const shadowOffsetOnly = process.env.DECKLINE_VERIFY_SHADOW_OFFSET === '1'
 const textOutlineRangeOnly = process.env.DECKLINE_VERIFY_TEXT_OUTLINE_RANGE === '1'
@@ -38,6 +39,7 @@ const performanceOnly = process.env.DECKLINE_VERIFY_PERFORMANCE === '1'
 const transitionSoundOnly = process.env.DECKLINE_VERIFY_TRANSITION_SOUND === '1'
 const localeOnly = process.env.DECKLINE_VERIFY_LOCALE_ONLY === '1'
 const iteratedTextEffectsOnly = process.env.DECKLINE_VERIFY_ITERATED_TEXT_EFFECTS === '1'
+const wedgeIterationOnly = process.env.DECKLINE_VERIFY_WEDGE_ITERATION === '1'
 const subTimeAfterEffectOnly = process.env.DECKLINE_VERIFY_SUBTIME_AFTER_EFFECT === '1'
 const subTimeSoundOnly = process.env.DECKLINE_VERIFY_SUBTIME_SOUND === '1'
 const prismContentOnly = process.env.DECKLINE_VERIFY_PRISM_CONTENT === '1'
@@ -231,6 +233,11 @@ const peekDirectionCases = [
 async function createFixture() {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide3.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide4.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide5.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide6.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide7.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide8.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide9.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide10.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide11.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide12.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide13.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide14.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slides/slide15.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/></Types>`)
+  if (iteratedTextEffectsOnly) {
+    const contentTypes = await zip.file('[Content_Types].xml').async('string')
+    zip.file('[Content_Types].xml', contentTypes.replace('</Types>', '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>'))
+    zip.file('docProps/app.xml', '<?xml version="1.0"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>WPS Office</Application></Properties>')
+  }
   zip.file('ppt/presentation.xml', `<?xml version="1.0"?><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/><p:sldId id="257" r:id="rId2"/><p:sldId id="258" r:id="rId3"/><p:sldId id="259" r:id="rId4"/><p:sldId id="260" r:id="rId5"/><p:sldId id="261" r:id="rId6"/><p:sldId id="262" r:id="rId7"/><p:sldId id="263" r:id="rId8"/><p:sldId id="264" r:id="rId9"/><p:sldId id="265" r:id="rId10"/><p:sldId id="266" r:id="rId11"/><p:sldId id="267" r:id="rId12"/><p:sldId id="268" r:id="rId13"/><p:sldId id="269" r:id="rId14"/><p:sldId id="270" r:id="rId15"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`)
   zip.file('ppt/_rels/presentation.xml.rels', `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide3.xml"/><Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide4.xml"/><Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide5.xml"/><Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide6.xml"/><Relationship Id="rId7" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide7.xml"/><Relationship Id="rId8" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide8.xml"/><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide9.xml"/><Relationship Id="rId10" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide10.xml"/><Relationship Id="rId11" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide11.xml"/><Relationship Id="rId12" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide12.xml"/><Relationship Id="rId13" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide13.xml"/><Relationship Id="rId14" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide14.xml"/><Relationship Id="rId15" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide15.xml"/></Relationships>`)
   const shadow = `<a:effectLst><a:outerShdw blurRad="127000" dist="127000" dir="2700000"><a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr></a:outerShdw></a:effectLst>`
@@ -333,7 +340,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const letterZoomDimensions = ['ppt_w', 'ppt_h'].map((property, axis) => `<p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${29302 + axis}" dur="200" fill="hold"/><p:tgtEl><p:spTgt spid="163"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:fltVal val="0"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="#${property}"/></p:val></p:tav></p:tavLst></p:anim>`).join('')
   const letterZoom = `<p:par><p:cTn id="29300" nodeType="withEffect" presetClass="entr" presetID="23" presetSubtype="16"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="lt"><p:tmPct val="${largeIterationInterval ? 200000 : 75000}"/></p:iterate><p:childTnLst><p:set><p:cBhvr><p:cTn id="29301" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="163"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>${letterZoomDimensions}</p:childTnLst></p:cTn></p:par>`
   const letterChecker = letterFade.replace('id="97"', 'id="29310"').replace('id="98"', 'id="29311"').replace('spid="43"', 'spid="164"').replace('filter="fade"', 'filter="checkerboard(across)"')
-  const iteratedMaskEffects = [[29320, 29321, 165, 'dissolve'], [29322, 29323, 166, 'wheel(4)'], [29324, 29325, 167, 'randombar(horizontal)'], [29326, 29327, 168, 'circle(in)'], [29328, 29329, 169, 'barn(inHorizontal)']].map(([parentId, childId, targetId, filter]) => letterFade.replace('id="97"', `id="${parentId}"`).replace('id="98"', `id="${childId}"`).replace('spid="43"', `spid="${targetId}"`).replace('filter="fade"', `filter="${filter}"`)).join('')
+  const iteratedMaskEffects = [[29320, 29321, 165, 'dissolve'], [29322, 29323, 166, 'wheel(4)'], [29324, 29325, 167, 'randombar(horizontal)'], [29326, 29327, 168, 'circle(in)'], [29328, 29329, 169, wedgeIterationOnly ? 'wedge' : 'barn(inHorizontal)']].map(([parentId, childId, targetId, filter]) => letterFade.replace('id="97"', `id="${parentId}"`).replace('id="98"', `id="${childId}"`).replace('spid="43"', `spid="${targetId}"`).replace('filter="fade"', `filter="${filter}"`)).join('')
   const letterBlinds = letterFade.replace('id="97"', 'id="17310"').replace('id="98"', 'id="17311"').replace('filter="fade"', 'filter="blinds(horizontal)"')
   const wordBlinds = `<p:par><p:cTn id="17312" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="wd" backwards="1"><p:tmPct val="50000"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="blinds(vertical)"><p:cBhvr><p:cTn id="17313" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="172"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const zeroIntervalLetterFade = `<p:par><p:cTn id="17300" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:iterate type="lt"><p:tmAbs val="0"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="17301" dur="200" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="162"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
@@ -542,7 +549,8 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const clickFadeWithIndefinite = effectGroup(71, 'clickEffect', 2, 'in', 'fade', 72, 300)
     .replace('</p:childTnLst></p:cTn></p:par>', `${indefiniteLeafAnimation}</p:childTnLst></p:cTn></p:par>`)
   const bounceEndTriggeredEffect = `<p:seq><p:cTn id="299001" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="299002" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:animScale p14:bounceEnd="25000"><p:cBhvr><p:cTn id="299003" dur="2000" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cBhvr><p:from x="100000" y="100000"/><p:to x="200000" y="200000"/></p:animScale><p:animMotion p14:bounceEnd="25000" origin="layout" path="M 0 0 L 0.1 0 E"><p:cBhvr><p:cTn id="299004" dur="2000" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="30"/></p:tgtEl></p:cBhvr></p:animMotion></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>`
-  const triggeredEffect = bounceEndOnly ? bounceEndTriggeredEffect : `<p:seq><p:cTn id="70" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${indefiniteDurationOnly ? clickFadeWithIndefinite : effectGroup(71, 'clickEffect', 2, 'in', 'fade', 72, 300)}${triggeredRotation}${additiveRotationEffect}${triggeredColors}${opacityEffects}${strokeWeightAnimation(12120, 323, 25400, 50800)}${strokeWeightSet}${fontWeightEffect}${keyframedFontWeight}${formulaFontWeight}${formulaFontSize}${formulaOpacity}${textFontStyle}${underlineKeyframes}${lineThroughKeyframes}${lineThroughAnimation}${textTransformAnimation}${textOutlineAnimation}${keyframedOpacity}${discreteFontSize}${discreteOpacity}${setOpacity}${setOpacityString}${setColor}${setFontStyle}${setFontFamily}${setUnderline}${setLineThrough}${setTextTransform}${setTextOutline}${effectGroup(161, 'withEffect', 60, 'in', 'slide(fromLeft)', 162, 400)}${slideFromTopFilterAction}${effectGroup(163, 'clickEffect', 60, 'out', 'slide(fromRight)', 164, 300)}${slideFromBottomFilterAction}</p:childTnLst></p:cTn></p:seq>`
+  const cutTriggeredEffect = '<p:seq><p:cTn id="299101" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="299102" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="cut"><p:cBhvr><p:cTn id="299103" dur="1000" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="30"/></p:tgtEl></p:cBhvr></p:animEffect><p:animEffect transition="out" filter="cut"><p:cBhvr><p:cTn id="299104" dur="1000" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>'
+  const triggeredEffect = cutOnly ? cutTriggeredEffect : bounceEndOnly ? bounceEndTriggeredEffect : `<p:seq><p:cTn id="70" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${indefiniteDurationOnly ? clickFadeWithIndefinite : effectGroup(71, 'clickEffect', 2, 'in', 'fade', 72, 300)}${triggeredRotation}${additiveRotationEffect}${triggeredColors}${opacityEffects}${strokeWeightAnimation(12120, 323, 25400, 50800)}${strokeWeightSet}${fontWeightEffect}${keyframedFontWeight}${formulaFontWeight}${formulaFontSize}${formulaOpacity}${textFontStyle}${underlineKeyframes}${lineThroughKeyframes}${lineThroughAnimation}${textTransformAnimation}${textOutlineAnimation}${keyframedOpacity}${discreteFontSize}${discreteOpacity}${setOpacity}${setOpacityString}${setColor}${setFontStyle}${setFontFamily}${setUnderline}${setLineThrough}${setTextTransform}${setTextOutline}${effectGroup(161, 'withEffect', 60, 'in', 'slide(fromLeft)', 162, 400)}${slideFromTopFilterAction}${effectGroup(163, 'clickEffect', 60, 'out', 'slide(fromRight)', 164, 300)}${slideFromBottomFilterAction}</p:childTnLst></p:cTn></p:seq>`
   const triggeredMouseOver = `<p:seq><p:cTn id="180" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMouseOver" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(181, 'clickEffect', 5, 'in', 'fade', 182, 200)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredMouseOut = `<p:seq><p:cTn id="183" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onMouseOut" delay="0"><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(184, 'clickEffect', 5, 'out', 'fade', 185, 200)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredDoubleClick = `<p:seq><p:cTn id="186" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onDblClick" delay="0"><p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(187, 'clickEffect', 5, 'in', 'fade', 188, 200)}</p:childTnLst></p:cTn></p:seq>`
@@ -700,7 +708,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const wipeShapes = ['right', 'left', 'up', 'down'].map((direction, index) => shape(20 + index, `Wipe ${direction}`, index * 3000000, 4000000, '38bdf8')).join('')
   const characterSlideShape = plainTextShape(160, 'Character slide animation', 9000000, 5900000, 'RESTMOVE')
   const zeroIntervalTextShape = plainTextShape(162, 'Zero-interval letters', 9000000, 5700000, 'SYNC')
-  const iteratedMaskShapes = [[165, 'By letter dissolve', 'DISSOLVE'], [166, 'By letter wheel', 'WHEEL'], [167, 'By letter random bars', 'BARS'], [168, 'By letter shape', 'SHAPE'], [169, 'By letter barn', 'BARN']].map(([id, title, text], index) => plainTextShape(id, title, index * 2600000, 6600000, text)).join('')
+  const iteratedMaskShapes = [[165, 'By letter dissolve', 'DISSOLVE'], [166, 'By letter wheel', 'WHEEL'], [167, 'By letter random bars', 'BARS'], [168, 'By letter shape', 'SHAPE'], [169, wedgeIterationOnly ? 'By letter wedge' : 'By letter barn', wedgeIterationOnly ? 'WEDGE' : 'BARN']].map(([id, title, text], index) => plainTextShape(id, title, index * 2600000, 6600000, text)).join('')
   const wordBlindsShape = plainTextShape(172, 'By-word blinds', 9000000, 6000000, 'FIRST SECOND')
   const animatedShapes = `${shape(2, 'Click fade', 0, 0, 'ef4444')}${shadowedWithPrevious}${shape(4, 'Exit after previous', 6000000, 0, 'f59e0b')}${shape(5, 'Second click', 9000000, 0, '7c3aed')}${shape(6, 'Automatic fade', 0, 3000000, '0891b2')}${textShape(7, 'Paragraph build', 3000000, 3000000)}${plainTextShape(43, 'By letter', 0, 5700000, 'WORD')}${plainTextShape(45, 'By word', 3000000, 5700000, 'ONE TWO', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${plainTextShape(163, 'By letter zoom', 9000000, 5700000, 'ZOOM')}${shape(44, 'After letters', 6000000, 5700000, '14b8a6')}${shape(46, 'Blinds animation', 9000000, 4000000, '64748b')}${shape(47, 'Checker animation', 3000000, 4000000, '0ea5e9')}${shape(8, 'Scale emphasis', 8000000, 3000000, 'd946ef')}${shape(30, 'Motion path', 1000000, 3000000, '0f766e')}${shape(29, 'Curved motion path', 1000000, 3000000, 'fb923c')}${wipeShapes}${shape(24, 'Wipe exit', 8000000, 0, 'fb7185')}${shape(60, 'Slide entrance and exit', 9300000, 2500000, '22c55e')}${shape(19700, 'Slide from top', 3000000, 4000000, '16a34a')}${shape(19701, 'Slide from bottom', 6000000, 4000000, 'f97316')}${groupedShape}${customGeometryShapeWithGuides}${customGeometryTextShape}${invalidCustomGeometryTextShape}${customGradientShape}${elementIterationGroup}${shape(90, 'Next event target', 9000000, 5500000, '0891b2')}${shape(91, 'Previous event target', 10500000, 5500000, '9333ea')}${shape(97, 'Rotated fixed motion path', 4500000, 3000000, '0ea5e9', 500000, 500000)}${shape(98, 'Fast speed trigger', 8000000, 5200000, '0ea5e9')}${shape(99, 'Fast speed fade', 8500000, 5200000, 'f97316')}${shape(100, 'Reverse speed trigger', 6000000, 5200000, '14b8a6')}${shape(101, 'Reverse speed scale', 6500000, 5200000, 'a855f7')}${shape(102, 'Parent eased fade', 7000000, 5200000, 'facc15')}${shape(52002, 'Click inferred-parent fade', 2000000, 5200000, 'f97316')}${shape(52005, 'Click explicit-parent fade', 4000000, 5200000, 'f97316')}${shape(103, 'Parent timing after-effect', 7500000, 5200000, '22c55e')}${shape(104, 'Parent speed delayed', 8000000, 5200000, 'fb923c')}${shape(122, 'Formula fixed motion path', 5500000, 3500000, '0d9488')}${shape(123, 'Dynamic formula motion path', 6000000, 3500000, '0d9488')}${parentMotionGroup}${wpsMotionGroup}${opacityFormulaShape}` + nativeFormulaShapes
   const parentRepeatShapes = `${shape(105, 'Parent repeat count trigger', 1000000, 5000000, '0ea5e9')}${shape(106, 'Parent repeat count target', 2000000, 5000000, 'f97316')}${shape(107, 'Parent repeat duration trigger', 3000000, 5000000, '14b8a6')}${shape(108, 'Parent repeat duration target', 4000000, 5000000, 'a855f7')}${shape(109, 'Parent repeat after-effect', 5000000, 5000000, '22c55e')}`
@@ -2359,7 +2367,7 @@ try {
     },
     paragraphs: [...(currentHost?.querySelectorAll('.text-paragraph') || [])].map(element => ({ text: element.textContent, visibility: getComputedStyle(element).visibility, opacity: getComputedStyle(element).opacity, maskImage: getComputedStyle(element).maskImage, wipeProgress: getComputedStyle(element).getPropertyValue('--wipe-progress').trim(), color: getComputedStyle(element.querySelector('.text-run') || element).color, textAlign: getComputedStyle(element).textAlign, lineHeight: element.style.lineHeight, marginLeft: element.style.marginLeft, marker: element.querySelector('.paragraph-marker')?.textContent })),
     textFrames: [...(currentHost?.querySelectorAll('.text-frame') || [])].map(element => ({ name: element.closest('.slide-element')?.title, clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, whiteSpace: getComputedStyle(element).whiteSpace, writingMode: getComputedStyle(element).writingMode, textOrientation: getComputedStyle(element).textOrientation, direction: getComputedStyle(element).direction, paragraphDirection: getComputedStyle(element.querySelector('.text-paragraph')).direction, columnCount: getComputedStyle(element).columnCount, columnGap: getComputedStyle(element).columnGap, frameWidth: element.closest('.slide-frame')?.getBoundingClientRect().width, runRects: element.closest('.slide-element')?.title?.startsWith('Two-column') ? (() => { const range = document.createRange(); range.selectNodeContents(element.querySelector('.text-run')); return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top })) })() : undefined, paragraphRects: element.closest('.slide-element')?.title === 'WordArt vertical RTL' ? [...element.querySelectorAll('.text-paragraph')].map(paragraph => { const rect = paragraph.getBoundingClientRect(); return { left: rect.left, top: rect.top } }) : undefined, borderStyle: getComputedStyle(element.closest('.slide-element')).borderStyle, borderWidth: getComputedStyle(element.closest('.slide-element')).borderWidth })),
-    textRuns: [...(currentHost?.querySelectorAll('.text-run') || [])].map(element => { const style = getComputedStyle(element); const underline = element.querySelector('.text-run-underline'); const underlineStyle = underline ? getComputedStyle(underline) : undefined; const decorationLine = [style.textDecorationLine, underlineStyle?.textDecorationLine].flatMap(line => line?.split(' ') || []).filter(line => line && line !== 'none').join(' ') || 'none'; const decorationStyle = underlineStyle?.textDecorationLine.includes('underline') ? underlineStyle : style; return { name: element.closest('.slide-element')?.title, text: element.textContent, transform: style.transform, filter: style.filter, textShadow: style.textShadow, textStrokeColor: style.webkitTextStrokeColor, textStrokeWidth: style.webkitTextStrokeWidth, visibility: style.visibility, opacity: style.opacity, color: style.color, fontSize: style.fontSize, fontFamily: style.fontFamily, fontWeight: style.fontWeight, fontStyle: style.fontStyle, textDecorationLine: decorationLine, textDecorationColor: decorationStyle.textDecorationColor, verticalAlign: style.verticalAlign, maskImage: style.maskImage, wipeProgress: style.getPropertyValue('--wipe-progress').trim(), start: Number(element.dataset.charStart), end: Number(element.dataset.charEnd) } }),
+    textRuns: [...(currentHost?.querySelectorAll('.text-run') || [])].map(element => { const style = getComputedStyle(element); const underline = element.querySelector('.text-run-underline'); const underlineStyle = underline ? getComputedStyle(underline) : undefined; const decorationLine = [style.textDecorationLine, underlineStyle?.textDecorationLine].flatMap(line => line?.split(' ') || []).filter(line => line && line !== 'none').join(' ') || 'none'; const decorationStyle = underlineStyle?.textDecorationLine.includes('underline') ? underlineStyle : style; const fontWeight = style.fontWeight; const fontWeightSampledAt = performance.now(); return { name: element.closest('.slide-element')?.title, text: element.textContent, transform: style.transform, filter: style.filter, textShadow: style.textShadow, textStrokeColor: style.webkitTextStrokeColor, textStrokeWidth: style.webkitTextStrokeWidth, visibility: style.visibility, opacity: style.opacity, color: style.color, fontSize: style.fontSize, fontFamily: style.fontFamily, fontWeight, fontWeightSampledAt, fontStyle: style.fontStyle, textDecorationLine: decorationLine, textDecorationColor: decorationStyle.textDecorationColor, verticalAlign: style.verticalAlign, maskImage: style.maskImage, wipeProgress: style.getPropertyValue('--wipe-progress').trim(), start: Number(element.dataset.charStart), end: Number(element.dataset.charEnd) } }),
     underlineRuns: [...(currentHost?.querySelectorAll('.text-run') || [])].filter(element => element.textContent.trim() === 'Custom underline stroke' || element.textContent.trim() === 'Underline stroke follows outline').map(element => { const underline = element.querySelector('.text-run-underline'); const style = getComputedStyle(underline || element); const strike = getComputedStyle(element); return { name: element.closest('.slide-element')?.title, text: element.textContent, color: style.textDecorationColor, line: style.textDecorationLine, style: style.textDecorationStyle, thickness: style.textDecorationThickness, strikeLine: strike.textDecorationLine, strikeColor: strike.textDecorationColor, strikeStyle: strike.textDecorationStyle } }),
     tables: [...(currentHost?.querySelectorAll('.slide-table') || [])].map(table => ({
       cells: [...table.querySelectorAll('td')].map(cell => ({
@@ -2416,7 +2424,7 @@ try {
     transitionUnderlay: (() => {
       const animation = outgoingHost?.getAnimations()[0] || outgoingHost?.querySelector('.slide-content-layer')?.getAnimations()[0]
       const backgroundAnimation = outgoingHost?.querySelector('.slide-background-layer')?.getAnimations()[0]
-      return { slideCount: outgoingHost ? 1 : 0, frame: outgoingRect && { left: outgoingRect.left, top: outgoingRect.top, width: outgoingRect.width, height: outgoingRect.height }, translateX: outgoingHost && new DOMMatrix(getComputedStyle(outgoingHost).transform).e, translateY: outgoingHost && new DOMMatrix(getComputedStyle(outgoingHost).transform).f, shapeNames: [...(outgoingHost?.querySelectorAll('.slide-element') || [])].map(element => element.title), pulling: underlay?.classList.contains('is-pulling'), splittingIn: underlay?.classList.contains('is-splitting-in'), layerZIndex: getComputedStyle(underlay).zIndex, hostZIndex: getComputedStyle(currentHost).zIndex, keyframes: animation?.effect?.getKeyframes().map(frame => frame.transform), opacityKeyframes: animation?.effect?.getKeyframes().map(frame => frame.opacity), backgroundOpacityKeyframes: backgroundAnimation?.effect?.getKeyframes().map(frame => frame.opacity), clipKeyframes: animation?.effect?.getKeyframes().map(frame => frame.clipPath), duration: animation?.effect?.getTiming().duration }
+      return { slideCount: outgoingHost ? 1 : 0, frame: outgoingRect && { left: outgoingRect.left, top: outgoingRect.top, width: outgoingRect.width, height: outgoingRect.height }, translateX: outgoingHost && new DOMMatrix(getComputedStyle(outgoingHost).transform).e, translateY: outgoingHost && new DOMMatrix(getComputedStyle(outgoingHost).transform).f, shapeNames: [...(outgoingHost?.querySelectorAll('.slide-element') || [])].map(element => element.title), pulling: underlay?.classList.contains('is-pulling'), splittingIn: underlay?.classList.contains('is-splitting-in'), layerZIndex: getComputedStyle(underlay).zIndex, hostZIndex: getComputedStyle(currentHost).zIndex, keyframes: animation?.effect?.getKeyframes().map(frame => frame.transform), opacityKeyframes: animation?.effect?.getKeyframes().map(frame => frame.opacity), backgroundOpacityKeyframes: backgroundAnimation?.effect?.getKeyframes().map(frame => frame.opacity), clipKeyframes: animation?.effect?.getKeyframes().map(frame => frame.clipPath), duration: animation?.effect?.getTiming().duration, currentTime: animation?.currentTime }
     })(),
     ink: {
       lines: [...(currentHost?.querySelectorAll('.ink-layer polyline') || [])].map(line => ({ stroke: line.getAttribute('stroke'), opacity: line.getAttribute('opacity') })),
@@ -2439,6 +2447,10 @@ try {
     return snapshot
   }
   const shape = (snapshot, name) => snapshot.shapes.find(item => item.name === name)
+  const firstClipRadialPoint = clipPath => {
+    const match = /^path\("M\s*(-?[\d.]+)\s+(-?[\d.]+)\s+L\s*(-?[\d.]+)\s+(-?[\d.]+)/.exec(clipPath)
+    return match ? { centerX: Number(match[1]), centerY: Number(match[2]), pointX: Number(match[3]), pointY: Number(match[4]) } : undefined
+  }
   const rgbChannels = color => color.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number) || []
   const transformValues = item => {
     const values = /matrix\(([^)]+)\)/.exec(item.transform)?.[1].split(',').map(Number)
@@ -2795,7 +2807,7 @@ try {
         return true
       })()`)
     }
-    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : shadowOffsetOnly ? initial.shapes.some(element => element.name === 'Shadow offset target') : iteratedTextEffectsOnly ? initial.shapes.some(element => element.name === 'Text shadow color p:set range') : initial.shapes.length === FIXTURE_FIRST_SLIDE_SHAPE_COUNT) break
+    if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : shadowOffsetOnly ? initial.shapes.some(element => element.name === 'Shadow offset target') : iteratedTextEffectsOnly ? initial.shapes.some(element => element.name === 'Text shadow color p:set range') : wedgeIterationOnly ? initial.shapes.some(element => element.name === 'By letter wedge') : initial.shapes.length === FIXTURE_FIRST_SLIDE_SHAPE_COUNT) break
   }
   if (shadowOffsetOnly) {
     const before = await evaluate(`(() => {
@@ -2988,6 +3000,28 @@ try {
     console.log('Paragraph-range p:subTnLst dim-after playback verification passed.')
     throw new Error('__subtime_after_effect_verified__')
   }
+  if (wedgeIterationOnly) {
+    const wedgeIteration = await evaluate(`(() => new Promise(resolve => {
+      const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="By letter wedge"]')
+      if (!target) return resolve({runs: [], warnings: []})
+      target.click()
+      const started = performance.now()
+      const sample = frameTime => {
+        if (frameTime - started < 80) return requestAnimationFrame(sample)
+        const runs = [...target.querySelectorAll('.text-run')].filter(run => run.textContent.trim()).map(run => ({text: run.textContent, mask: getComputedStyle(run).maskImage, clipPath: getComputedStyle(run).clipPath}))
+        const warnings = [...document.querySelectorAll('.warning-list li')].map(item => item.textContent)
+        resolve({runs, warnings})
+      }
+      requestAnimationFrame(sample)
+    }))()`)
+    const firstTwoRunsAreStaggered = wedgeIteration.runs[0] && wedgeIteration.runs[1]
+      && (wedgeIteration.runs[0].mask !== wedgeIteration.runs[1].mask || wedgeIteration.runs[0].clipPath !== wedgeIteration.runs[1].clipPath)
+    assert(wedgeIteration.runs.length === 5 && wedgeIteration.runs.every(run => run.mask.includes('data:image/svg+xml')) && firstTwoRunsAreStaggered
+      && !wedgeIteration.warnings.some(warning => warning.includes('Text iteration for wedge')),
+    `A by-letter wedge effect must reveal each grapheme on its staggered top-origin wedge mask: ${JSON.stringify(wedgeIteration)}`)
+    console.log('By-letter wedge iteration playback verification passed.')
+    throw new Error('__wedge_iteration_verified__')
+  }
   if (iteratedTextEffectsOnly) {
     const iterationState = await evaluate(`(() => new Promise(resolve => {
       document.querySelector('.stage-shell')?.click()
@@ -3124,14 +3158,18 @@ try {
     const wpsEndFillChannels = wpsGrowWithColorEnd.fillColor.match(/[\d.]+/g)?.slice(0, 3).map(Number)
     const growWithColorProgress = index => Math.min(1, Math.max(0, (wpsGrowWithColorEnd.elapsedMs - 2000 - index * 200) / 2000))
     const growWithColorBaseline = wpsGrowWithColor.baseline[0]
+    const wpsCharacterProgresses = wpsGrowWithColorEnd.runs.map(run => Number(run.color.match(/[\d.]+/)?.[0]) / 255)
     assert(wpsGrowWithColorEnd.runs.length > 0 && wpsGrowWithColorEnd.runs.map(run => run.text).join('') === 'ABCD'
       && wpsGrowWithColorEnd.runs.every((run, index) => {
-        const progress = growWithColorProgress(index)
+        const progress = wpsCharacterProgresses[index]
+        const expectedProgress = growWithColorProgress(index)
         const expectedColor = [255, 0, 0].map((channel, channelIndex) => Math.round(Number(growWithColorBaseline.color.match(/[\d.]+/g)?.[channelIndex]) + (channel - Number(growWithColorBaseline.color.match(/[\d.]+/g)?.[channelIndex])) * progress))
         const actualColor = run.color.match(/[\d.]+/g)?.slice(0, 3).map(Number)
         return actualColor?.every((channel, channelIndex) => Math.abs(channel - expectedColor[channelIndex]) <= 1)
+          && Math.abs(progress - expectedProgress) <= 0.025
           && Math.abs(run.fontSize - growWithColorBaseline.fontSize * (1 + 0.5 * progress)) < 0.5
       })
+      && wpsCharacterProgresses.slice(1).every((progress, index) => Math.abs((wpsCharacterProgresses[index] - progress) - 0.1) <= 0.02)
       && wpsEndFillChannels?.[0] === 255 && wpsEndFillChannels[1] === 0 && wpsEndFillChannels[2] === 0
       && wpsGrowWithColorEnd.shape.width > 0 && wpsGrowWithColorEnd.shape.height > 0,
     `The exact WPS Grow With Color preset must sequence its fill before per-letter text color and font-size changes: ${JSON.stringify(wpsGrowWithColorEnd)}`)
@@ -3223,6 +3261,12 @@ try {
     const omittedSpeed = await state()
     assert(omittedSpeed.slide?.startsWith('01 / 68') && Number(omittedSpeed.slideTransition?.duration) === 500 && omittedSpeed.warnings.filter(warning => warning.includes('slide transition speed')).length === 1,
       `An omitted p:transition@spd must use the OOXML fast default without adding a speed warning: ${JSON.stringify({ slide: omittedSpeed.slide, transition: omittedSpeed.slideTransition, warnings: omittedSpeed.warnings.filter(warning => warning.includes('slide transition speed')) })}`)
+    await delay(550)
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+    await delay(80)
+    const mediumSpeed = await state()
+    assert(mediumSpeed.slide?.startsWith('04 / 68') && mediumSpeed.transitionUnderlay.pulling && Number(mediumSpeed.transitionUnderlay.duration) === 750,
+      `A medium p:transition@spd must use the PowerPoint-observed 750ms duration for the outgoing Pull transition: ${JSON.stringify({ slide: mediumSpeed.slide, transition: mediumSpeed.slideTransition, underlay: mediumSpeed.transitionUnderlay, warnings: mediumSpeed.warnings })}`)
     await delay(550)
     await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
     await delay(80)
@@ -3424,6 +3468,14 @@ try {
       initial = await state()
       assert(Number(initial.slide?.split('/')[0].trim()) === captureSlideNumber, `The requested capture slide did not open: ${captureSlideNumber}`)
     }
+    if (process.env.DECKLINE_CAPTURE_WAIT_FOR_TRANSITION === '1') {
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const animation = initial.slideTransition
+        if (!animation || !Number.isFinite(animation.currentTime) || !Number.isFinite(animation.duration) || animation.currentTime >= animation.duration) break
+        await delay(20)
+        initial = await state()
+      }
+    }
     if (process.env.DECKLINE_VERIFY_NAVIGATION === '1') {
       assert(initial.slide.startsWith('01 / 03'), `The navigation fixture must open on slide 1 of 3: ${initial.slide}`)
       const press = async key => {
@@ -3453,6 +3505,12 @@ try {
       assert(Number.isFinite(elapsedMs) && elapsedMs >= 0 && elapsedMs <= 60_000, 'DECKLINE_CAPTURE_ANIMATION_MS must be between 0 and 60000.')
       const startAtZero = process.env.DECKLINE_CAPTURE_START_ANIMATION
       assert(startAtZero === undefined || startAtZero === '0' || startAtZero === '1', 'DECKLINE_CAPTURE_START_ANIMATION must be 0 or 1.')
+      const advanceSlide = process.env.DECKLINE_CAPTURE_ADVANCE_SLIDE
+      assert(advanceSlide === undefined || advanceSlide === '0' || advanceSlide === '1', 'DECKLINE_CAPTURE_ADVANCE_SLIDE must be 0 or 1.')
+      const seekTransitionMs = process.env.DECKLINE_CAPTURE_SEEK_TRANSITION_MS === undefined
+        ? undefined
+        : Number(process.env.DECKLINE_CAPTURE_SEEK_TRANSITION_MS)
+      assert(seekTransitionMs === undefined || Number.isFinite(seekTransitionMs) && seekTransitionMs >= 0 && seekTransitionMs <= 60_000, 'DECKLINE_CAPTURE_SEEK_TRANSITION_MS must be between 0 and 60000.')
       const animationTriggered = elapsedMs > 0 || startAtZero === '1'
       const controlledClock = process.env.DECKLINE_CAPTURE_ANIMATION_CLOCK === 'controlled'
       const startedAt = await evaluate(`(() => {
@@ -3464,9 +3522,30 @@ try {
           Object.defineProperty(performance, 'now', {configurable: true, value: () => clock.value})
         }
         const startedAt = performance.now()
-        if (${animationTriggered}) document.querySelector('.stage-shell').click()
+        if (${animationTriggered}) {
+          if (${advanceSlide === '1'}) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
+          else document.querySelector('.stage-shell').click()
+        }
         return startedAt
       })()`)
+      if (seekTransitionMs !== undefined) {
+        await evaluate(`(async () => {
+          const roots = [document.querySelector('.stage-shell > .slide-host'), document.querySelector('.slide-transition-underlay')].filter(Boolean)
+          let animations = []
+          for (let attempt = 0; attempt < 60; attempt++) {
+            animations = [...new Set(roots.flatMap(root => root.getAnimations({subtree: true})))]
+            if (animations.length) break
+            await new Promise(resolve => requestAnimationFrame(resolve))
+          }
+          if (!animations.length) throw new Error('No slide-transition Web Animation was available to seek.')
+          for (const animation of animations) {
+            animation.pause()
+            animation.currentTime = ${seekTransitionMs}
+          }
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+          return animations.length
+        })()`)
+      }
       if (controlledClock) {
         await evaluate(`new Promise(resolve => requestAnimationFrame(() => {
           window.__decklineCaptureClock.value = ${startedAt + elapsedMs}
@@ -3505,7 +3584,20 @@ try {
         })()`)
       }
       delete captureAnimation.startedAt
-      await writeFile(`${process.env.DECKLINE_CAPTURE_SLIDE_PATH}.json`, JSON.stringify({slide: initial.slide, frameRect: rect, captureAnimation, warnings: (await state()).warnings}, null, 2))
+      const capturedState = await state()
+      await writeFile(`${process.env.DECKLINE_CAPTURE_SLIDE_PATH}.json`, JSON.stringify({
+        slide: initial.slide,
+        frameRect: rect,
+        captureAnimation,
+        transition: {
+          effect: capturedState.transitionEffect,
+          preset: capturedState.transitionPreset,
+          incoming: capturedState.slideTransition,
+          outgoing: capturedState.transitionUnderlay,
+          stageClasses: capturedState.stageClasses,
+        },
+        warnings: capturedState.warnings,
+      }, null, 2))
     }
     const glowStyles = await evaluate(`(() => {
       const shape = document.querySelector('.stage-shell > .slide-host [title="Effect reference 6"]')
@@ -3599,6 +3691,15 @@ try {
     `p14:bounceEnd scale and motion animations must overshoot, rebound, then hold their final values: ${JSON.stringify({ initialScale, scaleAtStart: activeSample.scale, overshootScale, reboundScale, settledScale, motionOvershoot, motionRebound, motionSettled, elapsedMs: [overshootState.now - animationStartedAt, reboundState.now - animationStartedAt, settledState.now - animationStartedAt], warnings: initial.warnings, runtimeErrors })}`)
     console.log(`p14:bounceEnd browser playback verified: scale ${overshootScale.toFixed(3)} → ${reboundScale.toFixed(3)} → ${settledScale.toFixed(3)}, motion ${motionOvershoot.toFixed(3)} → ${motionRebound.toFixed(3)} → ${motionSettled.toFixed(3)}.`)
     throw new Error('__bounce_end_verified__')
+  } else if (cutOnly) {
+    const target = shape(initial, 'Motion path')
+    assert(initial.slide && !initial.error && target && target.visibility === 'hidden', 'A cut entrance effect must keep its target hidden before the trigger: ' + JSON.stringify({ target, warnings: initial.warnings, runtimeErrors }))
+    const startedAt = await evaluate("(() => { const trigger = document.querySelector('.stage-shell > .slide-host .slide-element[title=\"Scale emphasis\"]'); if (!trigger) throw new Error('The cut-effect trigger is missing.'); const started = performance.now(); trigger.click(); return started })()")
+    await delay(100)
+    const cutState = await evaluate("(() => { const target = document.querySelector('.stage-shell > .slide-host .slide-element[title=\"Motion path\"]'); const exitingTarget = document.querySelector('.stage-shell > .slide-host .slide-element[title=\"Scale emphasis\"]'); const style = getComputedStyle(target); return {entranceVisibility: style.visibility, entranceOpacity: Number(style.opacity), exitVisibility: getComputedStyle(exitingTarget).visibility, elapsedMs: performance.now() - " + startedAt + "} })()")
+    assert(cutState.entranceVisibility === 'visible' && cutState.entranceOpacity >= 0.99 && cutState.exitVisibility === 'hidden' && cutState.elapsedMs < 500 && runtimeErrors.length === 0, 'Long-duration cut entrance and exit effects must switch visually at their trigger: ' + JSON.stringify({ cutState, warnings: initial.warnings, runtimeErrors }))
+    console.log('Long-duration cut entrance and exit switched immediately: ' + JSON.stringify(cutState))
+    throw new Error('__cut_effects_verified__')
   } else if (notesOnly) {
     for (const [number, color] of [[17, 'rgb(136, 68, 204)'], [18, 'rgb(34, 136, 102)']]) {
       await evaluate(`(() => { for (const key of '${number}') window.dispatchEvent(new KeyboardEvent('keydown', { key })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) })()`)
@@ -4537,6 +4638,24 @@ try {
     const grayscaleSlide = await state()
     assert(grayscaleSlide.slide?.startsWith('03 / 68'), `The grayscale test slide must open: ${grayscaleSlide.slide}`)
     if (scaleCompositionOnly) {
+      const scaleToOnlyStart = await evaluate(`new Promise(resolve => {
+        const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale to only"]')
+        element.click()
+        requestAnimationFrame(() => {
+          const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform)
+          resolve([Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)])
+        })
+      })`)
+      assert(scaleToOnlyStart[0] > 1 && scaleToOnlyStart[1] < 0.2,
+        `Base-additive numeric ScaleX must retain its identity base while animScale to-only starts at zero: ${JSON.stringify(scaleToOnlyStart)}`)
+      await delay(300)
+      const scaleToOnlyComplete = await evaluate(`(() => {
+        const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale to only"]')
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform)
+        return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)]
+      })()`)
+      assert(Math.abs(scaleToOnlyComplete[0] - 3) < 0.03 && Math.abs(scaleToOnlyComplete[1] - 1.5) < 0.03,
+        `Base-additive numeric ScaleX must add its value to the identity base while animScale to-only holds its independent target: ${JSON.stringify(scaleToOnlyComplete)}`)
       const compositionStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale composition"]')?.click(); return started })()`)
       const compositionDuring = await stateAtElapsed(compositionStartedAt, 150)
       const compositionMidpoint = transformValues(shape(compositionDuring, 'Scale composition'))
@@ -4713,10 +4832,10 @@ try {
         resolve([Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)])
       })
     })`)
-    assert(scaleToOnlyStart.every(value => value < 0.2), `A to-only scale animation must start at (0, 0): ${JSON.stringify(scaleToOnlyStart)}`)
+    assert(scaleToOnlyStart[0] > 1 && scaleToOnlyStart[1] < 0.2, `Base-additive numeric ScaleX must retain its identity base while animScale to-only starts at zero: ${JSON.stringify(scaleToOnlyStart)}`)
     await delay(300)
     const scaleToOnlyComplete = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale to only"]'); const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)] })()`)
-    assert(Math.abs(scaleToOnlyComplete[0] - 2) < 0.03 && Math.abs(scaleToOnlyComplete[1] - 1.5) < 0.03, `A generic numeric by-only ScaleX must start at zero and hold its relative endpoint while animScale to-only holds its independent target: ${JSON.stringify(scaleToOnlyComplete)}`)
+    assert(Math.abs(scaleToOnlyComplete[0] - 3) < 0.03 && Math.abs(scaleToOnlyComplete[1] - 1.5) < 0.03, `Base-additive numeric ScaleX must add its value to the identity base while animScale to-only holds its independent target: ${JSON.stringify(scaleToOnlyComplete)}`)
     await evaluate(`document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale accumulation"]')?.click()`)
     await delay(360)
     const accumulatedScale = await evaluate(`(() => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title="Scale accumulation"]'); const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return [Math.hypot(matrix.a, matrix.b), Math.hypot(matrix.c, matrix.d)] })()`)
@@ -5577,10 +5696,25 @@ try {
   assert(textRangeOpacityDuring.length === 2 && [textRangeOpacityDuring[0].color, textRangeOpacityDuring[0].textStrokeColor, textRangeOpacityDuring[0].textShadow, textRangeOpacityDuring[1].color, textRangeOpacityDuring[1].textStrokeColor, textRangeOpacityDuring[1].textShadow].every(value => cssAlpha(value) > 0 && cssAlpha(value) < 1), 'Numeric and formula character-range fill, outline, and shadow opacity must interpolate only across their selected text.')
   assert(opacityFormulaTextRunsDuring.length === 1 && opacityFormulaTextRunsDuring[0].opacity > 0 && opacityFormulaTextRunsDuring[0].opacity < 1, `A style.opacity formula must apply to its targeted text range: ${JSON.stringify(opacityFormulaTextRunsDuring)}`)
   const cssRgb = value => value.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/)?.slice(1, 4).map(Number)
+  const hslRgb = (hue, saturation, lightness) => {
+    const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation
+    const secondary = chroma * (1 - Math.abs((hue / 60) % 2 - 1))
+    const offset = lightness - chroma / 2
+    const sector = hue / 60
+    const channels = sector < 1 ? [chroma, secondary, 0]
+      : sector < 2 ? [secondary, chroma, 0]
+        : sector < 3 ? [0, chroma, secondary]
+          : sector < 4 ? [0, secondary, chroma]
+            : sector < 5 ? [secondary, 0, chroma]
+              : [chroma, 0, secondary]
+    return channels.map(channel => Math.round((channel + offset) * 255))
+  }
   const relativeHslDuring = cssRgb(shape(triggered, 'Relative HSL color').backgroundColor)
   const relativeRgbDuring = cssRgb(shape(triggered, 'Relative RGB color').backgroundColor)
-  assert(relativeHslDuring && relativeHslDuring[0] > relativeHslDuring[1] && relativeHslDuring[1] > relativeHslDuring[2] && relativeHslDuring[0] < 255, `A relative p:hsl animation must interpolate non-zero fixed-angle hue, saturation, and lightness offsets from the default black start: ${JSON.stringify({ color: shape(triggered, 'Relative HSL color').backgroundColor, channels: relativeHslDuring })}`)
   assert(relativeRgbDuring && relativeRgbDuring[0] > 0 && relativeRgbDuring[0] < 255 && relativeRgbDuring[1] === 0 && relativeRgbDuring[2] === 0, `A relative p:rgb animation must interpolate channel offsets from the default black start: ${JSON.stringify({ color: shape(triggered, 'Relative RGB color').backgroundColor, channels: relativeRgbDuring })}`)
+  const observedAnimationProgress = relativeRgbDuring?.[0] / 255
+  const expectedRelativeHslDuring = hslRgb(120 * observedAnimationProgress, observedAnimationProgress, 0.5 * observedAnimationProgress)
+  assert(relativeHslDuring && relativeHslDuring.every((channel, index) => Math.abs(channel - expectedRelativeHslDuring[index]) <= 3), `A relative p:hsl animation must match fixed-angle hue, saturation, and lightness offsets at the same observed progress as its sibling p:rgb animation: ${JSON.stringify({ progress: observedAnimationProgress, expected: expectedRelativeHslDuring, color: shape(triggered, 'Relative HSL color').backgroundColor, channels: relativeHslDuring })}`)
   const textRangeShadowDuringRgb = cssRgb(textRangeOpacityDuring[0]?.textShadow || '')
   assert(textRangeShadowDuringRgb?.[0] > 0 && textRangeShadowDuringRgb[0] < 255 && textRangeShadowDuringRgb[1] === 0 && textRangeShadowDuringRgb[2] === 0, `Character-range shadow.color must interpolate on only the selected text: ${textRangeOpacityDuring[0]?.textShadow}`)
   assert(triggered.slide?.startsWith('01 / 68') && shape(triggered, 'Click fade').visibility === 'visible', 'Clicking the configured trigger shape must start its animation without advancing the slide build.')
@@ -5596,11 +5730,12 @@ try {
   const formulaFontSizeDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'By word' && run.text.trim())?.fontSize || '') / formulaFontSizeBase
   assert(formulaFontSizeDuring > 1.3 && formulaFontSizeDuring < 1.8, `A linear style.fontSize p:tav formula must affect the active text size: ${formulaFontSizeDuring}`)
   const fontWeightDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'Paragraph wipe target' && run.text.trim())?.fontWeight || '')
-  const keyframedFontWeightDuring = Number.parseFloat(triggered.textRuns.find(run => run.name === 'By letter' && run.text.trim())?.fontWeight || '')
+  const keyframedFontWeightRun = triggered.textRuns.find(run => run.name === 'By letter' && run.text.trim())
+  const keyframedFontWeightDuring = Number.parseFloat(keyframedFontWeightRun?.fontWeight || '')
   assert(fontWeightDuring > 400 && fontWeightDuring < 900, `A generic style.fontWeight animation must interpolate text weight at ${Math.round(triggered.now - triggerStartedAt)}ms: ${fontWeightDuring}`)
-  const keyframedFontWeightProgress = Math.min(1, Math.max(0, (triggered.now - triggerStartedAt) / 300))
+  const keyframedFontWeightProgress = Math.min(1, Math.max(0, (keyframedFontWeightRun?.fontWeightSampledAt - triggerStartedAt) / 300))
   const expectedKeyframedFontWeight = keyframedFontWeightProgress < 0.5 ? 400 + keyframedFontWeightProgress * 600 : 700 + (keyframedFontWeightProgress - 0.5) * 400
-  assert(Math.abs(keyframedFontWeightDuring - expectedKeyframedFontWeight) < 50, `A numeric font-weight p:tavLst must interpolate from its keyframes at the captured animation time: ${JSON.stringify({ actual: keyframedFontWeightDuring, expected: expectedKeyframedFontWeight, elapsedMs: triggered.now - triggerStartedAt, dynamicMotionStart })}`)
+  assert(Math.abs(keyframedFontWeightDuring - expectedKeyframedFontWeight) < 50, `A numeric font-weight p:tavLst must interpolate from its keyframes at the style capture time: ${JSON.stringify({ actual: keyframedFontWeightDuring, expected: expectedKeyframedFontWeight, snapshotElapsedMs: triggered.now - triggerStartedAt, styleElapsedMs: keyframedFontWeightRun?.fontWeightSampledAt - triggerStartedAt, siblingProgress: observedAnimationProgress, dynamicMotionStart })}`)
   assert(shape(triggered, 'Custom geometry').opacity === '0.5', `A triggered p:set fltVal must apply its fixed opacity: ${shape(triggered, 'Custom geometry').opacity}`)
   assert(shape(triggered, 'Custom geometry').customPaths[0]?.fill === 'rgb(255, 0, 0)', `A triggered p:set clrVal must apply its fixed fill color: ${JSON.stringify(shape(triggered, 'Custom geometry').customPaths)}`)
   const shadowBlurPixels = value => (value.match(/-?[\d.]+px/g) || []).map(Number.parseFloat)[2]
@@ -6534,6 +6669,8 @@ try {
   const shapeMaskStarts = shapeMaskNames.map(name => shape(shapeMasksInitial, name).clipPath)
   assert(shapeMaskStarts.every(clipPath => clipPath.startsWith('inset(') || clipPath.startsWith('path(')), `Circle, diamond, and box effects must have valid initial masks: ${JSON.stringify(shapeMaskStarts)}`)
   assert((shape(shapeMasksInitial, 'Wheel mask animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 4 && (shape(shapeMasksInitial, 'Wedge mask animation').clipPath.match(/M(?=\s*[-\d])/g) || []).length === 1, 'The wheel and wedge filters must retain their authored spoke counts.')
+  const wedgeInitialRay = firstClipRadialPoint(shape(shapeMasksInitial, 'Wedge mask animation').clipPath)
+  assert(wedgeInitialRay && wedgeInitialRay.pointY < wedgeInitialRay.centerY, `An entering wedge must start from the top of the target, distinct from a one-spoke wheel: ${JSON.stringify({wedgeInitialRay, clipPath: shape(shapeMasksInitial, 'Wedge mask animation').clipPath})}`)
   assert(!shapeMasksInitial.warnings.some(warning => warning.includes('p:excl')), 'A finite p:excl group must be supported without a parser warning.')
   const subTimeMediaCallsBefore = (await evaluate(`window.__decklineMediaCalls`)).length
   const subTimeMediaPausesBefore = (await evaluate(`window.__decklineMediaPauses`)).length
@@ -6571,6 +6708,10 @@ try {
     await delay(60)
     const active = await state()
     assert(shape(active, name).clipPath !== shapeMaskStarts[index], `${name} must interpolate after its click trigger.`)
+    if (name === 'Wedge mask animation') {
+      const wedgeActiveRay = firstClipRadialPoint(shape(active, name).clipPath)
+      assert(wedgeActiveRay && wedgeActiveRay.pointY < wedgeActiveRay.centerY, `The wedge reveal must continue sweeping from the top radial origin: ${JSON.stringify({wedgeActiveRay, clipPath: shape(active, name).clipPath})}`)
+    }
     if (index === 0) {
       assert(Number(shape(active, name).opacity) > 0 && Number(shape(active, name).opacity) < 1, 'A same-click p:subTnLst p:animEffect must start before p:excl.')
       assert(!active.warnings.some(warning => warning.includes('Timing curves and repeats on nested p:seq containers are rendered as one pass.')), `A finite-speed p:seq must carry its time scaling through nested p:par groups: ${JSON.stringify(active.warnings)}`)
@@ -8431,7 +8572,7 @@ try {
   }
   }
 } catch (error) {
-  if (!(indefiniteDurationOnly && error instanceof Error && error.message === '__indefinite_duration_verified__') && !(bounceEndOnly && error instanceof Error && error.message === '__bounce_end_verified__') && !(transitionSoundOnly && error instanceof Error && error.message === '__transition_sound_verified__') && !(localeOnly && error instanceof Error && error.message === '__locale_verified__') && !(iteratedTextEffectsOnly && error instanceof Error && error.message === '__iterated_text_effects_verified__') && !(subTimeAfterEffectOnly && error instanceof Error && error.message === '__subtime_after_effect_verified__') && !(subTimeSoundOnly && error instanceof Error && error.message === '__subtime_sound_verified__') && !(transitionSpeedOnly && error instanceof Error && error.message === '__transition_speed_verified__') && !(timeFilterOnly && error instanceof Error && error.message === '__time_filter_verified__') && !(animationSpeedOnly && error instanceof Error && error.message === '__animation_speed_verified__') && !(prismContentOnly && error instanceof Error && error.message === '__prism_content_verified__') && !(scaleCompositionOnly && error instanceof Error && error.message === '__scale_composition_verified__') && !(uploadErrorOnly && error instanceof Error && error.message === '__upload_error_verified__') && !(latestUploadOnly && error instanceof Error && error.message === '__latest_upload_verified__') && !(shadowOffsetOnly && error instanceof Error && error.message === '__shadow_offset_verified__')) throw error
+  if (!(indefiniteDurationOnly && error instanceof Error && error.message === '__indefinite_duration_verified__') && !(bounceEndOnly && error instanceof Error && error.message === '__bounce_end_verified__') && !(cutOnly && error instanceof Error && error.message === '__cut_effects_verified__') && !(transitionSoundOnly && error instanceof Error && error.message === '__transition_sound_verified__') && !(localeOnly && error instanceof Error && error.message === '__locale_verified__') && !(iteratedTextEffectsOnly && error instanceof Error && error.message === '__iterated_text_effects_verified__') && !(wedgeIterationOnly && error instanceof Error && error.message === '__wedge_iteration_verified__') && !(subTimeAfterEffectOnly && error instanceof Error && error.message === '__subtime_after_effect_verified__') && !(subTimeSoundOnly && error instanceof Error && error.message === '__subtime_sound_verified__') && !(transitionSpeedOnly && error instanceof Error && error.message === '__transition_speed_verified__') && !(timeFilterOnly && error instanceof Error && error.message === '__time_filter_verified__') && !(animationSpeedOnly && error instanceof Error && error.message === '__animation_speed_verified__') && !(prismContentOnly && error instanceof Error && error.message === '__prism_content_verified__') && !(scaleCompositionOnly && error instanceof Error && error.message === '__scale_composition_verified__') && !(uploadErrorOnly && error instanceof Error && error.message === '__upload_error_verified__') && !(latestUploadOnly && error instanceof Error && error.message === '__latest_upload_verified__') && !(shadowOffsetOnly && error instanceof Error && error.message === '__shadow_offset_verified__')) throw error
 } finally {
   await Promise.race([closeBrowser(), delay(1_000)])
   socket?.close()
@@ -8448,6 +8589,6 @@ try {
     await rm(runtimeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 }
-if (!inputPptx && !captureOnly && !indefiniteDurationOnly && !bounceEndOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !themeBackgroundOnly && !transitionSoundOnly && !localeOnly && !iteratedTextEffectsOnly && !subTimeAfterEffectOnly && !subTimeSoundOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !prismContentOnly && !uploadErrorOnly && !latestUploadOnly) {
+if (!inputPptx && !captureOnly && !indefiniteDurationOnly && !bounceEndOnly && !cutOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !themeBackgroundOnly && !transitionSoundOnly && !localeOnly && !iteratedTextEffectsOnly && !wedgeIterationOnly && !subTimeAfterEffectOnly && !subTimeSoundOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !prismContentOnly && !uploadErrorOnly && !latestUploadOnly) {
   console.log('Volume-HLC and volume-OHLC stock chart secondary-axis verification passed.')
 }

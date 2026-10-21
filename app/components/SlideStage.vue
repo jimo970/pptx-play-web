@@ -7,7 +7,7 @@ import { characterScript, cssFontFamily, type ScriptFont } from '~/utils/text-fo
 import { getPptxChartStacking, isSvgPolygonGeometry, presetEllipsePoint } from '~/utils/pptx-render-utils'
 import type { PptxAnimation, PptxAnimationTriggerCondition, PptxChart, PptxChartDataLabelPosition, PptxChartDataLabelStyle, PptxChartMarkerSymbol, PptxChartTickLabelPosition, PptxChartTickMark, PptxElement, PptxHyperlink, PptxParagraph, PptxShadow, PptxSlide, PptxTableCell, PptxTriggerPlayback } from '~/utils/pptx-model'
 import { inverseTimingProgress, timingProgress } from '~/utils/animation-timing'
-import { barnClipPath, clipPathMaskImage, dissolveClipPath, gridTransitionClipPath, gridTransitionMaskImage, randomBarClipPath, shapeEffectClipPath, stripsClipPath, wheelClipPath } from '~/utils/transitionMasks'
+import { barnClipPath, clipPathMaskImage, dissolveClipPath, gridTransitionClipPath, gridTransitionMaskImage, randomBarClipPath, shapeEffectClipPath, stripsClipPath, wedgeTransitionClipPath, wheelClipPath } from '~/utils/transitionMasks'
 import type { LocaleMessageKey } from '~/composables/useLocale'
 
 const { t } = useLocale()
@@ -4974,6 +4974,29 @@ function animationWheel(element: PptxElement, paragraphIndex?: number, character
   return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
 }
 
+function animationWedge(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'wedge'
+    && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
+  const first = actions[0]
+  if (!first) return {}
+  let progress = first.direction === 'in' ? 0 : 1
+  let reset = false
+  for (const action of actions) {
+    const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
+    if (phase === -2) {
+      reset = true
+      continue
+    }
+    if (phase === null || phase < 0) continue
+    reset = false
+    progress = action.direction === 'in' ? phase : 1 - phase
+  }
+  if (reset) return {}
+  const { width, height } = elementRenderSize(element)
+  const clipPath = wedgeTransitionClipPath(width * scale.value, height * scale.value, progress)
+  return animationClipMaskStyle(element, clipPath, paragraphIndex !== undefined || characterStart !== undefined)
+}
+
 function animationRandomBars(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'randomBars'
     && animationTargetsRange(action, paragraphIndex, characterStart, characterEnd)) || []
@@ -5127,6 +5150,7 @@ function animationStyle(element: PptxElement): CSSProperties {
     ...animationShapeMask(element),
     ...animationDissolve(element),
     ...animationWheel(element),
+    ...animationWedge(element),
     ...animationRandomBars(element),
     ...animationStrips(element),
     ...animationBarn(element),
@@ -5149,6 +5173,7 @@ function paragraphAnimationStyle(element: PptxElement, index: number): CSSProper
     ...animationShapeMask(element, index),
     ...animationDissolve(element, index),
     ...animationWheel(element, index),
+    ...animationWedge(element, index),
     ...animationRandomBars(element, index),
     ...animationStrips(element, index),
   }
@@ -5174,6 +5199,7 @@ function characterAnimationStyle(element: PptxElement, paragraphIndex: number, s
     ...animationShapeMask(element, undefined, start, end),
     ...animationDissolve(element, undefined, start, end),
     ...animationWheel(element, undefined, start, end),
+    ...animationWedge(element, undefined, start, end),
     ...animationRandomBars(element, undefined, start, end),
     ...animationStrips(element, undefined, start, end),
   }

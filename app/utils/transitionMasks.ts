@@ -291,7 +291,8 @@ export function wedgeTransitionClipPath(width: number, height: number, progress:
   const amount = Math.max(0, Math.min(1, progress))
   const centerX = width / 2
   const centerY = height / 2
-  const radius = Math.hypot(width, height) / 2 + 1
+  // The 12-edge circle approximation must circumscribe the rectangle at full reveal.
+  const radius = Math.hypot(width, height) / (2 * Math.cos(Math.PI / 12)) + 1
   const halfAngle = Math.PI * amount
   const points = Array.from({ length: 13 }, (_, point) => {
     const angle = -Math.PI / 2 - halfAngle + halfAngle * 2 * point / 12
@@ -300,12 +301,11 @@ export function wedgeTransitionClipPath(width: number, height: number, progress:
   return `path("M${centerX.toFixed(2)} ${centerY.toFixed(2)} ${points.join(' ')} Z")`
 }
 
-export function dissolveClipPath(width: number, height: number, progress: number, seed = 'slide'): string {
-  // ponytail: 8 tiles on the short edge bounds path size; replace with a pixel mask if frame captures show the coarse dissolve is noticeable.
+export function dissolveClipPath(width: number, height: number, progress: number, seed = 'slide', shortEdgeDivisions = 8): string {
   const amount = Math.max(0, Math.min(progress, 1))
   if (amount === 0) return 'inset(50%)'
   if (amount === 1) return 'inset(0)'
-  const unit = Math.max(1, Math.min(width, height)) / 8
+  const unit = Math.max(1, Math.min(width, height)) / Math.max(1, shortEdgeDivisions)
   const columns = Math.max(1, Math.round(width / unit))
   const rows = Math.max(1, Math.round(height / unit))
   const cellWidth = width / columns
