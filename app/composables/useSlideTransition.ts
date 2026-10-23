@@ -24,7 +24,7 @@ type SlideTransition = NonNullable<PptxSlide['transition']>
 
 // p:random has no concrete effect attributes, so selected effects need their own schema defaults.
 const randomTransitionDefaults: Partial<Record<ConcreteTransitionEffect, Partial<SlideTransition>>> = {
-  zoom: { direction: 'in' },
+  zoom: { direction: 'out' },
   split: { direction: 'out', orientation: 'horz' },
   doors: { orientation: 'horz' },
   window: { orientation: 'horz' },
@@ -41,7 +41,7 @@ const randomTransitionDefaults: Partial<Record<ConcreteTransitionEffect, Partial
   wheel: { spokes: 4 },
   wheelReverse: { spokes: 4 },
   randomBar: { barOrientation: 'horizontal' },
-  strips: { direction: 'ld' },
+  strips: { direction: 'lu' },
 }
 
 function resolveRandomTransition(transition: NonNullable<PptxSlide['transition']>) {

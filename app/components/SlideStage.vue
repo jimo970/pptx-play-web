@@ -1225,12 +1225,14 @@ const props = withDefaults(defineProps<{
   animationStep?: number
   showAnimations?: boolean
   showNarration?: boolean
+  useTimings?: boolean
   thumbnail?: boolean
   playbackPreview?: boolean
   triggerPlayback?: PptxTriggerPlayback[]
-}>(), { animationStep: 0, showAnimations: true, showNarration: true, thumbnail: false, playbackPreview: false })
+}>(), { animationStep: 0, showAnimations: true, showNarration: true, useTimings: true, thumbnail: false, playbackPreview: false })
 const emit = defineEmits<{
   'trigger-playback': [playback: PptxTriggerPlayback[]]
+  'timeline-settled': [settled: boolean]
   'activate-hyperlink': [hyperlink: PptxHyperlink]
   'stop-all-audio': []
 }>()
@@ -1361,6 +1363,7 @@ const invalidMediaFadeIds = ref<string[]>([])
 const blockedMediaPlaybackIds = ref<string[]>([])
 const mediaPlaybackFrames = new Map<HTMLMediaElement, number>()
 const mediaFadeStates = new WeakMap<HTMLMediaElement, { baseVolume: number; appliedVolume: number; appliedFactor: number; baseMuted: boolean; appliedMuted: boolean }>()
+const mediaTimelineBasePlaybackRates = new WeakMap<HTMLMediaElement, number>()
 const lastMediaBookmarkTimes = new WeakMap<HTMLMediaElement, number>()
 const mediaBookmarkPlaybackStarted = new WeakSet<HTMLMediaElement>()
 const mediaBookmarkTriggersByMedia = computed(() => {
@@ -1378,10 +1381,12 @@ const mediaBookmarkTriggersByMedia = computed(() => {
 const executedMediaActions = new Set<number>()
 const scheduledMediaActions = new Map<string, number>()
 const startedMediaActions = new Map<string, number>()
+const mediaActionStartSeconds = new Map<string, number>()
 const completedMediaActions = reactive(new Map<string, number>())
 const endedMediaTargets = reactive(new Map<string, number>())
 const mediaActionEndTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const exclusivePausedMedia = new Map<HTMLMediaElement, {remainingMs?: number; actionKey?: string; pausedAt: number}>()
+let timelineSettledState: boolean | undefined
 let automaticStartedAt: number | undefined
 let stepStartedAt = new Map<number, number>()
 let mainStepEndedAt = new Map<number, number>()
@@ -1637,20 +1642,96 @@ const timelineNow = (action: RenderAnimation) => {
   const now = Math.min(animationClock.value, timelineEnd(action) ?? Infinity)
   return timelineTimeAt(action, now)
 }
-const animationDuration = (action: PptxAnimation) => action.durationMs === 0
+const parentDuration = (action: PptxAnimation) => action.parentEndMs === undefined
+  ? Infinity
+  : Math.max(0, action.parentEndMs - action.delayMs)
+const mediaTimelineEndDuration = (action: PptxAnimation) => {
+  const parentEndDuration = parentDuration(action)
+  const authoredDuration = action.mediaCommand === 'play' && action.mediaPlaybackRate === 0 && action.mediaDurationMs !== 0
+    ? Infinity
+    : action.mediaDurationMs
+    ?? (action.mediaCommand === 'play' && Number.isFinite(parentEndDuration) ? parentEndDuration : undefined)
+  return authoredDuration === undefined ? undefined : Math.max(0, Math.min(authoredDuration, parentEndDuration))
+}
+const mediaActionEndRemaining = (action: RenderAnimation, actionStartMs: number, actionNowMs: number) => {
+  const parentEndAt = timelineParentEndAt(action) ?? Infinity
+  const parentRemaining = Math.max(0, parentEndAt - actionNowMs)
+  const authoredElapsed = Math.max(0, actionNowMs - (actionStartMs + action.delayMs))
+  const authoredRemaining = action.mediaDurationMs === undefined
+    ? Infinity
+    : Math.max(0, action.mediaDurationMs - authoredElapsed)
+  const remaining = Math.min(parentRemaining, authoredRemaining)
+  return Number.isFinite(remaining) ? remaining : undefined
+}
+const iterationStaggerMs = (action: PptxAnimation, index = 0) => {
+  const interval = action.iteration?.intervalMs
+  // An indefinite tmAbs interval leaves the first unit at t=0; avoid Infinity * 0 => NaN.
+  return interval === undefined || index <= 0 ? 0 : interval * index
+}
+const iterationSpanMs = (action: PptxAnimation) => {
+  const rangeCount = action.iteration?.ranges.length || 0
+  return rangeCount > 1 ? iterationStaggerMs(action, rangeCount - 1) : 0
+}
+const animationDuration = (action: PptxAnimation) => Math.min(action.durationMs === 0
   ? 0
-  : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity)
-const naturalAnimationDuration = (action: PptxAnimation) => action.effect === 'media'
-  ? action.mediaDurationMs ?? 0
+  : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity), parentDuration(action))
+function hasUnboundedRepeat(action: PptxAnimation): boolean {
+  return action.effect !== 'media'
+    && !action.timingWarp
+    && action.durationMs > 0
+    && action.repeatCount === Infinity
+    && !Number.isFinite(action.repeatDurationMs)
+}
+const timingWarpRemainingDuration = (action: PptxAnimation) => {
+  const remaining = action.timingWarp!.groupEndDelayMs - action.delayMs
+  return Number.isNaN(remaining) ? 0 : Math.max(0, remaining)
+}
+const naturalAnimationDuration = (action: PptxAnimation) => Math.min(action.effect === 'media'
+  ? mediaTimelineEndDuration(action) ?? 0
   : action.timingWarp
-    ? Math.max(0, action.timingWarp.groupEndDelayMs - action.delayMs)
+    ? timingWarpRemainingDuration(action)
   : action.durationMs === 0
     ? 0
   : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (Number.isFinite(action.repeatCount) || action.repeatDurationMs !== undefined ? action.repeatCount ?? 1 : 1), action.repeatDurationMs ?? Infinity)
-    + (action.iteration ? action.iteration.intervalMs * (action.iteration.ranges.length - 1) : 0)
+    + iterationSpanMs(action), parentDuration(action))
+function mediaActionNaturalStart(action: PptxAnimation, media: HTMLMediaElement, range: { start: number; end: number }): number {
+  const recordedStart = action.mediaActionKey ? mediaActionStartSeconds.get(action.mediaActionKey) : undefined
+  const playbackStart = recordedStart ?? action.mediaStartSeconds ?? (media.currentTime < range.start ? range.start : media.currentTime)
+  return Math.max(range.start, Math.min(playbackStart, range.end))
+}
+function naturalSeekAnimationDuration(action: PptxAnimation): number {
+  if (action.effect === 'media') {
+    const authoredDuration = naturalAnimationDuration(action)
+    if (action.mediaCommand !== 'play') return authoredDuration
+    const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || [])
+      .find(item => item.dataset.mediaId === action.targetId)
+    if (!media || !Number.isFinite(media.duration)) return authoredDuration
+    const element = props.slide.elements.find(item => item.id === action.targetId)
+    const range = element ? mediaPlaybackRange(media, element) : { start: 0, end: media.duration, valid: true }
+    const playbackRate = action.mediaPlaybackRate ?? 1
+    if (!(playbackRate > 0)) return authoredDuration
+    const mediaDuration = Math.max(0, range.end - mediaActionNaturalStart(action, media, range)) * 1_000 / playbackRate
+    const authoredLimit = Math.min(action.mediaDurationMs ?? Infinity, parentDuration(action))
+    return Math.min(mediaDuration, authoredLimit)
+  }
+  if (action.timingWarp) {
+    const warp = action.timingWarp
+    if (warp.groupPlaybackDurationMs !== Infinity || !(warp.groupSpeed > 0)) return naturalAnimationDuration(action)
+    // PowerPoint's sequence seek uses the end of the first loop for an infinitely looping child.
+    // For a repeated parent time container, use its first wall-clock cycle boundary.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.sequencetimenode?view=openxml-2.12.3
+    const firstGroupCycleMs = warp.groupDurationMs * (warp.groupAutoReverse ? 2 : 1) / warp.groupSpeed
+    const iterationTailMs = warp.groupPerIteration ? iterationSpanMs(action) : 0
+    return Math.min(Math.max(0, warp.groupOffsetMs + firstGroupCycleMs + iterationTailMs - action.delayMs), parentDuration(action))
+  }
+  if (!hasUnboundedRepeat(action)) return naturalAnimationDuration(action)
+  // A direct infinite repeat has no finite natural duration; seek stops at its first simple-duration cycle.
+  const firstCycleMs = action.durationMs * (action.autoReverse ? 2 : 1) + iterationSpanMs(action)
+  return Math.min(firstCycleMs, parentDuration(action))
+}
 const animationScheduleDuration = (action: PptxAnimation) => action.effect === 'media' ? 0 : action.timingWarp
-  ? Math.max(0, action.timingWarp.groupEndDelayMs - action.delayMs)
-  : animationDuration(action) + (action.iteration ? action.iteration.intervalMs * (action.iteration.ranges.length - 1) : 0)
+  ? Math.min(timingWarpRemainingDuration(action), parentDuration(action))
+  : Math.min(animationDuration(action) + iterationSpanMs(action), parentDuration(action))
 function iterationIndexFor(action: PptxAnimation, start: number, end: number): number | undefined {
   const ranges = action.iteration?.ranges
   if (!ranges) return undefined
@@ -1806,6 +1887,13 @@ function timelinePauseDuration(action: RenderAnimation, at: number): number {
 function timelineTimeAt(action: RenderAnimation, time: number): number {
   return Number.isFinite(time) ? time - timelinePauseDuration(action, time) : time
 }
+function timelineParentEndAt(action: RenderAnimation, parentEndMs = action.parentEndMs): number | undefined {
+  const sequenceStart = timelineBaseStart(action)
+  if (parentEndMs === undefined || sequenceStart === undefined || !Number.isFinite(sequenceStart)) return undefined
+  // OOXML child timing is relative to its parent start; apply pause mapping to the resulting absolute deadline once.
+  // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.childtimenodelist?view=openxml-2.19.0
+  return timelineTimeAt(action, sequenceStart + parentEndMs)
+}
 const timelineStart = (action: RenderAnimation) => {
   const startedAt = rawTimelineStart(action)
   return startedAt === undefined || !Number.isFinite(startedAt) ? startedAt : timelineTimeAt(action, startedAt)
@@ -1912,7 +2000,7 @@ const triggerTargetIds = computed(() => {
   }
   return targetIds
 })
-function endTimelineStep(triggerSequence: number | undefined, step: number, endedAt: number) {
+function endTimelineStep(triggerSequence: number | undefined, step: number, endedAt: number, seekMediaToNaturalEnd = false) {
   if (triggerSequence === undefined) mainStepEndedAt.set(step, endedAt)
   else triggerStepEndedAt.set(triggerKey(triggerSequence, step), endedAt)
   timelineActions.value.forEach((action, index) => {
@@ -1923,12 +2011,22 @@ function endTimelineStep(triggerSequence: number | undefined, step: number, ende
     const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || [])
       .find(item => item.dataset.mediaId === action.targetId)
     if (media) {
+      if (seekMediaToNaturalEnd && action.mediaCommand === 'play' && (action.mediaPlaybackRate ?? 1) > 0 && media.readyState > 0 && Number.isFinite(media.duration)) {
+        const element = props.slide.elements.find(item => item.id === action.targetId)
+        const range = element ? mediaPlaybackRange(media, element) : { start: 0, end: media.duration, valid: true }
+        const playbackStart = mediaActionNaturalStart(action, media, range)
+        const duration = naturalSeekAnimationDuration(action) / 1_000
+        const targetTime = Math.min(range.end, playbackStart + Math.max(0, duration) * (action.mediaPlaybackRate ?? 1))
+        media.currentTime = Math.max(range.start, targetTime)
+      }
       media.pause()
+      restoreMediaTimelinePlaybackRate(media)
       delete media.dataset.mediaActionEndAt
       mediaBookmarkPlaybackStarted.delete(media)
       lastMediaBookmarkTimes.delete(media)
     }
     if (action.mediaActionKey) {
+      mediaActionStartSeconds.delete(action.mediaActionKey)
       completedMediaActions.set(action.mediaActionKey, endedAt)
       clearMediaActionEnd(action.mediaActionKey)
     }
@@ -2029,7 +2127,9 @@ function scheduleTimelineUpdate() {
   const now = animationClock.value
   syncExclusiveMediaPlayback(now)
   const exclusiveActive = exclusiveTimelineRanges.value.some(range => range.startAt <= now && now < range.endAt)
-  const nextTimingNodeTriggerAt = exclusiveActive ? Infinity : runTimingNodeTriggeredAnimations(now)
+  const nextTimingNodeTriggerAt = exclusiveActive
+    ? Infinity
+    : Math.min(runTimingNodeTriggeredAnimations(now), runTriggeredBuildAutoAdvances(now))
   const scheduleAnimatedTextAutoFit = () => {
     const targetIds = new Set(timelineActions.value
       .filter(action => action.effect === 'fontSize' && animationClockTargetIds.has(action.targetId))
@@ -2050,6 +2150,7 @@ function scheduleTimelineUpdate() {
     }, Infinity)
     scheduleAnimatedTextAutoFit()
     const nextScheduledTime = Math.min(nextScheduledAt, nextExclusiveBoundary)
+    publishTimelineSettled(Number.isFinite(nextScheduledTime))
     if (Number.isFinite(nextScheduledTime) && nextScheduledTime > now) {
       animationTimer = setTimeout(() => {
         animationTimer = undefined
@@ -2078,6 +2179,7 @@ function scheduleTimelineUpdate() {
       if (end > actionNow || start === actionNow) animationClockTargetIds.add(action.targetId)
     }
   }
+  publishTimelineSettled(hasActiveAnimation || Number.isFinite(nextStart))
   scheduleAnimatedTextAutoFit()
   const update = () => {
     animationFrame = 0
@@ -2089,6 +2191,20 @@ function scheduleTimelineUpdate() {
   else if (Number.isFinite(nextStart)) animationTimer = setTimeout(update, Math.max(0, nextStart - now))
 }
 
+function publishTimelineSettled(hasPendingTimeline: boolean) {
+  const allAnimationStepsStarted = props.animationStep >= (props.slide.animationSteps?.length || 0)
+  const activeMediaAction = timelineActions.value.some((action, index) =>
+    action.effect === 'media'
+    && Boolean(action.mediaCommand && action.mediaActionKey)
+    && executedMediaActions.has(index)
+    && !completedMediaActions.has(action.mediaActionKey!)
+  )
+  const settled = allAnimationStepsStarted && !hasPendingTimeline && !activeMediaAction
+  if (timelineSettledState === settled) return
+  timelineSettledState = settled
+  emit('timeline-settled', settled)
+}
+
 function refreshTimeline() {
   cancelTimelineUpdates()
   animationTimelineVersion.value++
@@ -2098,12 +2214,14 @@ function refreshTimeline() {
 
 function beginSlideTimeline(step: number) {
   const now = performance.now()
+  timelineSettledState = undefined
   invalidMediaTrimIds.value = []
   invalidMediaFadeIds.value = []
   blockedMediaPlaybackIds.value = []
   executedMediaActions.clear()
   scheduledMediaActions.clear()
   startedMediaActions.clear()
+  mediaActionStartSeconds.clear()
   completedMediaActions.clear()
   endedMediaTargets.clear()
   for (const actionKey of mediaActionEndTimers.keys()) clearMediaActionEnd(actionKey)
@@ -2195,8 +2313,9 @@ watch([() => props.slide.id, () => props.animationStep], ([slideId, step], [oldS
     }
     if (nextAction === 'seek' && oldStep > 0) {
       const startedAt = stepStartedAt.get(previousStep)
-      const naturalEnd = Math.max(0, ...(props.slide.animationSteps?.[previousStep] || []).map(action => action.delayMs + naturalAnimationDuration(action)))
-      if (startedAt !== undefined && startedAt !== Number.NEGATIVE_INFINITY) stepStartedAt.set(previousStep, Math.min(startedAt, now - naturalEnd))
+      const naturalEnd = Math.max(0, ...(props.slide.animationSteps?.[previousStep] || []).map(action => action.delayMs + naturalSeekAnimationDuration(action)))
+      if (startedAt !== undefined && Number.isFinite(startedAt) && Number.isFinite(naturalEnd)) stepStartedAt.set(previousStep, now - naturalEnd)
+      endTimelineStep(undefined, previousStep, now, true)
     }
     stepStartedAt.set(oldStep, now)
   } else if (step < oldStep) {
@@ -2223,6 +2342,7 @@ watch([() => props.slide.id, () => props.animationStep], ([slideId, step], [oldS
   refreshTimeline()
 }, { flush: 'post' })
 watch([() => props.slide.id, () => props.triggerPlayback], syncTriggerPlayback, { flush: 'post' })
+watch(() => props.useTimings, refreshTimeline)
 onUnmounted(() => {
   observer?.disconnect()
   pixelRatioQuery?.removeEventListener('change', updatePixelRatio)
@@ -2291,14 +2411,20 @@ function elementRenderSize(element: PptxElement): { width: number; height: numbe
 }
 
 function elementStyle(element: PptxElement): CSSProperties {
-  const { width, height, scaleX: matrixScaleX, scaleY: matrixScaleY } = elementRenderSize(element)
+  const { width: baseWidth, height: baseHeight, scaleX: matrixScaleX, scaleY: matrixScaleY } = elementRenderSize(element)
   const flips = [element.flipH ? 'scaleX(-1)' : '', element.flipV ? 'scaleY(-1)' : ''].filter(Boolean).join(' ')
   const matrix = element.renderMatrix
   const [scaleX, scaleY] = animationScale(element)
-  const [motionX, motionY] = animationMotion(element)
+  const scaleOrigin = animationScaleOrigin(element)
+  const motionValue = animationMotion(element)
+  const width = Math.max(0, baseWidth + motionValue.dimensionDelta[0])
+  const height = Math.max(0, baseHeight + motionValue.dimensionDelta[1])
+  const [motionX, motionY] = motionValue.offset
   const [slideX, slideY] = animationSlide(element)
   const hasScaleAnimation = scaleX !== 1 || scaleY !== 1
   const rotation = animationRotation(element)
+  const [rotationX, rotationY] = animationRotation3d(element)
+  const has3dRotation = Math.abs(rotationX) > 0.0001 || Math.abs(rotationY) > 0.0001
   const rotationDelta = rotation - element.rotation
   const hasRotationAnimation = Math.abs(rotationDelta) > 0.0001
   const motion = motionX || motionY ? `translate(${motionX * scale.value}px,${motionY * scale.value}px)` : ''
@@ -2328,9 +2454,18 @@ function elementStyle(element: PptxElement): CSSProperties {
   const normalizedMatrix = matrix
     ? [matrix[0] / matrixScaleX, matrix[1] / matrixScaleX, matrix[2] / matrixScaleY, matrix[3] / matrixScaleY]
     : undefined
+  const centerX = width * scale.value / 2
+  const centerY = height * scale.value / 2
+  const originX = scaleOrigin ? width * scale.value * scaleOrigin[0] : centerX
+  const originY = scaleOrigin ? height * scale.value * scaleOrigin[1] : centerY
+  const rotation3d = [rotationX ? `rotateX(${rotationX}deg)` : '', rotationY ? `rotateY(${rotationY}deg)` : ''].filter(Boolean).join(' ')
   const transform = matrix
-    ? [translations, `matrix(${normalizedMatrix!.join(',')},${matrix[4] * scale.value},${matrix[5] * scale.value})${hasScaleAnimation || hasRotationAnimation ? ` translate(${width * scale.value / 2}px,${height * scale.value / 2}px)${hasRotationAnimation ? ` rotate(${rotationDelta}deg)` : ''}${hasScaleAnimation ? ` scale(${scaleX},${scaleY})` : ''} translate(${-width * scale.value / 2}px,${-height * scale.value / 2}px)` : ''}`].filter(Boolean).join(' ')
-    : [translations, rotation ? `rotate(${rotation}deg)` : '', flips, hasScaleAnimation ? `scale(${scaleX},${scaleY})` : ''].filter(Boolean).join(' ')
+    ? [translations, has3dRotation ? 'perspective(1200px)' : '', `matrix(${normalizedMatrix!.join(',')},${matrix[4] * scale.value},${matrix[5] * scale.value})${hasScaleAnimation || hasRotationAnimation || has3dRotation ? ` translate(${centerX}px,${centerY}px)${hasRotationAnimation ? ` rotate(${rotationDelta}deg)` : ''}${rotation3d ? ` ${rotation3d}` : ''}${hasScaleAnimation ? ` translate(${originX - centerX}px,${originY - centerY}px) scale(${scaleX},${scaleY}) translate(${-originX}px,${-originY}px)` : ` translate(${-centerX}px,${-centerY}px)`}` : ''}`].filter(Boolean).join(' ')
+    : [translations, has3dRotation ? 'perspective(1200px)' : '', rotation ? `rotate(${rotation}deg)` : '', flips, rotation3d, hasScaleAnimation
+        ? scaleOrigin
+          ? `translate(${(scaleOrigin[0] - 0.5) * width * scale.value}px,${(scaleOrigin[1] - 0.5) * height * scale.value}px) scale(${scaleX},${scaleY}) translate(${(0.5 - scaleOrigin[0]) * width * scale.value}px,${(0.5 - scaleOrigin[1]) * height * scale.value}px)`
+          : `scale(${scaleX},${scaleY})`
+        : ''].filter(Boolean).join(' ')
   return {
     left: `${(element.x / props.width) * 100}%`,
     top: `${(element.y / props.height) * 100}%`,
@@ -2339,6 +2474,7 @@ function elementStyle(element: PptxElement): CSSProperties {
     overflow: customGeometry || usesSvgOutline(element) ? 'visible' : undefined,
     transform: transform || undefined,
     transformOrigin: matrix ? '0 0' : undefined,
+    backfaceVisibility: has3dRotation ? 'hidden' : undefined,
     background: element.kind === 'shape' && !customGeometry && !usesSvgPolygon(element) ? fillOn ? radialBackground || applyColorOpacity(fill, fillOpacity) : 'none' : undefined,
     borderColor: showStroke ? stroke : undefined,
     borderWidth: showStroke ? `${strokeWidth * scale.value * renderBlurScale}px` : undefined,
@@ -3433,11 +3569,11 @@ function animationLineEnd(element: PptxElement, side: 'head' | 'tail'): NonNulla
   let type = baseline?.type || 'none'
   for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'lineArrow' && item.lineArrowProperty === property) || []) {
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       type = baseline?.type || 'none'
       continue
     }
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     if (action.lineArrowKeyframes?.length) {
       for (const frame of action.lineArrowKeyframes) {
         if (frame.offset > progress) break
@@ -3456,11 +3592,11 @@ function animationLineEnd(element: PptxElement, side: 'head' | 'tail'): NonNulla
     let value = initial
     for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'lineArrowSize' && item.lineArrowSizeProperty === property) || []) {
       const progress = animationProgress(action)
-      if (progress === -2) {
+      if (progress === ANIMATION_PROGRESS_EXPIRED) {
         value = initial
         continue
       }
-      if (progress === null || progress < 0) continue
+      if (!isAnimationProgressActive(progress)) continue
       if (action.lineArrowSizeKeyframes?.length) {
         for (const frame of action.lineArrowSizeKeyframes) {
           if (frame.offset > progress) break
@@ -3563,18 +3699,18 @@ function animationShadowOffset(element: PptxElement, shadow: PptxShadow, shadowI
   for (const action of actions) {
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
     const progress = animationProgress(action, iterationIndex)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       if (action.shadowOffsetProperty === 'shadow.offset.x') x = baseX
       else if (action.shadowOffsetProperty === 'shadow.offset.y') y = baseY
       continue
     }
-    if (progress === null || progress < 0 || action.shadowOffsetFrom === undefined || action.shadowOffsetTo === undefined) continue
+    if (!isAnimationProgressActive(progress) || action.shadowOffsetFrom === undefined || action.shadowOffsetTo === undefined) continue
     const keyframes = action.shadowOffsetKeyframes
     const formulaSamples = action.shadowOffsetFormulaSamples
     const from = action.shadowOffsetFrom
     const to = action.shadowOffsetTo
     let value = formulaSamples?.length
-      ? animationKeyframeValue(formulaSamples, 'lin', progress)
+      ? animationKeyframeValue(formulaSamples, action.shadowOffsetKeyframeMode, progress)
       : keyframes?.length
         ? animationKeyframeValue(keyframes, action.shadowOffsetKeyframeMode, progress)
         : from + (to - from) * progress
@@ -3643,11 +3779,11 @@ function imageCrop(element: PptxElement): NonNullable<PptxElement['imageCrop']> 
     const property = action.imageCropProperty
     if (!property || (action.imageCropTo === undefined && !action.imageCropKeyframes?.length)) continue
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       crop[property] = base[property]
       continue
     }
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     const value = action.imageCropKeyframes?.length
       ? animationKeyframeValue(action.imageCropKeyframes, action.imageCropKeyframeMode, progress)
       : (action.imageCropFrom ?? crop[property]) + ((action.imageCropTo ?? 0) - (action.imageCropFrom ?? crop[property])) * progress
@@ -3661,7 +3797,7 @@ function imageGrayscale(element: PptxElement): boolean {
   let grayscale = element.imageGrayscale === true
   for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'grayscale') || []) {
     const progress = animationProgress(action)
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     let value: boolean = action.grayscaleFrom ?? grayscale
     if (action.grayscaleKeyframes?.length) {
       for (const frame of action.grayscaleKeyframes) {
@@ -3680,11 +3816,11 @@ function imageTone(element: PptxElement): {gain: number; blacklevel: number; gam
     const property = action.imageToneProperty
     if (!property || (action.imageToneTo === undefined && !action.imageToneKeyframes?.length)) continue
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       tone[property] = property === 'blacklevel' ? 0 : 1
       continue
     }
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     const from = action.imageToneFrom ?? tone[property]
     const value = action.imageToneKeyframes?.length
       ? animationKeyframeValue(action.imageToneKeyframes, action.imageToneKeyframeMode, progress)
@@ -3696,6 +3832,12 @@ function imageTone(element: PptxElement): {gain: number; blacklevel: number; gam
 
 function imageToneEnabled(element: PptxElement): boolean {
   return element.kind === 'picture' && Boolean(animationsByTarget.value.get(element.id)?.some(item => item.effect === 'imageTone'))
+}
+
+function imageToneGammaExponent(gamma: number): number {
+  // VML uses 0 as the default/no-correction gamma value; the SVG filter's equivalent neutral exponent is 1.
+  // https://learn.microsoft.com/en-us/windows/win32/vml/msdn-online-vml-gamma-attribute
+  return gamma > 0 ? 1 / gamma : 1
 }
 
 function imageToneFilterId(element: PptxElement): string {
@@ -3792,6 +3934,31 @@ function updateMediaFadeForEvent(event: Event, element: PptxElement) {
   updateMediaFade(event.currentTarget as HTMLMediaElement, element)
 }
 
+function applyMediaTimelinePlaybackRate(media: HTMLMediaElement, requestedRate: number) {
+  if (!Number.isFinite(requestedRate) || requestedRate < 0) return
+  if (requestedRate === 0 || requestedRate === 1) {
+    restoreMediaTimelinePlaybackRate(media)
+    return
+  }
+  if (!mediaTimelineBasePlaybackRates.has(media)) mediaTimelineBasePlaybackRates.set(media, media.playbackRate)
+  try {
+    media.playbackRate = requestedRate
+  } catch {
+    restoreMediaTimelinePlaybackRate(media)
+  }
+}
+
+function restoreMediaTimelinePlaybackRate(media: HTMLMediaElement) {
+  const baseRate = mediaTimelineBasePlaybackRates.get(media)
+  if (baseRate === undefined) return
+  try {
+    media.playbackRate = baseRate
+  } catch {
+    // Keep cleanup best-effort for browser media engines with fixed-rate sources.
+  }
+  mediaTimelineBasePlaybackRates.delete(media)
+}
+
 function updateMediaOnPlay(event: Event, element: PptxElement) {
   blockedMediaPlaybackIds.value = blockedMediaPlaybackIds.value.filter(id => id !== element.id)
   let startedAction = false
@@ -3814,6 +3981,7 @@ function finishTimedMedia(target: PptxElement | string, refresh = true, targetEn
     delete media.dataset.mediaActionEndAt
     mediaBookmarkPlaybackStarted.delete(media)
     lastMediaBookmarkTimes.delete(media)
+    restoreMediaTimelinePlaybackRate(media)
   }
   timelineActions.value.forEach((action, index) => {
     if (action.effect !== 'media' || action.targetId !== targetId || !action.mediaActionKey || !executedMediaActions.has(index)) return
@@ -3832,6 +4000,8 @@ function runTimedMediaActions() {
     const stoppedAt = timelineEnd(action)
     const actionNow = timelineNow(action)
     if (stoppedAt !== undefined && startedAt !== undefined && startedAt + action.delayMs >= timelineTimeAt(action, stoppedAt)) return
+    const parentEndAt = timelineParentEndAt(action)
+    if (parentEndAt !== undefined && startedAt !== undefined && startedAt + action.delayMs >= parentEndAt) return
     if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY || timelineIsPaused(action, animationClock.value) || actionNow < startedAt + action.delayMs) return
     executedMediaActions.add(index)
     if (action.mediaActionKey) scheduledMediaActions.set(action.mediaActionKey, animationClock.value)
@@ -3861,23 +4031,43 @@ function runTimedMediaActions() {
       if (action.mediaVolume !== undefined) media.volume = action.mediaVolume
       if (action.mediaMuted !== undefined) media.muted = action.mediaMuted
       media.currentTime = 0
-      void media.play().then(() => {
+      if (action.mediaActionKey) mediaActionStartSeconds.set(action.mediaActionKey, 0)
+      const playbackRate = action.mediaPlaybackRate ?? 1
+      if (playbackRate === 0) {
+        restoreMediaTimelinePlaybackRate(media)
+        media.pause()
         if (action.mediaActionKey && !startedMediaActions.has(action.mediaActionKey)) {
           startedMediaActions.set(action.mediaActionKey, performance.now())
           refreshTimeline()
         }
-      }).catch(error => {
-        if (error instanceof DOMException && error.name === 'NotAllowedError' && !blockedMediaPlaybackIds.value.includes(action.targetId)) {
-          blockedMediaPlaybackIds.value = [...blockedMediaPlaybackIds.value, action.targetId]
-        }
-      })
-      if (action.mediaActionKey && action.mediaDurationMs !== undefined) {
-        scheduleMediaActionEnd(action, media, action.mediaDurationMs)
+      } else {
+        applyMediaTimelinePlaybackRate(media, playbackRate)
+        void media.play().then(() => {
+          if (action.mediaActionKey && !startedMediaActions.has(action.mediaActionKey)) {
+            startedMediaActions.set(action.mediaActionKey, performance.now())
+            refreshTimeline()
+          }
+        }).catch(error => {
+          if (error instanceof DOMException && error.name === 'NotAllowedError' && !blockedMediaPlaybackIds.value.includes(action.targetId)) {
+            blockedMediaPlaybackIds.value = [...blockedMediaPlaybackIds.value, action.targetId]
+          }
+        })
+      }
+      const mediaEndDuration = startedAt === undefined
+        ? undefined
+        : mediaActionEndRemaining(action, startedAt, actionNow)
+      if (action.mediaActionKey && mediaEndDuration !== undefined) {
+        scheduleMediaActionEnd(action, media, mediaEndDuration)
       }
       return
     }
     if (!element) return
     const startsPlayback = action.mediaCommand === 'play' || action.mediaCommand === 'togglePause' && media.paused
+    if (action.mediaCommand === 'play' && action.mediaActionKey) {
+      const trimStart = (element.mediaTrim?.startMs || 0) / 1_000
+      const playbackStart = action.mediaStartSeconds ?? (media.currentTime < trimStart ? trimStart : media.currentTime)
+      mediaActionStartSeconds.set(action.mediaActionKey, playbackStart)
+    }
     if (action.mediaActionKey && (!startsPlayback || !media.paused)) startedMediaActions.set(action.mediaActionKey, performance.now())
     if (action.mediaSlideCount) media.dataset.mediaSlideCount = String(action.mediaSlideCount)
     if (action.mediaVolume !== undefined) media.volume = action.mediaVolume
@@ -3892,6 +4082,17 @@ function runTimedMediaActions() {
       else apply()
     }
     const play = () => {
+      const playbackRate = action.mediaPlaybackRate ?? 1
+      if (playbackRate === 0) {
+        restoreMediaTimelinePlaybackRate(media)
+        media.pause()
+        if (action.mediaActionKey && !startedMediaActions.has(action.mediaActionKey)) {
+          startedMediaActions.set(action.mediaActionKey, performance.now())
+          refreshTimeline()
+        }
+        return
+      }
+      applyMediaTimelinePlaybackRate(media, playbackRate)
       void media.play().then(() => {
         if (action.mediaActionKey && !startedMediaActions.has(action.mediaActionKey)) {
           startedMediaActions.set(action.mediaActionKey, performance.now())
@@ -3907,8 +4108,11 @@ function runTimedMediaActions() {
       if (action.mediaStartSeconds !== undefined) seek(action.mediaStartSeconds)
       else if (media.currentTime < (element.mediaTrim?.startMs || 0) / 1000) seek((element.mediaTrim?.startMs || 0) / 1000)
       play()
-      if (action.mediaActionKey && action.mediaDurationMs !== undefined) {
-        scheduleMediaActionEnd(action, media, action.mediaDurationMs)
+      const mediaEndDuration = startedAt === undefined
+        ? undefined
+        : mediaActionEndRemaining(action, startedAt, actionNow)
+      if (action.mediaActionKey && mediaEndDuration !== undefined) {
+        scheduleMediaActionEnd(action, media, mediaEndDuration)
       }
     } else if (action.mediaCommand === 'pause') media.pause()
     else if (action.mediaCommand === 'togglePause') {
@@ -3943,12 +4147,18 @@ function finalAnimationProgress(action: PptxAnimation): number {
 }
 
 function animationFillExpired(action: RenderAnimation, startedAt: number | undefined, iterationIndex = 0): boolean {
+  // Office keeps hold/freeze values while their parent time node is running or holding.
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/9bdaa76e-c714-4034-8c29-ac42071e3484
+  if (startedAt !== undefined && Number.isFinite(startedAt) && action.parentFillEndMs !== undefined) {
+    const parentEndAt = timelineParentEndAt(action, action.parentFillEndMs)
+    if (parentEndAt !== undefined && timelineNow(action) >= parentEndAt) return true
+  }
   if (action.fillMode === 'remove') {
     if (startedAt === undefined) return action.triggerSequence === undefined && !action.automatic && action.step < props.animationStep
     if (startedAt === Number.NEGATIVE_INFINITY || reduceMotion.value) return true
     const stoppedAt = timelineEnd(action)
     if (stoppedAt !== undefined && animationClock.value >= stoppedAt) return true
-    const stagger = action.iteration ? action.iteration.intervalMs * iterationIndex : 0
+    const stagger = action.iteration ? iterationStaggerMs(action, iterationIndex) : 0
     return action.timingWarp
       ? timingWarpChildElapsed(action, startedAt, stagger) >= animationDuration(action)
       : timelineNow(action) >= startedAt + action.delayMs + stagger + animationDuration(action)
@@ -3998,20 +4208,25 @@ function timingWarpChildElapsed(action: RenderAnimation, startedAt: number, stag
     - warp.childOffsetMs - (warp.groupPerIteration ? 0 : stagger)
 }
 
+const ANIMATION_PROGRESS_PRE_START = Number.NEGATIVE_INFINITY
+const ANIMATION_PROGRESS_EXPIRED = Number.POSITIVE_INFINITY
+const isAnimationProgressActive = (progress: number | null): progress is number =>
+  progress !== null && Number.isFinite(progress)
+
 function animationProgress(action: RenderAnimation, iterationIndex?: number): number | null {
   if (props.thumbnail && !props.playbackPreview) return null
   const now = timelineNow(action)
   if (action.iteration && (iterationIndex === undefined || iterationIndex < 0)) return null
   const startedAt = timelineStart(action)
-  const stagger = action.iteration ? action.iteration.intervalMs * (iterationIndex || 0) : 0
-  if (animationFillExpired(action, startedAt, iterationIndex || 0)) return -2
+  const stagger = action.iteration ? iterationStaggerMs(action, iterationIndex || 0) : 0
+  if (animationFillExpired(action, startedAt, iterationIndex || 0)) return ANIMATION_PROGRESS_EXPIRED
   if (startedAt === undefined) return action.triggerSequence === undefined && !action.automatic && action.step < props.animationStep ? finalAnimationProgress(action) : null
-  if (startedAt === Infinity) return -1
+  if (startedAt === Infinity) return ANIMATION_PROGRESS_PRE_START
   if (startedAt === Number.NEGATIVE_INFINITY || reduceMotion.value) return finalAnimationProgress(action)
   const elapsed = action.timingWarp
     ? timingWarpChildElapsed(action, startedAt, stagger)
     : now - startedAt - action.delayMs - stagger
-  if (elapsed < 0) return -1
+  if (elapsed < 0) return ANIMATION_PROGRESS_PRE_START
   if (action.effectProgress !== undefined) return action.effectProgress
   if (action.durationMs === 0) return action.reversePlayback ? 0 : 1
   const cycleDuration = action.durationMs * (action.autoReverse ? 2 : 1)
@@ -4034,7 +4249,7 @@ function completedAnimationRepeats(action: RenderAnimation, iterationIndex?: num
   if (startedAt === undefined) return action.triggerSequence === undefined && !action.automatic && action.step < props.animationStep ? lastRepeat : 0
   if (startedAt === Infinity) return 0
   if (startedAt === Number.NEGATIVE_INFINITY || reduceMotion.value) return Number.isFinite(lastRepeat) ? lastRepeat : 0
-  const stagger = action.iteration ? action.iteration.intervalMs * (iterationIndex || 0) : 0
+  const stagger = action.iteration ? iterationStaggerMs(action, iterationIndex || 0) : 0
   const elapsed = action.timingWarp
     ? timingWarpChildElapsed(action, startedAt, stagger)
     : timelineNow(action) - startedAt - action.delayMs - stagger
@@ -4077,16 +4292,16 @@ function composedAnimationScale(layers: AnimationScaleLayers): [number, number] 
 }
 
 function animationScale(element: PptxElement): [number, number] {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => ['scale', 'zoom'].includes(action.effect) && !action.paragraphRange && !action.characterRange && !action.iteration) || []
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => ['scale', 'zoom', 'spiral'].includes(action.effect) && !action.paragraphRange && !action.characterRange && !action.iteration) || []
   const layers: AnimationScaleLayers = { dimensions: [1, 1], transform: [1, 1] }
   for (const action of actions) {
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       if (!action.scaleAdditive && !action.scaleMultiplicative) applyAnimationScaleLayer(layers, action, [1, 1])
       continue
     }
-    if (progress === null || progress < 0) {
-      if (action.effect === 'zoom' && action.direction === 'in' && action.scaleFrom) applyAnimationScaleLayer(layers, action, action.scaleFrom)
+    if (!isAnimationProgressActive(progress)) {
+      if (action.scaleFrom && action.direction === 'in' && (action.effect === 'zoom' || action.effect === 'spiral' || action.scaleOrigin)) applyAnimationScaleLayer(layers, action, action.scaleFrom)
       continue
     }
     if (!action.scaleFrom || !action.scaleTo) continue
@@ -4095,6 +4310,14 @@ function animationScale(element: PptxElement): [number, number] {
     applyAnimationScaleLayer(layers, action, animatedScale)
   }
   return composedAnimationScale(layers)
+}
+
+function animationScaleOrigin(element: PptxElement): [number, number] | undefined {
+  let origin: [number, number] | undefined
+  for (const action of animationsByTarget.value.get(element.id)?.filter(item => ['scale', 'zoom'].includes(item.effect) && !item.paragraphRange && !item.characterRange && !item.iteration && item.scaleOrigin) || []) {
+    if (animationProgress(action) !== ANIMATION_PROGRESS_EXPIRED) origin = action.scaleOrigin
+  }
+  return origin
 }
 
 function animationScaleValue(action: RenderAnimation, progress: number, iterationIndex?: number, currentScale?: [number, number]): [number, number] {
@@ -4132,19 +4355,52 @@ function animationScaleValue(action: RenderAnimation, progress: number, iteratio
 }
 
 function animationRotation(element: PptxElement): number {
-  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'rotation' && !action.paragraphRange && !action.characterRange && !action.iteration) || []
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => ['rotation', 'spiral'].includes(action.effect) && !action.rotationAxis && !action.paragraphRange && !action.characterRange && !action.iteration) || []
   let value = element.rotation
   for (const action of actions) {
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       value = element.rotation
       continue
     }
-    if (progress === null || progress < 0 || action.rotationFrom === undefined || action.rotationTo === undefined) continue
+    if (!isAnimationProgressActive(progress)) {
+      if (action.effect === 'spiral' && action.direction === 'in' && action.rotationFrom !== undefined) value = action.rotationFrom
+      continue
+    }
+    if (action.rotationFrom === undefined || action.rotationTo === undefined) continue
     const rotation = animationRotationValue(action, progress, value)
     value = action.rotationRelative || action.rotationAdditive ? value + rotation : rotation
   }
   return value
+}
+
+function animationRotation3d(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): [number, number] {
+  const textRange = paragraphIndex !== undefined && characterStart !== undefined && characterEnd !== undefined
+  const values: [number, number] = [0, 0]
+  const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'rotation' && action.rotationAxis
+    && (textRange
+      ? Boolean(action.paragraphRange || action.characterRange || action.iteration)
+        && (!action.paragraphRange || paragraphIndex! >= action.paragraphRange.start && paragraphIndex! <= action.paragraphRange.end)
+        && (!action.characterRange || characterStart! < action.characterRange.end && characterEnd! > action.characterRange.start)
+        && (!action.iteration || (iterationIndexFor(action, characterStart!, characterEnd!) ?? -1) >= 0)
+      : !action.paragraphRange && !action.characterRange && !action.iteration)) || []
+  for (const action of actions) {
+    const iterationIndex = textRange ? iterationIndexFor(action, characterStart!, characterEnd!) : undefined
+    const axis = action.rotationAxis === 'x' ? 0 : 1
+    const progress = animationProgress(action, iterationIndex)
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
+      if (!action.rotationRelative && !action.rotationAdditive) values[axis] = 0
+      continue
+    }
+    if (!isAnimationProgressActive(progress)) {
+      if (action.direction === 'in' && action.rotationFrom !== undefined) values[axis] = action.rotationFrom
+      continue
+    }
+    if (action.rotationFrom === undefined || action.rotationTo === undefined) continue
+    const rotation = animationRotationValue(action, progress, values[axis], iterationIndex)
+    values[axis] = action.rotationRelative || action.rotationAdditive ? values[axis] + rotation : rotation
+  }
+  return values
 }
 
 function animationRotationValue(action: RenderAnimation, progress: number, currentRotation: number, iterationIndex?: number): number {
@@ -4169,10 +4425,9 @@ function animationKeyframeValue(keyframes: Array<{ offset: number; value: number
   const nextIndex = keyframes.findIndex(frame => frame.offset >= progress)
   if (nextIndex === 0) return keyframes[0]!.value
   if (nextIndex < 0) {
-    if (keyframes.length < 2) return keyframes.at(-1)!.value
-    const from = keyframes.at(-2)!, to = keyframes.at(-1)!
-    const segmentProgress = (progress - from.offset) / (to.offset - from.offset)
-    return from.value + (to.value - from.value) * segmentProgress
+    // A tav defines a keypoint; once past the last one, preserve its value instead of extrapolating.
+    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timeanimatevalue?view=openxml-3.0.1
+    return keyframes.at(-1)!.value
   }
   const from = keyframes[nextIndex - 1]!, to = keyframes[nextIndex]!
   const segmentProgress = (progress - from.offset) / (to.offset - from.offset)
@@ -4200,12 +4455,12 @@ function animationOpacity(
   for (const action of actions) {
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
     const progress = animationProgress(action, iterationIndex)
-    if (progress === -2) continue
-    if (progress === null || progress < 0 || action.opacityFrom === undefined || action.opacityTo === undefined) continue
+    if (progress === ANIMATION_PROGRESS_EXPIRED) continue
+    if (!isAnimationProgressActive(progress) || action.opacityFrom === undefined || action.opacityTo === undefined) continue
     const formulaSamples = action.opacityFormulaSamples
     const keyframes = action.opacityKeyframes
     let animatedOpacity: number
-    if (formulaSamples?.length) animatedOpacity = animationKeyframeValue(formulaSamples, 'lin', progress)
+    if (formulaSamples?.length) animatedOpacity = animationKeyframeValue(formulaSamples, action.opacityKeyframeMode, progress)
     else if (keyframes?.length) animatedOpacity = animationKeyframeValue(keyframes, action.opacityKeyframeMode, progress)
     else animatedOpacity = action.opacityFrom + (action.opacityTo - action.opacityFrom) * progress
     if (action.opacityAccumulate) {
@@ -4226,11 +4481,11 @@ function animationOnOff(element: PptxElement, property: NonNullable<PptxAnimatio
   let enabled = true
   for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'onOff' && item.onOffProperty === property) || []) {
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       enabled = true
       continue
     }
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     if (action.onOffKeyframes?.length) {
       for (const frame of action.onOffKeyframes) {
         if (frame.offset > progress) break
@@ -4249,11 +4504,11 @@ function animationStrokeDash(element: PptxElement): PptxElement['strokeDash'] {
   let strokeDash = element.strokeDash
   for (const action of animationsByTarget.value.get(element.id)?.filter(item => item.effect === 'strokeDash') || []) {
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       strokeDash = element.strokeDash
       continue
     }
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     if (action.strokeDashKeyframes?.length) {
       for (const frame of action.strokeDashKeyframes) {
         if (frame.offset > progress) break
@@ -4273,13 +4528,13 @@ function animationStrokeWidth(element: PptxElement): number {
   let strokeWidth = element.strokeWidth
   for (const action of actions) {
     const progress = animationProgress(action)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       strokeWidth = element.strokeWidth
       continue
     }
-    if (progress === null || progress < 0 || action.strokeWidthFrom === undefined || action.strokeWidthTo === undefined) continue
+    if (!isAnimationProgressActive(progress) || action.strokeWidthFrom === undefined || action.strokeWidthTo === undefined) continue
     strokeWidth = action.strokeWidthFormulaSamples?.length
-      ? animationKeyframeValue(action.strokeWidthFormulaSamples, 'lin', progress)
+      ? animationKeyframeValue(action.strokeWidthFormulaSamples, action.strokeWidthKeyframeMode, progress)
       : action.strokeWidthKeyframes?.length
         ? animationKeyframeValue(action.strokeWidthKeyframes, action.strokeWidthKeyframeMode, progress)
         : action.strokeWidthFrom + (action.strokeWidthTo - action.strokeWidthFrom) * progress
@@ -4292,9 +4547,10 @@ function animationStrokeWidth(element: PptxElement): number {
   return strokeWidth
 }
 
-function animationColor(element: PptxElement, property: NonNullable<PptxAnimation['colorProperty']>, paragraphIndex?: number, characterStart?: number, characterEnd?: number, baselineColor?: string): string | undefined {
+function animationColor(element: PptxElement, property: NonNullable<PptxAnimation['colorProperty']>, paragraphIndex?: number, characterStart?: number, characterEnd?: number, baselineColor?: string, textTarget = false): string | undefined {
   const actions = animationsByTarget.value.get(element.id)?.filter((action) => {
     if (action.effect !== 'color' || action.colorProperty !== property) return false
+    if (textTarget && property === 'stroke.color' && !action.paragraphRange && !action.characterRange && !action.iteration) return false
     const paragraphRange = action.paragraphRange
     const characterRange = action.characterRange
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
@@ -4306,13 +4562,15 @@ function animationColor(element: PptxElement, property: NonNullable<PptxAnimatio
   for (const action of actions) {
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
     const progress = animationProgress(action, iterationIndex)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       color = undefined
       continue
     }
     let from = action.colorFrom, to = action.colorTo
     if (action.colorFromCurrent) {
-      const source = property === 'style.color' ? baselineColor : property === 'fillcolor' ? element.fill : property === 'stroke.color' ? element.stroke : undefined
+      const source = property === 'style.color' || textTarget && property === 'stroke.color'
+        ? baselineColor
+        : property === 'fillcolor' ? element.fill : property === 'stroke.color' ? element.stroke : undefined
       const baseline = animationColorChannelsFromCss(source)
       if (baseline) {
         const [hue, saturation, lightness] = rgbToHsl(baseline[0], baseline[1], baseline[2])
@@ -4330,7 +4588,7 @@ function animationColor(element: PptxElement, property: NonNullable<PptxAnimatio
       }
     }
     const keyframes = action.colorKeyframes
-    if (progress === null || progress < 0 || !from || !to) continue
+    if (!isAnimationProgressActive(progress) || !from || !to) continue
     let colorProgress: number = progress
     if (keyframes?.length) {
       if (action.colorKeyframeMode === 'discrete') {
@@ -4422,13 +4680,13 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
   let factor = 1
   for (const action of actions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       factor = 1
       continue
     }
-    if (progress === null || progress < 0 || action.fontSizeFrom === undefined || action.fontSizeTo === undefined) continue
+    if (!isAnimationProgressActive(progress) || action.fontSizeFrom === undefined || action.fontSizeTo === undefined) continue
     factor = action.fontSizeFormulaSamples?.length
-      ? animationKeyframeValue(action.fontSizeFormulaSamples, 'lin', progress)
+      ? animationKeyframeValue(action.fontSizeFormulaSamples, action.fontSizeKeyframeMode, progress)
       : action.fontSizeKeyframes?.length
       ? animationKeyframeValue(action.fontSizeKeyframes, action.fontSizeKeyframeMode, progress)
       : action.fontSizeFrom + (action.fontSizeTo - action.fontSizeFrom) * progress
@@ -4446,22 +4704,26 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
   }) || []
   for (const action of weightActions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       weight = baseFontWeight
       continue
     }
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     if (action.fontWeightReset) {
       weight = baseFontWeight
       continue
     }
     if (action.fontWeightFrom === undefined || action.fontWeightTo === undefined) continue
     const formulaSamples = action.fontWeightFormulaSamplesByBaseline?.find(entry => entry.baseline === baseFontWeight)?.samples || action.fontWeightFormulaSamples
-    weight = formulaSamples?.length
-      ? animationKeyframeValue(formulaSamples, 'lin', progress)
+    const animatedWeight = formulaSamples?.length
+      ? animationKeyframeValue(formulaSamples, action.fontWeightKeyframeMode, progress)
       : action.fontWeightKeyframes?.length
       ? animationKeyframeValue(action.fontWeightKeyframes, action.fontWeightKeyframeMode, progress)
       : action.fontWeightFrom + (action.fontWeightTo - action.fontWeightFrom) * progress
+    // Microsoft defines numeric to-only/by-only starts as 0; CSS font-weight accepts 1–1000, so clamp at render time.
+    // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e9355b93-5184-4ffe-8428-63a08858da2f
+    // https://www.w3.org/TR/2026/WD-css-fonts-4-20260818/#font-weight-prop
+    weight = Math.min(1000, Math.max(1, animatedWeight))
   }
   let italic: boolean | undefined
   let fontFamily: CSSProperties['fontFamily'] | undefined
@@ -4492,33 +4754,33 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
   for (const action of textStyleActions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
     let value: PptxAnimation['textStyleFrom']
-    if (progress === -2 && action.textStyleProperty === 'fontWeight') {
+    if (progress === ANIMATION_PROGRESS_EXPIRED && action.textStyleProperty === 'fontWeight') {
       weight = baseFontWeight
       continue
-    } else if (progress === -2 && action.textStyleProperty === 'textTransform') {
+    } else if (progress === ANIMATION_PROGRESS_EXPIRED && action.textStyleProperty === 'textTransform') {
       verticalAlign = run.baselineOffsetEm === undefined ? 'baseline' : `${run.baselineOffsetEm}em`
       verticalAlignChanged = true
       textTransformScale = 1
       continue
-    } else if (progress === -2 && action.textStyleProperty === 'outline') {
+    } else if (progress === ANIMATION_PROGRESS_EXPIRED && action.textStyleProperty === 'outline') {
       textOutline = baseTextOutline
       textOutlineChanged = true
       continue
-    } else if (progress === -2 && action.textStyleProperty === 'textShadow') {
+    } else if (progress === ANIMATION_PROGRESS_EXPIRED && action.textStyleProperty === 'textShadow') {
       textShadow = runTextShadowStyle(element, run, paragraphIndex, characterStart, characterEnd)
       textShadowChanged = true
       continue
-    } else if (progress === -2 && action.textStyleProperty === 'emboss') {
+    } else if (progress === ANIMATION_PROGRESS_EXPIRED && action.textStyleProperty === 'emboss') {
       textEmbossEnabled = false
       textEmbossChanged = true
       continue
-    } else if (progress === -2) {
+    } else if (progress === ANIMATION_PROGRESS_EXPIRED) {
       if (action.textStyleProperty === 'fontFamily') value = baseFontFamily || ''
       else if (action.textStyleProperty === 'fontStyle') value = Boolean(run.italic)
       else if (action.textStyleProperty === 'underline') value = Boolean(run.underline)
       else if (action.textStyleProperty === 'lineThrough') value = Boolean(run.lineThrough)
     }
-    else if (progress === null || progress < 0) continue
+    else if (!isAnimationProgressActive(progress)) continue
     else if (action.textStyleKeyframes?.length) {
       value = action.textStyleKeyframes[0]!.value
       for (const frame of action.textStyleKeyframes) {
@@ -4585,7 +4847,7 @@ function textRunAnimationStyle(element: PptxElement, paragraphIndex: number, cha
 function textTransformAnimationStyle(element: PptxElement, paragraphIndex: number, characterStart: number, characterEnd: number): CSSProperties {
   const actions = animationsByTarget.value.get(element.id)?.filter(action => {
     const iterationIndex = iterationIndexFor(action, characterStart, characterEnd)
-    if (!['scale', 'zoom', 'rotation', 'motion', 'slide'].includes(action.effect) || !(action.paragraphRange || action.characterRange || action.iteration)) return false
+    if (!['scale', 'zoom', 'spiral', 'rotation', 'motion', 'slide'].includes(action.effect) || !(action.paragraphRange || action.characterRange || action.iteration)) return false
     return (!action.paragraphRange || paragraphIndex >= action.paragraphRange.start && paragraphIndex <= action.paragraphRange.end)
       && (!action.characterRange || characterStart < action.characterRange.end && characterEnd > action.characterRange.start)
       && (!action.iteration || iterationIndex !== undefined && iterationIndex >= 0)
@@ -4593,41 +4855,57 @@ function textTransformAnimationStyle(element: PptxElement, paragraphIndex: numbe
   if (!actions.length) return {}
   const scaleLayers: AnimationScaleLayers = { dimensions: [1, 1], transform: [1, 1] }
   let rotation = 0
-  const [motionX, motionY] = animationMotion(element, paragraphIndex, characterStart, characterEnd)
+  let scaleOrigin: [number, number] | undefined
+  const [motionX, motionY] = animationMotion(element, paragraphIndex, characterStart, characterEnd).offset
   const [slideX, slideY] = animationSlide(element, paragraphIndex, characterStart, characterEnd)
   for (const action of actions) {
     const progress = animationProgress(action, iterationIndexFor(action, characterStart, characterEnd))
-    if (progress === -2) {
-      if (action.effect === 'scale' || action.effect === 'zoom') {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
+      if (action.effect === 'scale' || action.effect === 'zoom' || action.effect === 'spiral') {
         if (!action.scaleAdditive && !action.scaleMultiplicative) applyAnimationScaleLayer(scaleLayers, action, [1, 1])
       }
-      else if (action.effect === 'rotation') rotation = 0
+      if (action.effect === 'rotation' || action.effect === 'spiral') rotation = 0
       continue
     }
-    if (progress === null || progress < 0) {
-      if (action.effect === 'zoom' && action.direction === 'in' && action.scaleFrom) applyAnimationScaleLayer(scaleLayers, action, action.scaleFrom)
+    if (action.scaleOrigin) scaleOrigin = action.scaleOrigin
+    if (!isAnimationProgressActive(progress)) {
+      if (action.scaleFrom && action.direction === 'in' && (action.effect === 'zoom' || action.effect === 'spiral' || action.scaleOrigin)) applyAnimationScaleLayer(scaleLayers, action, action.scaleFrom)
+      if (action.effect === 'spiral' && action.direction === 'in' && action.rotationFrom !== undefined) rotation = action.rotationFrom
       continue
     }
-    if ((action.effect === 'scale' || action.effect === 'zoom') && action.scaleFrom && action.scaleTo) {
+    if ((action.effect === 'scale' || action.effect === 'zoom' || action.effect === 'spiral') && action.scaleFrom && action.scaleTo) {
       const currentScale = action.scaleLayer === 'dimensions' ? scaleLayers.dimensions : scaleLayers.transform
       const animatedScale = animationScaleValue(action, progress, iterationIndexFor(action, characterStart, characterEnd), action.scaleFromCurrent ? currentScale : undefined)
       applyAnimationScaleLayer(scaleLayers, action, animatedScale)
-    } else if (action.effect === 'rotation' && action.rotationFrom !== undefined && action.rotationTo !== undefined) {
+    }
+    if ((action.effect === 'rotation' || action.effect === 'spiral') && !action.rotationAxis && action.rotationFrom !== undefined && action.rotationTo !== undefined) {
       const angle = animationRotationValue(action, progress, rotation, iterationIndexFor(action, characterStart, characterEnd))
       rotation = action.rotationRelative || action.rotationAdditive ? rotation + angle : angle
     }
   }
   const scaling = composedAnimationScale(scaleLayers)
+  const [rotationX, rotationY] = animationRotation3d(element, paragraphIndex, characterStart, characterEnd)
+  const has3dRotation = Math.abs(rotationX) > 0.0001 || Math.abs(rotationY) > 0.0001
   const transforms = [
+    has3dRotation ? 'perspective(1200px)' : '',
     motionX || motionY ? `translate(${motionX * scale.value}px, ${motionY * scale.value}px)` : '',
     slideX || slideY ? `translate(${slideX * scale.value}px, ${slideY * scale.value}px)` : '',
     scaling[0] !== 1 || scaling[1] !== 1 ? `scale(${scaling[0]}, ${scaling[1]})` : '',
     rotation ? `rotate(${rotation}deg)` : '',
+    rotationX ? `rotateX(${rotationX}deg)` : '',
+    rotationY ? `rotateY(${rotationY}deg)` : '',
   ].filter(Boolean)
-  return { display: 'inline-block', transform: transforms.join(' '), transformOrigin: 'center center' }
+  return {
+    display: 'inline-block',
+    transform: transforms.join(' '),
+    transformOrigin: scaleOrigin ? `${scaleOrigin[0] * 100}% ${scaleOrigin[1] * 100}%` : 'center center',
+    backfaceVisibility: has3dRotation ? 'hidden' : undefined
+  }
 }
 
-function animationMotion(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): [number, number] {
+type AnimationMotionValue = {offset: [number, number]; dimensionDelta: [number, number]}
+
+function animationMotion(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): AnimationMotionValue {
   const textRange = paragraphIndex !== undefined && characterStart !== undefined && characterEnd !== undefined
   const actions = animationsByTarget.value.get(element.id)?.filter(action => action.effect === 'motion'
     && (textRange
@@ -4635,34 +4913,30 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
         && (!action.paragraphRange || paragraphIndex! >= action.paragraphRange.start && paragraphIndex! <= action.paragraphRange.end)
         && (!action.characterRange || characterStart! < action.characterRange.end && characterEnd! > action.characterRange.start)
       : !action.paragraphRange && !action.characterRange && !action.iteration)) || []
-  let value: [number, number] = [0, 0]
+  const values: Record<'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h', number> = {ppt_x: 0, ppt_y: 0, ppt_w: 0, ppt_h: 0}
+  const propertiesFor = (action: RenderAnimation): Array<'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h'> => action.motionCoordinateProperty
+    ? [action.motionCoordinateProperty]
+    : action.motionCoordinateProperties || ['ppt_x', 'ppt_y']
+  const setMotionValue = (action: RenderAnimation, property: 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h', delta: number) => {
+    values[property] = action.motionAdditive ? values[property] + delta : delta
+  }
   const applyMotionValue = (action: RenderAnimation, motion: [number, number]) => {
-    if (action.motionCoordinateProperties) {
-      const mapped: [number, number] = [0, 0]
-      for (const [index, property] of action.motionCoordinateProperties.entries()) {
-        const axis = property === 'ppt_x' ? 0 : 1
-        mapped[axis] += motion[index] || 0
-      }
-      value = action.motionAdditive ? [value[0] + mapped[0], value[1] + mapped[1]] : mapped
-    } else if (action.motionCoordinateProperty === 'ppt_x') value = [action.motionAdditive ? value[0] + motion[0] : motion[0], value[1]]
-    else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], action.motionAdditive ? value[1] + motion[1] : motion[1]]
-    else value = action.motionAdditive
-      ? [value[0] + motion[0], value[1] + motion[1]]
-      : motion
+    if (action.motionCoordinateProperty) {
+      const axis = action.motionCoordinateProperty === 'ppt_x' ? 0 : 1
+      setMotionValue(action, action.motionCoordinateProperty, motion[axis] || 0)
+      return
+    }
+    for (const [index, property] of propertiesFor(action).entries()) setMotionValue(action, property, motion[index] || 0)
   }
   for (const action of actions) {
     const iterationIndex = textRange ? iterationIndexFor(action, characterStart!, characterEnd!) : undefined
     const progress = animationProgress(action, iterationIndex)
-    if (progress === -2) {
-      if (!action.motionAdditive) {
-        if (action.motionCoordinateProperty === 'ppt_x') value = [0, value[1]]
-        else if (action.motionCoordinateProperty === 'ppt_y') value = [value[0], 0]
-        else value = [0, 0]
-      }
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
+      if (!action.motionAdditive) for (const property of propertiesFor(action)) values[property] = 0
       continue
     }
     const samples = action.motionPathSamples
-    if (progress !== null && progress >= 0 && samples?.length) {
+    if (isAnimationProgressActive(progress) && samples?.length) {
       if (samples.length === 1) {
         const offset = motionAccumulationOffset(action, iterationIndex)
         applyMotionValue(action, [samples[0]!.x + offset[0], samples[0]!.y + offset[1]])
@@ -4673,14 +4947,16 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
       const toIndex = Math.min(samples.length - 1, fromIndex + 1)
       const from = samples[fromIndex]!
       const to = samples[toIndex]!
-      const ratio = samplePosition - fromIndex
+      const ratio = action.motionCoordinateKeyframeMode === 'discrete'
+        ? samplePosition >= samples.length - 1 ? 1 : 0
+        : samplePosition - fromIndex
       const offset = motionAccumulationOffset(action, iterationIndex)
       const motion: [number, number] = [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]]
       applyMotionValue(action, motion)
       continue
     }
     const path = action.motionPath
-    if (progress === null || progress < 0 || !path?.length) continue
+    if (!isAnimationProgressActive(progress) || !path?.length) continue
     const offset = motionAccumulationOffset(action, iterationIndex)
     if (path.length === 1) {
       const point = path[0]
@@ -4688,6 +4964,13 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
       continue
     }
     const distance = (action.motionPathLength || 0) * progress
+    if (distance < 0 && path.length > 1) {
+      const from = path[0]!, to = path[1]!
+      const span = to.distance - from.distance
+      const ratio = span ? (distance - from.distance) / span : 0
+      applyMotionValue(action, [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]])
+      continue
+    }
     if (distance > (action.motionPathLength || 0) && path.length > 1) {
       const from = path.at(-2)!, to = path.at(-1)!
       const span = to.distance - from.distance
@@ -4713,7 +4996,10 @@ function animationMotion(element: PptxElement, paragraphIndex?: number, characte
     const ratio = span ? (distance - from.distance) / span : 0
     applyMotionValue(action, [from.x + (to.x - from.x) * ratio + offset[0], from.y + (to.y - from.y) * ratio + offset[1]])
   }
-  return value
+  return {
+    offset: [values.ppt_x, values.ppt_y],
+    dimensionDelta: [values.ppt_w, values.ppt_h]
+  }
 }
 
 function animationSlide(element: PptxElement, paragraphIndex?: number, characterStart?: number, characterEnd?: number): [number, number] {
@@ -4735,9 +5021,9 @@ function animationSlide(element: PptxElement, paragraphIndex?: number, character
       ? iterationIndexFor(action, characterStart, characterEnd)
       : undefined
     const progress = animationProgress(action, iterationIndex)
-    if (progress === -2) { value = [0, 0]; continue }
+    if (progress === ANIMATION_PROGRESS_EXPIRED) { value = [0, 0]; continue }
     if (progress === null) continue
-    const phase = progress < 0 ? 0 : progress
+    const phase = progress === ANIMATION_PROGRESS_PRE_START ? 0 : progress
     const distance = action.direction === 'in' ? 1 - phase : phase
     value = action.slideFrom === 'left' ? [-props.width * distance, 0]
       : action.slideFrom === 'right' ? [props.width * distance, 0]
@@ -4801,18 +5087,17 @@ function animationWipe(element: PptxElement, paragraphIndex?: number, characterS
   let reset = false
   for (const action of actions) {
     const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     direction = action.wipeDirection || direction
     progress = action.direction === 'in' ? phase * 100 : (1 - phase) * 100
   }
   if (reset) return {}
-  const cssDirection = direction === 'up' ? 'bottom' : direction === 'down' ? 'top' : direction
-  const mask = `linear-gradient(to ${cssDirection}, #000 var(--wipe-progress), transparent var(--wipe-progress))`
+  const mask = `linear-gradient(to ${direction}, #000 var(--wipe-progress), transparent var(--wipe-progress))`
   return { '--wipe-progress': `${progress}%`, maskImage: mask, WebkitMaskImage: mask } as CSSProperties
 }
 
@@ -4837,11 +5122,11 @@ function animationBlinds(element: PptxElement, paragraphIndex?: number, characte
   let reset = false
   for (const action of actions) {
     const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     orientation = action.blindsOrientation || orientation
     progress = action.direction === 'in' ? phase : 1 - phase
@@ -4871,11 +5156,11 @@ function animationChecker(element: PptxElement, paragraphIndex?: number, charact
   let reset = false
   for (const action of actions) {
     const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     orientation = action.checkerOrientation || orientation
     progress = action.direction === 'in' ? phase : 1 - phase
@@ -4908,11 +5193,11 @@ function animationShapeMask(element: PptxElement, paragraphIndex?: number, chara
   for (const action of actions) {
     if (!action.shapeFilter || !action.shapeDirection) continue
     const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     current = {
       shape: action.shapeFilter,
@@ -4935,11 +5220,11 @@ function animationDissolve(element: PptxElement, paragraphIndex?: number, charac
   let reset = false
   for (const action of actions) {
     const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     progress = action.direction === 'in' ? phase : 1 - phase
   }
@@ -4959,11 +5244,11 @@ function animationWheel(element: PptxElement, paragraphIndex?: number, character
   let reset = false
   for (const action of actions) {
     const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     spokes = action.wheelSpokes || spokes
     progress = action.direction === 'in' ? phase : 1 - phase
@@ -4983,11 +5268,11 @@ function animationWedge(element: PptxElement, paragraphIndex?: number, character
   let reset = false
   for (const action of actions) {
     const phase = animationProgress(action, animationIterationIndex(action, paragraphIndex, characterStart, characterEnd))
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     progress = action.direction === 'in' ? phase : 1 - phase
   }
@@ -5008,11 +5293,11 @@ function animationRandomBars(element: PptxElement, paragraphIndex?: number, char
   for (const action of actions) {
     const iterationIndex = animationIterationIndex(action, paragraphIndex, characterStart, characterEnd)
     const phase = animationProgress(action, iterationIndex)
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     orientation = action.randomBarOrientation || orientation
     progress = action.direction === 'in' ? phase : 1 - phase
@@ -5034,11 +5319,11 @@ function animationStrips(element: PptxElement, paragraphIndex?: number, characte
   for (const action of actions) {
     const iterationIndex = animationIterationIndex(action, paragraphIndex, characterStart, characterEnd)
     const phase = animationProgress(action, iterationIndex)
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     direction = action.stripsDirection || direction
     progress = action.direction === 'in' ? phase : 1 - phase
@@ -5056,21 +5341,24 @@ function animationBarn(element: PptxElement, paragraphIndex?: number, characterS
   if (!first?.barnOrientation || !first.barnMotion) return {}
   let orientation = first.barnOrientation
   let motion = first.barnMotion
-  let progress = 0
+  // The filter subtype selects barn motion; animEffect@transition selects entrance/exit.
+  // Reverse the clock when those directions disagree so the object still starts and ends visible as requested.
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a96dab70-2e72-4319-928d-0eb4b275ce58
+  let progress = first.direction === first.barnMotion ? 0 : 1
   let reset = false
   for (const action of actions) {
     if (!action.barnOrientation || !action.barnMotion) continue
     const iterationIndex = animationIterationIndex(action, paragraphIndex, characterStart, characterEnd)
     const phase = animationProgress(action, iterationIndex)
-    if (phase === -2) {
+    if (phase === ANIMATION_PROGRESS_EXPIRED) {
       reset = true
       continue
     }
-    if (phase === null || phase < 0) continue
+    if (!isAnimationProgressActive(phase)) continue
     reset = false
     orientation = action.barnOrientation
     motion = action.barnMotion
-    progress = phase
+    progress = action.direction === action.barnMotion ? phase : 1 - phase
   }
   if (reset) return {}
   return { clipPath: barnClipPath(orientation, motion, progress) }
@@ -5078,28 +5366,33 @@ function animationBarn(element: PptxElement, paragraphIndex?: number, characterS
 
 function animationCss(actions: RenderAnimation[] | undefined, characterStart?: number, characterEnd?: number): CSSProperties {
   if (props.thumbnail && !props.playbackPreview || !actions?.length) return {}
-  const visibilityActions = actions.filter(action => ['appear', 'fade', 'wipe', 'strips', 'barn', 'slide', 'visibility', 'zoom'].includes(action.effect) || action.randomEffectFallback)
+  const visibilityActions = actions.filter(action => ['appear', 'fade', 'flash', 'spiral', 'wipe', 'strips', 'barn', 'slide', 'visibility', 'zoom'].includes(action.effect) || action.rotationAxis || action.randomEffectFallback)
   const first = visibilityActions[0]
   if (!first) return {}
   let opacity = first.effect === 'visibility' || first.randomEffectFallback || first.effect === 'wipe' || first.effect === 'strips' || first.effect === 'barn' || first.effect === 'slide' || first.direction === 'out' ? 1 : 0
-  let visibility: 'visible' | 'hidden' = first.effect === 'visibility' ? first.visibilityFrom || 'visible' : first.direction === 'out' ? 'visible' : 'hidden'
+  let visibility: 'visible' | 'hidden' | 'inherit' = first.effect === 'visibility' ? first.visibilityFrom || 'inherit' : first.direction === 'out' ? 'visible' : 'hidden'
   for (const action of visibilityActions) {
     const iterationIndex = characterStart === undefined || characterEnd === undefined ? undefined : iterationIndexFor(action, characterStart, characterEnd)
     const progress = animationProgress(action, iterationIndex)
-    if (progress === -2) {
+    if (progress === ANIMATION_PROGRESS_EXPIRED) {
       opacity = 1
       visibility = 'visible'
       continue
     }
-    if (progress === null || progress < 0) continue
+    if (!isAnimationProgressActive(progress)) continue
     if (action.effect === 'appear') {
       const atEnd = progress >= 1
       visibility = action.direction === 'in'
         ? atEnd ? 'visible' : 'hidden'
         : atEnd ? 'hidden' : 'visible'
       opacity = visibility === 'visible' ? 1 : 0
+    } else if (action.effect === 'flash') {
+      opacity = action.opacityKeyframes?.length
+        ? animationKeyframeValue(action.opacityKeyframes, action.opacityKeyframeMode, progress)
+        : action.direction === 'in' ? progress : 1 - progress
+      visibility = action.direction === 'in' || progress < 1 ? 'visible' : 'hidden'
     } else if (action.effect === 'visibility') {
-      let value = action.visibilityFrom || 'visible'
+      let value = action.visibilityFrom || 'inherit'
       if (action.visibilityKeyframes?.length) {
         for (const frame of action.visibilityKeyframes) {
           if (frame.offset > progress) break
@@ -5119,7 +5412,7 @@ function animationCss(actions: RenderAnimation[] | undefined, characterStart?: n
         ? progress > 0 ? 'visible' : 'hidden'
         : progress >= 1 ? 'hidden' : 'visible'
       opacity = 1
-    } else if (action.effect === 'slide' || action.effect === 'zoom') {
+    } else if (action.effect === 'slide' || action.effect === 'zoom' || action.effect === 'spiral' || action.rotationAxis) {
       visibility = action.direction === 'in' || progress < 1 ? 'visible' : 'hidden'
       opacity = 1
     } else {
@@ -5131,7 +5424,7 @@ function animationCss(actions: RenderAnimation[] | undefined, characterStart?: n
   return {
     opacity,
     visibility,
-    pointerEvents: visibility === 'visible' && opacity > 0 ? 'auto' : 'none',
+    pointerEvents: visibility !== 'hidden' && opacity > 0 ? 'auto' : 'none',
   }
 }
 
@@ -5222,6 +5515,7 @@ function triggerSequenceIsActive(index: number, sequence: NonNullable<PptxSlide[
       if (now < actionStart) return true
       if (action.effect === 'media' && action.mediaActionKey) {
         if (completedMediaActions.has(action.mediaActionKey)) return false
+        if (action.mediaPlaybackRate === 0) return true
         if (action.mediaWaitForEnd) {
           if (blockedMediaPlaybackIds.value.includes(action.targetId)) return false
           const media = Array.from(stage.value?.querySelectorAll<HTMLMediaElement>('[data-media-id]') || [])
@@ -5229,7 +5523,10 @@ function triggerSequenceIsActive(index: number, sequence: NonNullable<PptxSlide[
           return !media || !media.paused
         }
       }
-      return now < actionStart + naturalAnimationDuration(action)
+      // A cTn with an unbounded repeat never completes, so restart="whenNotActive"
+      // must continue to treat its sequence as active.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/02b2312e-9700-42e0-8a19-b2af1ba83a20
+      return now < actionStart + (hasUnboundedRepeat(action) ? Infinity : naturalAnimationDuration(action))
     })
   })
 }
@@ -5269,6 +5566,26 @@ function startTriggeredAnimations(indices: number[], startedAt = performance.now
   emit('trigger-playback', [...triggerPlaybackByKey.values()].sort((a, b) => a.sequence - b.sequence || a.step - b.step))
 }
 
+function timelineActionEventTime(action: RenderAnimation, event: 'onBegin' | 'onEnd'): number | undefined {
+  if (action.effect === 'media' && action.mediaActionKey) {
+    return event === 'onBegin'
+      ? startedMediaActions.get(action.mediaActionKey)
+      : endedMediaTargets.get(action.mediaActionKey)
+  }
+  const actionStartedAt = timelineStart(action)
+  if (actionStartedAt === undefined || !Number.isFinite(actionStartedAt)) return undefined
+  const actionStartAt = actionStartedAt + action.delayMs
+  const stepEndAt = timelineEnd(action)
+  const actionStopAt = Math.min(
+    stepEndAt === undefined ? Infinity : timelineTimeAt(action, stepEndAt),
+    timelineParentEndAt(action) ?? Infinity
+  )
+  if (actionStopAt < actionStartAt) return undefined
+  return event === 'onBegin'
+    ? actionStartAt
+    : Math.min(actionStartAt + (hasUnboundedRepeat(action) ? Infinity : naturalAnimationDuration(action)), actionStopAt)
+}
+
 function runTimingNodeTriggeredAnimations(now: number): number {
   if (props.thumbnail || props.triggerPlayback !== undefined) return Infinity
   let next = Infinity
@@ -5288,12 +5605,41 @@ function runTimingNodeTriggeredAnimations(now: number): number {
                 ? completedMediaActions.get(condition.sourceMediaActionKey!)
                 : endedMediaTargets.get(condition.sourceMediaActionKey!)
           : undefined
-        const sourceEndedAt = !mediaActionTrigger && condition.event === 'onEnd' && condition.sourceStep !== undefined ? mainStepEndedAt.get(condition.sourceStep) : undefined
+        const targetTimeNodeEvent = condition.event === 'onBegin' || condition.event === 'onEnd' ? condition.event : undefined
+        const actionEventAt = !mediaActionTrigger && targetTimeNodeEvent
+          ? timelineActions.value
+            .filter(action => action.sourceTimeNodeId === condition.id)
+            .map(action => timelineActionEventTime(action, targetTimeNodeEvent))
+            .filter((eventAt): eventAt is number => eventAt !== undefined && Number.isFinite(eventAt))
+            .reduce<number | undefined>((earliest, eventAt) => Math.min(earliest ?? Infinity, eventAt), undefined)
+          : undefined
         const sourceTime = mediaActionTrigger
           ? mediaEventAt
-          : sourceStartedAt !== undefined && sourceStartedAt !== Number.NEGATIVE_INFINITY
-            ? sourceEndedAt ?? sourceStartedAt + condition.sourceDelayMs
-            : undefined
+          : targetTimeNodeEvent
+            ? actionEventAt ?? (sourceStartedAt !== undefined && sourceStartedAt !== Number.NEGATIVE_INFINITY
+                ? sourceStartedAt + condition.sourceDelayMs
+                : undefined)
+            : sourceStartedAt !== undefined && sourceStartedAt !== Number.NEGATIVE_INFINITY
+              ? sourceStartedAt + condition.sourceDelayMs
+              : undefined
+        if (sourceTime !== undefined) {
+          const startedAt = sourceTime + condition.delayMs
+          if (Number.isFinite(startedAt)) {
+            if (startedAt > now) next = Math.min(next, startedAt)
+            else {
+              firedTimingNodeTriggers.add(key)
+              triggerConditionDueAt.set(key, startedAt)
+              pendingTriggerConditions.add(key)
+            }
+          }
+        }
+      } else if (condition.type === 'animatedTarget' && !firedTimingNodeTriggers.has(key)) {
+        let sourceTime: number | undefined
+        for (const action of timelineActions.value) {
+          if (action.targetId !== condition.id) continue
+          const eventAt = timelineActionEventTime(action, condition.event)
+          if (eventAt !== undefined && Number.isFinite(eventAt)) sourceTime = Math.min(sourceTime ?? Infinity, eventAt)
+        }
         if (sourceTime !== undefined) {
           const startedAt = sourceTime + condition.delayMs
           if (Number.isFinite(startedAt)) {
@@ -5331,6 +5677,33 @@ function runTimingNodeTriggeredAnimations(now: number): number {
       if (condition.type !== 'timeNode') triggerConditionDueAt.delete(key)
     })
     startTriggeredAnimations([sequenceIndex], startedAt, false)
+  })
+  return next
+}
+
+function runTriggeredBuildAutoAdvances(now: number): number {
+  if (props.thumbnail || props.triggerPlayback !== undefined || !props.useTimings) return Infinity
+  let next = Infinity
+  const sequences = props.slide.triggeredAnimations || []
+  sequences.forEach((sequence, sequenceIndex) => {
+    if (!triggerSequenceHasEnabledAction(sequence)) return
+    let progress = triggerSteps.get(sequenceIndex) || 0
+    while (progress > 0 && progress < sequence.steps.length) {
+      const stepIndex = progress - 1
+      const actions = sequence.steps[stepIndex] || []
+      const delays = new Set(actions.flatMap(action => action.buildAutoAdvanceAfterMs === undefined ? [] : [action.buildAutoAdvanceAfterMs]))
+      if (delays.size !== 1) break
+      const delayMs = delays.values().next().value as number | undefined
+      const startedAt = triggerStartedAt.get(triggerKey(sequenceIndex, stepIndex))
+      if (delayMs === undefined || !Number.isFinite(delayMs) || delayMs < 0 || startedAt === undefined || !Number.isFinite(startedAt)) break
+      const dueAt = startedAt + delayMs
+      if (dueAt > now) {
+        next = Math.min(next, dueAt)
+        break
+      }
+      startTriggeredAnimations([sequenceIndex], dueAt, false)
+      progress = triggerSteps.get(sequenceIndex) || 0
+    }
   })
   return next
 }
@@ -5602,6 +5975,7 @@ function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['
   const requestedFont = script === 'eastAsia' ? run.fontFamilyEastAsia : script === 'complexScript' ? run.fontFamilyComplexScript : run.fontFamily
   const fillOpacity = animationOpacity(element, 'fill.opacity', paragraphIndex, characterStart, characterEnd)
   const strokeOpacity = animationOpacity(element, 'stroke.opacity', paragraphIndex, characterStart, characterEnd)
+  const animatedTextStroke = animationColor(element, 'stroke.color', paragraphIndex, characterStart, characterEnd, run.outlineColor, true)
   const textFill = run.fillGradient ? applyColorOpacity(run.fillGradient, fillOpacity) : run.fillPattern ? applyColorOpacity(run.fillPattern, fillOpacity) : undefined
   const highlightColor = run.highlightColor ? applyColorOpacity(run.highlightColor, fillOpacity) : undefined
   const highlightBackground = textFill && highlightColor ? `linear-gradient(${highlightColor}, ${highlightColor}) border-box, ${textFill}` : undefined
@@ -5625,7 +5999,7 @@ function runStyle(element: PptxElement, run: PptxElement['paragraphs'][number]['
     '--pptx-text-highlight': highlightColor,
     '--pptx-text-highlight-background': highlightBackground,
     '--pptx-text-fill-clip': textFillClip,
-    WebkitTextStroke: run.outlineColor !== undefined && run.outlineWidth !== undefined ? `${run.outlineWidth * scale.value}px ${animatedRunColor(run.outlineColor, strokeOpacity)}` : undefined,
+    WebkitTextStroke: run.outlineColor !== undefined && run.outlineWidth !== undefined ? `${run.outlineWidth * scale.value}px ${animatedRunColor(animatedTextStroke || run.outlineColor, strokeOpacity)}` : undefined,
     fontWeight: run.bold ? 700 : undefined,
     fontStyle: run.italic ? 'italic' : undefined,
     ...(separateDecorations ? { '--pptx-underline-line': run.underline ? 'underline' : 'none' } : {}),
@@ -6003,9 +6377,9 @@ function tableStyle(element: PptxElement): CSSProperties {
                 <feFuncB class="image-tone-blacklevel" type="linear" slope="1" :intercept="tone.blacklevel" />
               </feComponentTransfer>
               <feComponentTransfer>
-                <feFuncR class="image-tone-gamma" type="gamma" amplitude="1" :exponent="1 / tone.gamma" offset="0" />
-                <feFuncG class="image-tone-gamma" type="gamma" amplitude="1" :exponent="1 / tone.gamma" offset="0" />
-                <feFuncB class="image-tone-gamma" type="gamma" amplitude="1" :exponent="1 / tone.gamma" offset="0" />
+                <feFuncR class="image-tone-gamma" type="gamma" amplitude="1" :exponent="imageToneGammaExponent(tone.gamma)" offset="0" />
+                <feFuncG class="image-tone-gamma" type="gamma" amplitude="1" :exponent="imageToneGammaExponent(tone.gamma)" offset="0" />
+                <feFuncB class="image-tone-gamma" type="gamma" amplitude="1" :exponent="imageToneGammaExponent(tone.gamma)" offset="0" />
               </feComponentTransfer>
             </filter>
           </defs>

@@ -5,17 +5,20 @@ export interface TimingCurve {
   bounceEndRatio?: number
 }
 
+export function parseOpenXmlPercentage(raw: string | null | undefined): number | undefined {
+  if (raw === null || raw === undefined) return undefined
+  const value = raw.trim()
+  // PresentationML ST_Percentage also uses percent-plus-integer compatibility forms, such as 56.7%457200.
+  const percent = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))%(?:\d+)?$/.exec(value)
+  const parsed = percent
+    ? Number(percent[1]) / 100
+    : /^[+-]?\d+$/.test(value) ? Number(value) / 100_000 : Number.NaN
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 export function parseAnimationSpeed(raw: string | null | undefined): number | undefined {
   if (raw === null || raw === undefined) return 1
-  const value = raw.trim()
-  const percent = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))%$/.exec(value)
-  if (percent) {
-    const parsed = Number(percent[1]) / 100
-    return Number.isFinite(parsed) ? parsed : undefined
-  }
-  if (!/^[+-]?\d+$/.test(value)) return undefined
-  const parsed = Number(value) / 100_000
-  return Number.isFinite(parsed) ? parsed : undefined
+  return parseOpenXmlPercentage(raw)
 }
 
 export function parseTimingFilter(raw: string | null | undefined): TimingCurve['timeFilter'] {
@@ -29,11 +32,12 @@ export function parseTimingFilter(raw: string | null | undefined): TimingCurve['
     const input = Number(values[0])
     const output = Number(values[1])
     const previous = points.at(-1)
-    if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || input > 1 || output < 0 || output > 1 ||
+    if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || input > 1 ||
       previous && input <= previous.input) return undefined
     points.push({input, output})
   }
-  if (points[0]!.input !== 0 || points.at(-1)!.input !== 1) return undefined
+  // MS-OI29500 constrains t to [0, 1] and describes t' as warped local time without a range bound.
+  // Keep finite t' overshoot; filterProgress holds the nearest authored value outside the t domain.
   return points
 }
 
@@ -68,19 +72,22 @@ function filterProgress(filter: NonNullable<TimingCurve['timeFilter']>, mapped: 
 
 function inverseFilterProgress(filter: NonNullable<TimingCurve['timeFilter']>, progress: number): number {
   if (filter.length < 2) return progress
+  // A child offset that the parent has already reached at local time zero is ready immediately.
+  // This also accounts for filters whose first authored t value is greater than zero, since
+  // filterProgress holds the first output before that point.
+  if (filterProgress(filter, 0) >= progress) return 0
   for (let index = 0; index < filter.length - 1; index++) {
     const before = filter[index]!
     const after = filter[index + 1]!
-    if (before.output === progress) return before.input
-    if (after.output === progress) return after.input
-    const minimum = Math.min(before.output, after.output)
-    const maximum = Math.max(before.output, after.output)
-    if (progress > minimum && progress < maximum) {
+    // A child becomes eligible when the warped parent time first reaches its offset.
+    // For a non-monotonic filter, ignore downward crossings and keep the earliest upward one.
+    if (before.output < progress && after.output >= progress) {
       const fraction = (progress - before.output) / (after.output - before.output)
       return before.input + (after.input - before.input) * fraction
     }
   }
-  return 1
+  // The parent never reaches this child offset; placing it at the end would invent a start.
+  return Number.POSITIVE_INFINITY
 }
 
 function inverseMonotonicTimingProgress(curve: TimingCurve, progress: number): number {

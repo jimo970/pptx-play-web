@@ -26,6 +26,7 @@ const projectorOpen = ref(false)
 const projectorError = ref<LocaleMessageKey | ''>('')
 const projectorAcknowledgement = ref<{ slideId: string; number: number; animationStep: number; blank: 'black' | 'white' | null; triggerCount: number } | null>(null)
 const triggerPlayback = shallowRef<PptxTriggerPlayback[]>([])
+const slideTimelineReadyKey = ref('')
 const transitionPlayback = shallowRef<PptxTransitionPlayback | null>(null)
 const transitionAudio = ref<HTMLAudioElement | null>(null)
 const transitionSoundWarning = ref('')
@@ -72,6 +73,7 @@ let zoomBeforeReading: number | undefined
 let zoomPanBeforeReading: { x: number; y: number } | undefined
 let slideNumberTimer: ReturnType<typeof setTimeout> | undefined
 let slideAdvanceTimer: ReturnType<typeof setTimeout> | undefined
+let buildAutoAdvanceTimer: ReturnType<typeof setTimeout> | undefined
 let presenterTimer: ReturnType<typeof setInterval> | undefined
 let projectorChannel: BroadcastChannel | undefined
 let projectorWindow: Window | null = null
@@ -117,6 +119,15 @@ const currentNumber = computed(() => deck.value ? currentIndex.value + 1 : 0)
 const showAnimations = computed(() => deck.value?.showSettings?.showAnimation !== false)
 const showNarration = computed(() => deck.value?.showSettings?.showNarration === true)
 const animationCount = computed(() => showAnimations.value ? currentSlide.value?.animationSteps?.length || 0 : 0)
+const slideTimelineKey = computed(() => [
+  deckGeneration.value,
+  currentIndex.value,
+  currentSlide.value?.id || '',
+  animationStep.value,
+  animationCount.value,
+  transitionPlayback.value?.startedAtEpoch || '',
+  triggerPlayback.value.map(({ sequence, step, startedAt }) => `${sequence}.${step}.${startedAt}`).join(',')
+].join(':'))
 const progress = computed(() => deck.value ? (currentNumber.value / deck.value.slides.length) * 100 : 0)
 const currentInk = computed(() => currentSlide.value ? inkBySlide.value[currentSlide.value.id] || [] : [])
 const presenterTime = computed(() => `${String(Math.floor(presenterElapsedSeconds.value / 60)).padStart(2, '0')}:${String(presenterElapsedSeconds.value % 60).padStart(2, '0')}`)
@@ -533,6 +544,8 @@ function clearDocument() {
   for (const media of continuingMedia.keys()) stopContinuingMedia(media)
   if (slideAdvanceTimer) clearTimeout(slideAdvanceTimer)
   slideAdvanceTimer = undefined
+  if (buildAutoAdvanceTimer) clearTimeout(buildAutoAdvanceTimer)
+  buildAutoAdvanceTimer = undefined
   if (presenterTimer) clearInterval(presenterTimer)
   presenterTimer = undefined
   stageShell.value?.querySelector<HTMLElement>(':scope > .slide-host')?.getAnimations().forEach(animation => animation.cancel())
@@ -594,10 +607,21 @@ function clearSlideNumberInput() {
 function previousSlide() {
   clearSlideNumberInput()
   if (animationStep.value > 0) {
-    const stepSequence = currentSlide.value?.animationStepSequences?.[animationStep.value - 1]
+    const slide = currentSlide.value
+    const stepSequence = slide?.animationStepSequences?.[animationStep.value - 1]
     if (currentSlide.value?.animationSequence?.rewindsOnPrevious === false && stepSequence?.rewindsOnPrevious !== true) return
-    // withEffect/afterEffect groups are folded into their preceding click step, matching skipTimed's prior-step boundary.
-    animationStep.value--
+    let targetStep = animationStep.value - 1
+    if (slide && slide.animationSequence?.previousAction === 'skipTimed' && deck.value?.showSettings?.useTimings !== false) {
+      // bldP@advAuto starts the next build step by time; skip such intermediate steps while rewinding.
+      // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.buildparagraph?view=openxml-3.0.1
+      while (targetStep > 1) {
+        const precedingActions = slide.animationSteps?.[targetStep - 2] || []
+        const delays = new Set(precedingActions.flatMap(action => action.buildAutoAdvanceAfterMs === undefined ? [] : [action.buildAutoAdvanceAfterMs]))
+        if (delays.size !== 1) break
+        targetStep--
+      }
+    }
+    animationStep.value = targetStep
   }
   else if (deck.value && previousShownSlideIndex.value !== undefined) {
     currentIndex.value = previousShownSlideIndex.value
@@ -1066,20 +1090,63 @@ function scheduleSlideAdvance() {
   if (deck.value?.showSettings?.useTimings === false) return
   const slide = currentSlide.value
   const delayMs = slide?.advanceAfterMs
-  if (!slide || delayMs === undefined || nextShownSlideIndex.value === undefined) return
+  const timelineKey = slideTimelineKey.value
+  // PowerPoint starts its After timer when the slide's final animation/effect finishes.
+  // https://support.microsoft.com/en-us/powerpoint/set-the-timing-and-speed-of-a-transition
+  if (!slide || delayMs === undefined || nextShownSlideIndex.value === undefined
+    || animationStep.value < animationCount.value
+    || slideTimelineReadyKey.value !== timelineKey) return
   const slideIndex = currentIndex.value
-  const dueAt = Date.now() + delayMs
+  const now = Date.now()
+  const entryTransition = transitionPlayback.value?.slideId === slide.id ? transitionPlayback.value : null
+  const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const transitionEndAt = entryTransition && !reducedMotion && entryTransition.transition.effect !== 'cut'
+    ? entryTransition.startedAtEpoch + entryTransition.transition.durationMs
+    : now
+  const dueAt = Math.max(now, transitionEndAt) + delayMs
   const advance = () => {
     const remaining = dueAt - Date.now()
     if (remaining > 0) {
       slideAdvanceTimer = setTimeout(advance, Math.min(remaining, 2_147_483_647))
       return
     }
-    if (currentIndex.value !== slideIndex || currentSlide.value !== slide) return
-    animationStep.value = animationCount.value
+    if (currentIndex.value !== slideIndex || currentSlide.value !== slide
+      || animationStep.value < animationCount.value || slideTimelineReadyKey.value !== timelineKey) return
     nextSlide()
   }
   slideAdvanceTimer = setTimeout(advance, Math.min(delayMs, 2_147_483_647))
+}
+
+function onSlideTimelineSettled(settled: boolean) {
+  slideTimelineReadyKey.value = settled ? slideTimelineKey.value : ''
+  scheduleSlideAdvance()
+}
+
+function scheduleBuildAutoAdvance() {
+  if (buildAutoAdvanceTimer) clearTimeout(buildAutoAdvanceTimer)
+  buildAutoAdvanceTimer = undefined
+  if (deck.value?.showSettings?.useTimings === false) return
+  const slide = currentSlide.value
+  const stepIndex = animationStep.value - 1
+  if (!slide || stepIndex < 0 || animationStep.value >= animationCount.value) return
+  const delays = new Set((slide.animationSteps?.[stepIndex] || [])
+    .flatMap(action => action.buildAutoAdvanceAfterMs === undefined ? [] : [action.buildAutoAdvanceAfterMs]))
+  if (delays.size !== 1) return
+  const delayMs = delays.values().next().value as number | undefined
+  if (delayMs === undefined || !Number.isFinite(delayMs) || delayMs < 0) return
+  const slideIndex = currentIndex.value
+  const step = animationStep.value
+  const dueAt = Date.now() + delayMs
+  const advance = () => {
+    const remaining = dueAt - Date.now()
+    if (remaining > 0) {
+      buildAutoAdvanceTimer = setTimeout(advance, Math.min(remaining, 2_147_483_647))
+      return
+    }
+    if (currentIndex.value !== slideIndex || currentSlide.value !== slide || animationStep.value !== step || step >= animationCount.value) return
+    animationStep.value++
+  }
+  buildAutoAdvanceTimer = setTimeout(advance, Math.min(delayMs, 2_147_483_647))
 }
 
 watch(currentIndex, (nextIndex, previousIndex) => {
@@ -1095,7 +1162,8 @@ watch([zoom, () => zoomPan.value.x, () => zoomPan.value.y], () => {
   void nextTick(positionContinuingMediaHost)
 }, { flush: 'post' })
 
-watch([() => deck.value, () => currentIndex.value], scheduleSlideAdvance, { immediate: true })
+watch([() => deck.value, () => currentIndex.value, animationStep, animationCount, triggerPlayback, () => deck.value?.showSettings?.useTimings], scheduleSlideAdvance, { immediate: true })
+watch([currentSlide, animationStep, animationCount, () => deck.value?.showSettings?.useTimings], scheduleBuildAutoAdvance, { flush: 'post' })
 
 onMounted(() => {
   window.addEventListener('keydown', onKeydown)
@@ -1216,7 +1284,7 @@ onBeforeUnmount(() => {
           <div ref="continuingMediaHost" class="continuing-media-host" />
           <div v-if="isDragging" class="upload-overlay">{{ t('dropPresentation') }}</div>
             <div v-if="currentSlide && deck" ref="stageSlideHost" class="slide-host" :data-slide-number="currentNumber" :data-transition-effect="currentSlide.transition?.effect" :data-transition-preset="currentSlide.transition?.presetName" :style="{ '--slide-ratio': String(deck.width / deck.height), translate: zoomPan.x + 'px ' + zoomPan.y + 'px', transform: 'scale(' + zoom + ')' }">
-            <SlideStage :key="deckGeneration + '-' + currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" :show-animations="showAnimations" :show-narration="showNarration" @trigger-playback="triggerPlayback = $event" @activate-hyperlink="activateHyperlink" @stop-all-audio="stopAllAudio" />
+            <SlideStage :key="deckGeneration + '-' + currentSlide.id" :slide="currentSlide" :width="deck.width" :height="deck.height" :number="currentNumber" :animation-step="animationStep" :show-animations="showAnimations" :show-narration="showNarration" :use-timings="deck.showSettings?.useTimings !== false" @trigger-playback="triggerPlayback = $event" @timeline-settled="onSlideTimelineSettled" @activate-hyperlink="activateHyperlink" @stop-all-audio="stopAllAudio" />
             <svg
               class="ink-layer"
               :class="{ 'is-active': activeTool !== 'pointer' }"

@@ -21,10 +21,11 @@ export function scriptSegments(text: string): { text: string; script: ScriptFont
 }
 
 export function normalizedFontFamily(fontFamily: string | undefined): string {
-  return (fontFamily || '').replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 128)
+  return (fontFamily || '').replace(/[\u0000-\u001f\u007f]/gu, ' ').trim().slice(0, 128)
 }
 
 export function cssFontFamily(fontFamily: string | undefined): string {
-  const safeFontFamily = normalizedFontFamily(fontFamily)
-  return safeFontFamily ? `'${safeFontFamily}', Arial, sans-serif` : 'Arial, sans-serif'
+  const fontFamilyValue = normalizedFontFamily(fontFamily)
+  const escapedFontFamily = fontFamilyValue.replace(/\\/gu, '\\\\').replace(/'/gu, "\\'")
+  return escapedFontFamily ? `'${escapedFontFamily}', Arial, sans-serif` : 'Arial, sans-serif'
 }

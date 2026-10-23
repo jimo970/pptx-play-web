@@ -329,6 +329,7 @@ export interface PptxElement {
 
 export type PptxAnimationTriggerCondition =
     | {type: 'shape'; id: string; event: 'onClick' | 'onDblClick' | 'onMouseOver' | 'onMouseOut'; delayMs: number}
+    | {type: 'animatedTarget'; id: string; event: 'onBegin' | 'onEnd'; delayMs: number}
     | {type: 'slide'; event: 'onNext' | 'onPrev' | 'onStopAudio'; delayMs: number}
     | {type: 'mediaBookmark'; id: string; bookmarkName: string; timeMs: number; delayMs: number}
     | {type: 'timeNode'; id: string; event: 'begin' | 'onBegin' | 'end' | 'onEnd'; sourceStep?: number; sourceDelayMs: number; sourceMediaActionKey?: string; delayMs: number}
@@ -352,6 +353,7 @@ export interface PptxSlide {
     animationSequence?: {
         concurrent?: boolean
         nextAction: 'none' | 'seek'
+        previousAction: 'none' | 'skipTimed'
         advancesOnNext?: boolean
         rewindsOnPrevious?: boolean
     }
@@ -442,7 +444,7 @@ export type TextStyleAnimationProperty = 'fontWeight' | 'fontStyle' | 'fontFamil
 
 export type TextStyleAnimationValue = boolean | 'none' | 'normal' | 'sub' | 'super' | string
 
-export type AnimatedVisibility = 'visible' | 'hidden'
+export type AnimatedVisibility = 'visible' | 'hidden' | 'inherit'
 
 export type AnimationOnOffProperty = 'fill.on' | 'stroke.on' | 'shadow.on'
 export type AnimationShadowOffsetProperty = 'shadow.offset.x' | 'shadow.offset.y'
@@ -464,12 +466,14 @@ type AnimatedImageToneProperty = 'gain' | 'blacklevel' | 'gamma'
 export interface PptxAnimation {
     targetId: string
     sourceTimeNodeId?: string
+    /** Delay before a p:bldP text build automatically advances to the next build step. */
+    buildAutoAdvanceAfterMs?: number
     paragraphRange?: {start: number; end: number}
     characterRange?: {start: number; end: number}
     iteration?: {intervalMs: number; ranges: Array<{start: number; end: number}>; backwards?: boolean}
     effectProgress?: number
     randomEffectFallback?: boolean
-    effect: 'appear' | 'fade' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'wedge' | 'slide' | 'zoom' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'shadowOffset' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
+    effect: 'appear' | 'fade' | 'flash' | 'spiral' | 'wipe' | 'blinds' | 'checker' | 'randomBars' | 'strips' | 'barn' | 'dissolve' | 'shape' | 'wheel' | 'wedge' | 'slide' | 'zoom' | 'scale' | 'motion' | 'timingOnly' | 'rotation' | 'color' | 'fontSize' | 'fontWeight' | 'strokeWidth' | 'shadowOffset' | 'textStyle' | 'visibility' | 'grayscale' | 'onOff' | 'strokeDash' | 'lineArrow' | 'lineArrowSize' | 'imageCrop' | 'imageTone' | 'opacity' | 'media'
     direction: 'in' | 'out'
     durationMs: number
     delayMs: number
@@ -478,6 +482,10 @@ export interface PptxAnimation {
     sequenceKey?: string
     sequenceOrder?: number
     fillSequenceScopes?: Array<{key: string; order: number}>
+    /** Relative to the current sequence/trigger start; the containing time node stops here. */
+    parentEndMs?: number
+    /** A parent time node that resets held child values when it ends. */
+    parentFillEndMs?: number
     repeatCount?: number
     repeatDurationMs?: number
     autoReverse?: boolean
@@ -496,6 +504,7 @@ export interface PptxAnimation {
     scaleFromCurrent?: boolean
     scaleTo?: [number, number]
     scaleAxis?: 'x' | 'y'
+    scaleOrigin?: [number, number]
     scaleLayer?: 'dimensions' | 'transform'
     scaleAdditive?: boolean
     scaleBaseAdditive?: boolean
@@ -506,6 +515,7 @@ export interface PptxAnimation {
     rotationFrom?: number
     rotationFromCurrent?: boolean
     rotationTo?: number
+    rotationAxis?: 'x' | 'y'
     rotationKeyframes?: Array<{offset: number; value: number}>
     rotationKeyframeMode?: 'lin' | 'discrete'
     rotationRelative?: boolean
@@ -591,6 +601,8 @@ export interface PptxAnimation {
     mediaSourceUrl?: string
     mediaActionKey?: string
     mediaDurationMs?: number
+    /** Positive playback rate from the media command's p:cTn@spd; zero freezes playback. */
+    mediaPlaybackRate?: number
     mediaSlideCount?: number
     mediaWaitForEnd?: boolean
     mediaWaitForEndKeys?: string[]
@@ -600,7 +612,8 @@ export interface PptxAnimation {
     mediaMuted?: boolean
     mediaIsNarration?: boolean
     motionCoordinateProperty?: 'ppt_x' | 'ppt_y'
-    motionCoordinateProperties?: ['ppt_x' | 'ppt_y', 'ppt_x' | 'ppt_y']
+    motionCoordinateKeyframeMode?: 'lin' | 'discrete'
+    motionCoordinateProperties?: ['ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h', 'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h']
     motionPath?: Array<{x: number; y: number; distance: number}>
     motionPathLength?: number
     motionPathSamples?: Array<{progress: number; x: number; y: number}>

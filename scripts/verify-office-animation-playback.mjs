@@ -31,6 +31,10 @@ const requestedTransitionTimes = process.env.DECKLINE_VERIFY_TRANSITION_TIMES_MS
 assert.ok(!requestedTransitionTimes || requestedTransitionTimes.length > 0 && requestedTransitionTimes.every(value => Number.isInteger(value) && value >= 0), 'Transition probe times must be non-negative integers separated by commas.')
 const transitionProbeTimes = requestedTransitionTimes || [0]
 const requestedCaseName = process.env.DECKLINE_VERIFY_CASE_NAME
+const requestedCaseTimes = process.env.DECKLINE_VERIFY_CASE_TIMES_MS
+  ?.split(',')
+  .map(value => Number(value.trim()))
+assert.ok(!requestedCaseTimes || metadata.Suite === 'Motion' && requestedCaseName && metadata.Cases.some(item => item.Name === requestedCaseName && item.Supported !== false) && requestedCaseTimes.length > 0 && requestedCaseTimes.every(value => Number.isInteger(value) && value >= 0), 'Case probe times require a supported Motion case name and non-negative integer milliseconds separated by commas.')
 const runtimeProcess = metadata.NativeProcesses?.find(process => process.Path?.toLowerCase().startsWith(metadata.ApplicationPath?.toLowerCase()))
 const nativeRuntime = runtimeProcess ? {company: runtimeProcess.Company, productVersion: runtimeProcess.ProductVersion, executable: runtimeProcess.Path} : null
 const isWpsRuntime = /kingsoft|wps/i.test([runtimeProcess?.Company, runtimeProcess?.Path].filter(Boolean).join(' '))
@@ -419,7 +423,9 @@ const emphasisProbes = [
   ...(emphasisNames.includes('FlashBulb') ? [['FlashBulb', 2000], ['FlashBulb', 4500]] : []),
 ]
 const suiteProbes = metadata.Suite === 'Transitions' ? transitionProbes : metadata.Suite === 'Iterated' ? iteratedProbes : metadata.Suite === 'Word' ? wordProbes : metadata.Suite === 'CommonPresets' ? commonPresetProbes : metadata.Suite === 'Emphasis' ? emphasisProbes : motionProbes
-const selectedSuiteProbes = requestedCaseName ? suiteProbes.filter(([name]) => name === requestedCaseName) : suiteProbes
+const selectedSuiteProbes = requestedCaseTimes
+  ? requestedCaseTimes.map(targetMs => [requestedCaseName, targetMs])
+  : requestedCaseName ? suiteProbes.filter(([name]) => name === requestedCaseName) : suiteProbes
 assert.ok(!requestedCaseName || selectedSuiteProbes.length > 0, `No ${metadata.Suite} probes matched DECKLINE_VERIFY_CASE_NAME=${requestedCaseName}.`)
 const probes = bounceOnly ? selectedSuiteProbes.filter(([name]) => name === 'Bounce') : selectedSuiteProbes
 const report = {suite: metadata.Suite, fixture: resolve(fixture), fixtureSha256: createHash('sha256').update(fixtureBytes).digest('hex'), application: metadata.ApplicationPath, nativeRuntime, runtimeMode: process.env.DECKLINE_RUNTIME_MODE || 'UNSPECIFIED', clockMode: 'controlled', probes: [], unsupportedNativeCases: metadata.Cases.filter(item => item.Supported === false).map(item => ({name: item.Name, effectId: item.Id ?? item.EntryEffect, reason: item.SupportError})), result: 'RUNNING', limitations: [metadata.Suite === 'Transitions' ? 'Transition samples seek WAAPI currentTime after explicit navigation from the preceding slide; they verify browser keyframe interpolation, not native Office/WPS frame cadence or native pixel parity.' : 'Browser playback of native-exported OOXML is checked with a controlled performance.now clock; this does not establish real-time frame cadence or native Office/WPS animation-frame pixel parity.']}
@@ -450,7 +456,7 @@ async function capture(name, elapsedMs, item) {
       child.once('exit', code => resolveResult({code, log}))
     })
     attempts.push(result.log)
-    const transientBrowserStartupFailure = /Browser state: \{"url":"about:blank"|The headless browser did not expose the player page\./.test(result.log)
+    const transientBrowserStartupFailure = /Browser state: \{"url":"about:blank"|The headless browser did not expose the player page\.|The hydrated PPTX file input was not found\.[\s\S]*"appMounted":false[\s\S]*Runtime exceptions: \(none\)/.test(result.log)
     if (result.code === 0 || !transientBrowserStartupFailure || attempt === 2) break
     await new Promise(resolveDelay => setTimeout(resolveDelay, 250))
   }

@@ -36,6 +36,7 @@ const textOutlineRangeOnly = process.env.DECKLINE_VERIFY_TEXT_OUTLINE_RANGE === 
 const themeBackgroundOnly = process.env.DECKLINE_VERIFY_THEME_BACKGROUND === '1'
 const notesOnly = process.env.DECKLINE_VERIFY_NOTES === '1'
 const performanceOnly = process.env.DECKLINE_VERIFY_PERFORMANCE === '1'
+const timeNodeTriggersOnly = process.env.DECKLINE_VERIFY_TIME_NODE_TRIGGERS === '1'
 const transitionSoundOnly = process.env.DECKLINE_VERIFY_TRANSITION_SOUND === '1'
 const localeOnly = process.env.DECKLINE_VERIFY_LOCALE_ONLY === '1'
 const iteratedTextEffectsOnly = process.env.DECKLINE_VERIFY_ITERATED_TEXT_EFFECTS === '1'
@@ -556,9 +557,11 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const triggeredDoubleClick = `<p:seq><p:cTn id="186" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onDblClick" delay="0"><p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(187, 'clickEffect', 5, 'in', 'fade', 188, 200)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredSlideNext = `<p:seq><p:cTn id="192" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(193, 'clickEffect', 90, 'in', 'fade', 194, 300)}</p:childTnLst></p:cTn></p:seq>`
   const triggeredSlidePrevious = `<p:seq><p:cTn id="195" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(196, 'clickEffect', 91, 'in', 'fade', 197, 300)}</p:childTnLst></p:cTn></p:seq>`
-  const triggeredTimingNodeBegin = timedNodeSequence(19300, 150, 'onBegin', effectGroup(19301, 'clickEffect', 90, 'in', 'fade', 19302, 100))
-  const triggeredTimingNodeEnd = timedNodeSequence(19303, 150, 'onEnd', effectGroup(19304, 'clickEffect', 91, 'in', 'fade', 19305, 100))
-  const triggeredActionTimeNodeEnd = timedNodeSequence(19306, 151, 'end', effectGroup(19307, 'clickEffect', 89, 'in', 'fade', 19308, 100))
+  // These sequences are triggered by time-node events, so their first action must start with the sequence.
+  // clickEffect with delay="indefinite" waits for a click and would test a different condition.
+  const triggeredTimingNodeBegin = timedNodeSequence(19300, 150, 'onBegin', effectGroup(19301, 'withEffect', 90, 'in', 'fade', 19302, 100))
+  const triggeredTimingNodeEnd = timedNodeSequence(19303, 150, 'onEnd', effectGroup(19304, 'withEffect', 91, 'in', 'fade', 19305, 100))
+  const triggeredActionTimeNodeEnd = timedNodeSequence(19306, 151, 'end', effectGroup(19307, 'withEffect', 89, 'in', 'fade', 19308, 100))
   const speedTriggerSequence = `<p:seq><p:cTn id="250" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="98"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst>${effectGroup(251, 'clickEffect', 99, 'in', 'fade', 252, 300, '0', undefined, ' spd="200000"')}</p:childTnLst></p:cTn></p:seq>`
   const reverseSpeedSequence = `<p:seq><p:cTn id="253" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="100"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="254" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr><p:cTn id="255" dur="300" fill="hold" spd="-200000"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="101"/></p:tgtEl></p:cBhvr><p:from x="100000" y="100000"/><p:to x="200000" y="200000"/></p:animScale></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>`
   const elementIterationEffect = `<p:seq><p:cTn id="140" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="63"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="141" nodeType="clickEffect" spd="200000"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:iterate type="el"><p:tmAbs val="200"/></p:iterate><p:childTnLst><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="142" dur="250" fill="hold" spd="200000"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="62"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>`
@@ -569,6 +572,10 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   iteratedShadowColorSequence = iteratedShadowColorSequence.replace('</p:animClr></p:childTnLst>', `</p:animClr>${iteratedStyleColorAnimation}</p:childTnLst>`)
   const iteratedFillColorAnimation = `<p:animClr clrSpc="rgb"><p:cBhvr><p:cTn id="90101" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${iteratedShadowColorShapeId}"/></p:tgtEl><p:attrNameLst><p:attrName>fillcolor</p:attrName></p:attrNameLst></p:cBhvr><p:to><a:srgbClr val="ff0000"/></p:to></p:animClr>`
   iteratedShadowColorSequence = iteratedShadowColorSequence.replace('</p:animClr></p:childTnLst>', `</p:animClr>${iteratedFillColorAnimation}</p:childTnLst>`)
+  const iteratedStrokeColorShapeId = 90030
+  const iteratedStrokeColorShape = plainTextShape(iteratedStrokeColorShapeId, 'By letter text stroke color', 3500000, 5100000, 'WXYZ', '<a:ln w="127000"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>')
+  const iteratedStrokeColorSequence = iteratedTextEffectsOnly ? `<p:seq><p:cTn id="90031" dur="indefinite" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="${iteratedStrokeColorShapeId}"/></p:tgtEl></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="90032" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:iterate type="lt"><p:tmAbs val="150"/></p:iterate><p:childTnLst><p:animClr clrSpc="rgb" dir="cw"><p:cBhvr><p:cTn id="90033" dur="250" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${iteratedStrokeColorShapeId}"><p:txEl><p:charRg st="0" end="4"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>stroke.color</p:attrName></p:attrNameLst></p:cBhvr><p:from><a:srgbClr val="000000"/></p:from><p:to><a:srgbClr val="ff0000"/></p:to></p:animClr></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:seq>` : ''
+  iteratedShadowColorSequence += iteratedStrokeColorSequence
   const wpsGrowWithColorShapeId = 90011
   const wpsGrowWithColorShape = plainTextShape(wpsGrowWithColorShapeId, 'WPS Grow With Color', 500000, 5000000, 'ABCD')
     .replace('<a:ext cx="2600000" cy="800000"/>', '<a:ext cx="3388360" cy="1477010"/>')
@@ -688,9 +695,10 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const dynamicMotionTrigger = triggeredSequence(814, 8, dynamicMotionClick)
   const groupedParentMotion = `<p:animMotion origin="parent" pathEditMode="relative" path="M 0.016404199475 0.029160688247 L 0.026404199475 0.029160688247 E"><p:cBhvr><p:cTn id="252" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="125"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const wpsGroupedMotion = `<p:animMotion path="M 0 0 L 0.3 0.2 E"><p:cBhvr><p:cTn id="254" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="13401"/></p:tgtEl></p:cBhvr></p:animMotion>`
+  const emptyOriginMotion = `<p:animMotion origin="" path="M 0 0 L 0.25 0 E"><p:cBhvr><p:cTn id="49002" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="6"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const nestedParentMotion = `<p:animMotion origin="parent" pathEditMode="relative" path="M 0.020505249344 0.021870516184 L 0.030505249344 0.021870516184 E"><p:cBhvr><p:cTn id="253" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="11"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const swappedMotionAxes = `<p:animMotion origin="parent"><p:cBhvr additive="sum"><p:cTn id="49001" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="40000"/></p:tgtEl><p:attrNameLst><p:attrName>ppt_y</p:attrName><p:attrName>ppt_x</p:attrName></p:attrNameLst></p:cBhvr><p:by x="1000" y="1000"/></p:animMotion>`
-  const positionMotions = `${relativeMotion}${fromToMotion}${fromByMotion}${toMotion}${rotatedMotionPath}${formulaMotionPath}${groupedParentMotion}${nestedParentMotion}${wpsGroupedMotion}${swappedMotionAxes}`
+  const positionMotions = `${relativeMotion}${fromToMotion}${fromByMotion}${toMotion}${rotatedMotionPath}${formulaMotionPath}${groupedParentMotion}${nestedParentMotion}${wpsGroupedMotion}${swappedMotionAxes}${emptyOriginMotion}`
   const fixedMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" path="M 0.1 0.1 m 0.1 0 L 0.3 0.1 E"><p:cBhvr><p:cTn id="248" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="96"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const motionEffectWithRelativeMotion = motionEffect.replace('</p:childTnLst>', `${positionMotions}${fixedMotionPath}</p:childTnLst>`)
   const textShadowActions = `${textShadowDirect}${textShadowKeyframes}${setTextShadowNone}${setTextShadowAuto}${unsupportedTextShadowBase}${textShadowRangeAnimation}${setTextShadowRange}${textEmbossDirect}${textEmbossKeyframes}${setTextEmboss}${setTextEmbossReset}`
@@ -756,7 +764,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const effectDagShapes = `${effectDagShape(7100, 'Sibling effect DAG', 300000, `<a:effectDag type="sib">${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${effectDagShape(7101, 'Tree effect DAG', 3700000, `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${effectDagShape(7102, 'Nested effect DAG', 7100000, `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}${effectDagShape(7103, 'Transformed outer shadow', 40000000, `<a:effectDag type="sib">${dagTransformedShadow}</a:effectDag>`)}`
   const effectDagTextShapes = `${plainTextShape(7110, 'Sibling text effect DAG', 300000, 5200000, 'Sibling text', `<a:effectDag>${dagShadow}${dagShadowSecond}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow>${dagGlowSecond}</a:effectDag>`)}${plainTextShape(7111, 'Tree text effect DAG', 3700000, 5200000, 'Tree text', `<a:effectDag type="tree">${dagShadow}<a:glow rad="100000"><a:srgbClr val="ff0000"/></a:glow></a:effectDag>`)}${plainTextShape(7112, 'Nested text effect DAG', 7100000, 5200000, 'Nested text', `<a:effectDag type="sib"><a:cont type="sib">${dagShadow}</a:cont></a:effectDag>`)}${plainTextShape(7113, 'Single text tree effect DAG', 9500000, 5200000, 'Single tree effect', `<a:effectDag type="tree">${dagShadow}</a:effectDag>`)}`
   const animatedSlide = `${animatedShapes}${shape(29890, 'Relative HSL color', 11500000, 6300000, '000000', 300000, 300000)}${shape(29891, 'Relative RGB color', 11850000, 6300000, '000000', 300000, 300000)}${indefiniteDurationOnly ? shape(29892, 'Indefinite leaf duration', 11950000, 6700000, '2563eb', 200000, 100000) : ''}${shadowOffsetOnly ? shadowOffsetFixtureShapes + shadowOffsetTextShapes : ''}${strokeWidthOnly ? numericDefaultShapes : ""}${shadowedEllipse}${connectorShapes}${parentRepeatShapes}${parentTimingShapes}${normalAutofitShape}${autofitReferenceShape}${lineShape(42, 'Stroke color', 500000, 6000000, '<a:headEnd type="triangle" w="lg" len="lg"/><a:tailEnd type="diamond" w="sm" len="sm"/>')}${plainTextShape(59, 'Paragraph wipe target', 9000000, 5500000, 'Paragraph wipe target', '<a:ln w="25400"><a:solidFill><a:srgbClr val="ff0000"/></a:solidFill></a:ln>')}${textRangeOpacityShape}`
-  const animatedSlideWithZeroInterval = `${animatedSlide}${zeroIntervalTextShape}${plainTextShape(164, 'By letter checker', 9000000, 6300000, 'GRID')}${iteratedMaskShapes}${iteratedTextEffectsOnly ? iteratedShadowColorShape + wpsGrowWithColorShape + wpsDesaturateShape + textRangeShadowSetShape : ''}`
+  const animatedSlideWithZeroInterval = `${animatedSlide}${zeroIntervalTextShape}${plainTextShape(164, 'By letter checker', 9000000, 6300000, 'GRID')}${iteratedMaskShapes}${iteratedTextEffectsOnly ? iteratedShadowColorShape + iteratedStrokeColorShape + wpsGrowWithColorShape + wpsDesaturateShape + textRangeShadowSetShape : ''}`
   const insetEffectFixtures = [
     shape(7114, 'Shape inner effect list', 300000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectLst>${innerShadowFixture}</a:effectLst></p:spPr>`),
     shape(7115, 'Shape inner effect DAG', 2700000, 6100000, 'e2e8f0', 2200000, 500000).replace('</p:spPr>', `<a:effectDag type="sib">${dagShadow}${innerShadowFixture}</a:effectDag></p:spPr>`),
@@ -1284,7 +1292,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const unsupportedFilterAppear = effectGroup(8003, 'withEffect', 8002, 'in', 'vendorPreset', 8004, 5000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="1"')
   const noneFilterAppear = effectGroup(8012, 'withEffect', 8006, 'in', 'none', 8013, 5000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="1"')
   const noneFilterSplitIn = effectGroup(8020, 'withEffect', 8007, 'in', 'none', 8021, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="16"')
-  const noneFilterSplitOut = effectGroup(8022, 'withEffect', 8008, 'out', 'none', 8023, 1000, '0', undefined, '', 'hold', ' presetClass="exit" presetID="16" presetSubtype="21"')
+  const noneFilterSplitOut = effectGroup(8022, 'withEffect', 8008, 'out', 'none', 8023, 1000, '0', undefined, '', 'hold', ' presetClass="exit" presetID="16" presetSubtype="26"')
   const noneFilterFade = effectGroup(8030, 'withEffect', 8009, 'in', 'none', 8031, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="10"')
   const noneFilterWheel = effectGroup(8032, 'withEffect', 8014, 'in', 'none', 8033, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="21" presetSubtype="8"')
   const noneFilterWipe = effectGroup(8034, 'withEffect', 8015, 'in', 'none', 8035, 1000, '0', undefined, '', 'hold', ' presetClass="entr" presetID="22" presetSubtype="1"')
@@ -2643,7 +2651,7 @@ try {
     console.log('Transition sound start, loop, end, and rejected-playback checks passed.')
     throw new Error('__transition_sound_verified__')
   }
-  if (!inputPptx && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly) {
+  if (!inputPptx && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly) {
     const fallbackArchive = await JSZip.loadAsync(await readFile(fixturePath))
     const fallbackPresentation = await fallbackArchive.file('ppt/presentation.xml').async('string')
     const slideList = /<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/.exec(fallbackPresentation)?.[1]
@@ -2672,7 +2680,7 @@ try {
     assert(fallbackLoaded && !fallbackState.error && fallbackState.shapes.length > 0 && fallbackState.warnings.some(warning => warning.includes('parsing worker could not start')),
       `A valid deck must still parse locally when worker construction fails, with a visible main-thread fallback warning: ${JSON.stringify({ fallbackName, title: fallbackState.title, shapes: fallbackState.shapes.length, warnings: fallbackState.warnings, error: fallbackState.error })}`)
   }
-  if (!captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly) {
+  if (!captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly) {
     const corruptArchivePath = join(runtimeDir, 'damaged.pptx')
     await writeFile(corruptArchivePath, Buffer.from('not a zip archive'))
     const uploadedCorruptName = await uploadPath(corruptArchivePath)
@@ -2737,7 +2745,7 @@ try {
     await uploadPath(excessiveSlidesPath)
     assert((await waitForError('more than 500 slides')).includes('Couldn’t open this presentation'), 'A presentation with more than 500 slide IDs must display the slide-count safety-limit error.')
   }
-  if (latestUploadOnly || (!inputPptx && !captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly)) {
+  if (latestUploadOnly || (!inputPptx && !captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly)) {
     const latestFilePath = join(runtimeDir, 'latest-wins.pptx')
     await copyFile(fixturePath, latestFilePath)
     await evaluate(`globalThis.__decklineWorkerDelayMs = 700; globalThis.__decklineDelayNextWorkerPost = true`)
@@ -2808,6 +2816,21 @@ try {
       })()`)
     }
     if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : shadowOffsetOnly ? initial.shapes.some(element => element.name === 'Shadow offset target') : iteratedTextEffectsOnly ? initial.shapes.some(element => element.name === 'Text shadow color p:set range') : wedgeIterationOnly ? initial.shapes.some(element => element.name === 'By letter wedge') : initial.shapes.length === FIXTURE_FIRST_SLIDE_SHAPE_COUNT) break
+  }
+  if (timeNodeTriggersOnly) {
+    await delay(50)
+    const afterNodeBegin = await state()
+    const nodeBeginTarget = shape(afterNodeBegin, 'Next event target')
+    assert(nodeBeginTarget?.visibility === 'visible' && Number(nodeBeginTarget.opacity) > 0,
+      `The p:tn-targeted onBegin event must activate from its time node's start offset: ${JSON.stringify({target: shape(afterNodeBegin, 'Next event target'), warnings: afterNodeBegin.warnings.filter(warning => /interactive|time node|timing-node/i.test(warning))})}`)
+    const afterNodeEnd = await stateAtElapsed(initial.now, 1_300)
+    const nodeEndTarget = shape(afterNodeEnd, 'Previous event target')
+    const actionEndTarget = shape(afterNodeEnd, 'Action time-node end target')
+    assert(nodeEndTarget?.visibility === 'visible' && Number(nodeEndTarget.opacity) >= 0.99
+      && actionEndTarget?.visibility === 'visible' && Number(actionEndTarget.opacity) >= 0.99,
+      `p:tn-targeted onEnd and end events must activate from their referenced time nodes' end offsets: ${JSON.stringify({parent: shape(afterNodeEnd, 'Previous event target'), action: shape(afterNodeEnd, 'Action time-node end target')})}`)
+    console.log('OOXML time-node onBegin/onEnd/end trigger playback verification passed.')
+    throw new Error('__time_node_triggers_verified__')
   }
   if (shadowOffsetOnly) {
     const before = await evaluate(`(() => {
@@ -3105,6 +3128,28 @@ try {
       `A generic iterated fillcolor track without <p:from> must interpolate from the black default and report that shape fill is rendered as one animation: ${JSON.stringify(iteratedShadowColor)}`)
     assert(iteratedShadowColor.staggered?.length === 4 && iteratedShadowColor.staggered[0].color !== iteratedShadowColor.staggered[1].color && iteratedShadowColor.staggered[1].color !== iteratedShadowColor.staggered[2].color,
       `p:iterate by letter must stagger style.color animation: ${JSON.stringify(iteratedShadowColor)}`)
+    const iteratedStrokeColor = await evaluate(`(() => new Promise(resolve => {
+      const target = document.querySelector('.stage-shell > .slide-host [title="By letter text stroke color"]')
+      if (!target) return resolve({early: [], staggered: [], warnings: []})
+      const runs = () => [...target.querySelectorAll('.text-run')].filter(run => run.textContent.trim()).map(run => {
+        const style = getComputedStyle(run)
+        return {text: run.textContent, stroke: style.webkitTextStrokeColor, width: style.webkitTextStrokeWidth}
+      })
+      target.click()
+      const started = performance.now()
+      let early
+      const sample = frameTime => {
+        if (!early && frameTime - started >= 80) early = runs()
+        if (frameTime - started >= 220) resolve({early, staggered: runs(), warnings: [...document.querySelectorAll('.warning-list li')].map(item => item.textContent)})
+        else requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    }))()`)
+    assert(iteratedStrokeColor.early?.length === 4 && iteratedStrokeColor.early[0]?.stroke !== iteratedStrokeColor.early[1]?.stroke && iteratedStrokeColor.early[1]?.stroke === iteratedStrokeColor.early[2]?.stroke,
+      `The first letter's text outline color must start changing before later letters: ${JSON.stringify(iteratedStrokeColor)}`)
+    assert(iteratedStrokeColor.staggered?.length === 4 && iteratedStrokeColor.staggered[0]?.stroke !== iteratedStrokeColor.staggered[1]?.stroke && iteratedStrokeColor.staggered[1]?.stroke !== iteratedStrokeColor.staggered[2]?.stroke && iteratedStrokeColor.staggered.every(run => Number.parseFloat(run.width) > 0)
+      && !iteratedStrokeColor.warnings.some(warning => warning.includes('Text iteration for stroke.color')),
+      `p:iterate by letter must stagger text stroke color without warning while preserving the outline width: ${JSON.stringify(iteratedStrokeColor)}`)
     const wpsGrowWithColor = await evaluate(`(() => new Promise(resolve => {
       const target = document.querySelector('.stage-shell > .slide-host [title="WPS Grow With Color"]')
       if (!target) return resolve({baseline: [], early: [], baselineFillColor: '', earlyFillColor: '', baselineShape: null, shape: null, warnings: []})
@@ -3209,7 +3254,7 @@ try {
     }))()`)
     assert(textRangeShadowSet.runs.length === 2 && textRangeShadowSet.runs[0].text === 'AB' && textRangeShadowSet.runs[0].textShadow.startsWith('rgb(255, 0, 0) ') && textRangeShadowSet.runs[1].text === 'CD' && !textRangeShadowSet.runs[1].textShadow.startsWith('rgb(255, 0, 0) ') && !textRangeShadowSet.warnings.some(warning => warning.includes('shadow.color p:set animation with an unsupported target')),
       `A character-range shadow.color p:set must only recolor its targeted text runs: ${JSON.stringify(textRangeShadowSet)}`)
-    console.log('By-letter WPS numeric-dimension zoom, signed Swivel, native zoom/fly exits, object-mask iteration, iterated text and shadow color, WPS relative HSL color emphasis, and character-range shadow-color p:set verification passed.')
+    console.log('By-letter WPS numeric-dimension zoom, signed Swivel, native zoom/fly exits, object-mask iteration, iterated text, text-stroke and shadow color, WPS relative HSL color emphasis, and character-range shadow-color p:set verification passed.')
     throw new Error('__iterated_text_effects_verified__')
   }
   if (timeFilterOnly) {
@@ -3254,19 +3299,19 @@ try {
     await delay(50)
     const invalidSpeed = await state()
     assert(invalidSpeed.slide?.startsWith('02 / 68') && Number(invalidSpeed.slideTransition?.duration) === 500 && invalidSpeed.warnings.some(warning => warning.includes('slide transition speed "turbo" is invalid; it was ignored')),
-      `An invalid p:transition@spd must warn and fall back to the OOXML fast default: ${JSON.stringify({ slide: invalidSpeed.slide, transition: invalidSpeed.slideTransition, warnings: invalidSpeed.warnings })}`)
+      `An invalid p:transition@spd must warn and use the player's fast-category fallback duration: ${JSON.stringify({ slide: invalidSpeed.slide, transition: invalidSpeed.slideTransition, warnings: invalidSpeed.warnings })}`)
     await delay(550)
     await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
     await delay(50)
     const omittedSpeed = await state()
     assert(omittedSpeed.slide?.startsWith('01 / 68') && Number(omittedSpeed.slideTransition?.duration) === 500 && omittedSpeed.warnings.filter(warning => warning.includes('slide transition speed')).length === 1,
-      `An omitted p:transition@spd must use the OOXML fast default without adding a speed warning: ${JSON.stringify({ slide: omittedSpeed.slide, transition: omittedSpeed.slideTransition, warnings: omittedSpeed.warnings.filter(warning => warning.includes('slide transition speed')) })}`)
+      `An omitted p:transition@spd must use the player's fast-category fallback duration without adding a speed warning: ${JSON.stringify({ slide: omittedSpeed.slide, transition: omittedSpeed.slideTransition, warnings: omittedSpeed.warnings.filter(warning => warning.includes('slide transition speed')) })}`)
     await delay(550)
     await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '4' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
     await delay(80)
     const mediumSpeed = await state()
     assert(mediumSpeed.slide?.startsWith('04 / 68') && mediumSpeed.transitionUnderlay.pulling && Number(mediumSpeed.transitionUnderlay.duration) === 750,
-      `A medium p:transition@spd must use the PowerPoint-observed 750ms duration for the outgoing Pull transition: ${JSON.stringify({ slide: mediumSpeed.slide, transition: mediumSpeed.slideTransition, underlay: mediumSpeed.transitionUnderlay, warnings: mediumSpeed.warnings })}`)
+      `A medium p:transition@spd must use the player's 750ms fallback duration for the outgoing Pull transition: ${JSON.stringify({ slide: mediumSpeed.slide, transition: mediumSpeed.slideTransition, underlay: mediumSpeed.transitionUnderlay, warnings: mediumSpeed.warnings })}`)
     await delay(550)
     await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: '3' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
     await delay(80)
@@ -5355,6 +5400,7 @@ try {
   const fromToMotionStart = shape(initial, 'From/to motion').frameRect.left / shape(initial, 'From/to motion').frameRect.frameWidth
   const fromByMotionStart = shape(initial, 'From/by motion').frameRect.left / shape(initial, 'From/by motion').frameRect.frameWidth
   const toMotionStart = shape(initial, 'To-only motion').frameRect.left / shape(initial, 'To-only motion').frameRect.frameWidth
+  const invalidOriginMotionStart = shape(initial, 'Automatic fade').frameRect
   const fixedMotionStart = shape(initial, 'Fixed motion path').frameRect.left / shape(initial, 'Fixed motion path').frameRect.frameWidth
   const rotatedMotionStart = shape(initial, 'Rotated fixed motion path').frameRect
   const curveStart = shape(initial, 'Curved motion path').frameRect
@@ -5551,6 +5597,11 @@ try {
   assert(Math.abs((wpsGroupedMotionEnd.left + wpsGroupedMotionEnd.width / 2) / wpsGroupedMotionEnd.frameWidth - 0.3) < 0.01 && Math.abs((wpsGroupedMotionEnd.top + wpsGroupedMotionEnd.height / 2) / wpsGroupedMotionEnd.frameHeight - 0.2) < 0.01, `A WPS-exported grouped path with default origin=parent must reach its final slide-space point: ${JSON.stringify(wpsGroupedMotionEnd)}`)
   const swappedMotionStart = shape(initial, 'Swapped motion axes').frameRect
   const swappedMotionEnd = shape(afterChain, 'Swapped motion axes').frameRect
+  const invalidOriginMotionEnd = shape(afterChain, 'Automatic fade').frameRect
+  assert(Math.abs(invalidOriginMotionEnd.left - invalidOriginMotionStart.left) < 0.01
+    && Math.abs(invalidOriginMotionEnd.top - invalidOriginMotionStart.top) < 0.01
+    && initial.warnings.some(warning => warning.includes('without a supported layout or parent path')),
+    `An explicitly empty animMotion origin must not be treated as the omitted parent default: ${JSON.stringify({ before: invalidOriginMotionStart, after: invalidOriginMotionEnd, warnings: initial.warnings.filter(warning => /motion.*origin|layout or parent path/i.test(warning)) })}`)
   assert(Math.abs((swappedMotionEnd.left - swappedMotionStart.left) / swappedMotionEnd.frameWidth - 0.01 * swappedMotionEnd.frameHeight / swappedMotionEnd.frameWidth) < 0.003
     && Math.abs((swappedMotionEnd.top - swappedMotionStart.top) / swappedMotionEnd.frameHeight - 0.01 * swappedMotionEnd.frameWidth / swappedMotionEnd.frameHeight) < 0.003,
     `animMotion attrNameLst must map its x/y path coordinates to the named ppt_y/ppt_x properties: ${JSON.stringify({ start: swappedMotionStart, end: swappedMotionEnd })}`)
@@ -6099,8 +6150,8 @@ try {
   await delay(30)
   const secondSlide = await state()
   assert(secondSlide.slide?.startsWith('02 / 68'), 'The next click after all builds must advance the slide.')
-  assert(secondSlide.slideTransition && secondSlide.slideTransition.keyframes[0] === 'translate(-100%, 100%)' && secondSlide.slideTransition.keyframes[1] === 'translate(0px, 0px)' && secondSlide.slideTransition.translateX < 0 && secondSlide.slideTransition.translateY > 0 && Number(secondSlide.slideTransition.duration) === 500, `The diagonal OOXML cover transition must follow its direction and use the fast default for an invalid speed: ${JSON.stringify(secondSlide.slideTransition)}`)
-  assert(secondSlide.warnings.some(warning => warning.includes('slide transition speed "turbo" is invalid; it was ignored')), 'An unsupported slide transition speed must warn and fall back to the fast default.')
+  assert(secondSlide.slideTransition && secondSlide.slideTransition.keyframes[0] === 'translate(-100%, 100%)' && secondSlide.slideTransition.keyframes[1] === 'translate(0px, 0px)' && secondSlide.slideTransition.translateX < 0 && secondSlide.slideTransition.translateY > 0 && Number(secondSlide.slideTransition.duration) === 500, `The diagonal OOXML cover transition must follow its direction and use the player's fast-category fallback duration for an invalid speed: ${JSON.stringify(secondSlide.slideTransition)}`)
+  assert(secondSlide.warnings.some(warning => warning.includes('slide transition speed "turbo" is invalid; it was ignored')), "An unsupported slide transition speed must warn and use the player's fast-category fallback duration.")
   assert(secondSlide.transitionUnderlay.slideCount === 1 && secondSlide.transitionUnderlay.shapeNames.includes('Click fade'), 'The previous slide must remain rendered below the incoming transition until it finishes.')
   assert(secondSlide.transitionUnderlay.translateX === 0 && secondSlide.transitionUnderlay.translateY === 0 && Math.abs(secondSlide.transitionUnderlay.frame.width - initial.hostFrame.width) < 1 && Math.abs(secondSlide.transitionUnderlay.frame.height - initial.hostFrame.height) < 1, `Cover must leave the outgoing page stationary beneath the incoming slide: ${JSON.stringify({ before: initial.hostFrame, underlay: secondSlide.transitionUnderlay })}`)
   await delay(850)
@@ -6489,7 +6540,7 @@ try {
   await delay(50)
   const returned = await state()
   assert(returned.slide?.startsWith('01 / 68'), 'Previous must return to the first slide.')
-  assert(returned.slideTransition && returned.slideTransition.keyframes[0] === 'scale(0.5)' && returned.slideTransition.keyframes[1] === 'scale(1)' && Number(returned.slideTransition.duration) === 500, 'A transition with omitted spd must use the OOXML fast default duration.')
+  assert(returned.slideTransition && returned.slideTransition.keyframes[0] === 'scale(0.5)' && returned.slideTransition.keyframes[1] === 'scale(1)' && Number(returned.slideTransition.duration) === 500, 'A transition with omitted spd must use the player fallback duration for the OOXML fast category.')
   assert(shape(returned, 'Click fade').visibility === 'visible' && shape(returned, 'With previous').visibility === 'visible' && shape(returned, 'Second click').visibility === 'visible', 'Returning must show completed entrance builds.')
   assert(paragraph(returned, 'Built paragraph').visibility === 'visible', 'Returning must show completed paragraph builds.')
   assert(shape(returned, 'Exit after previous').visibility === 'visible', 'Returning must preserve the later sibling animation that resets the frozen exit fill.')
@@ -8572,7 +8623,7 @@ try {
   }
   }
 } catch (error) {
-  if (!(indefiniteDurationOnly && error instanceof Error && error.message === '__indefinite_duration_verified__') && !(bounceEndOnly && error instanceof Error && error.message === '__bounce_end_verified__') && !(cutOnly && error instanceof Error && error.message === '__cut_effects_verified__') && !(transitionSoundOnly && error instanceof Error && error.message === '__transition_sound_verified__') && !(localeOnly && error instanceof Error && error.message === '__locale_verified__') && !(iteratedTextEffectsOnly && error instanceof Error && error.message === '__iterated_text_effects_verified__') && !(wedgeIterationOnly && error instanceof Error && error.message === '__wedge_iteration_verified__') && !(subTimeAfterEffectOnly && error instanceof Error && error.message === '__subtime_after_effect_verified__') && !(subTimeSoundOnly && error instanceof Error && error.message === '__subtime_sound_verified__') && !(transitionSpeedOnly && error instanceof Error && error.message === '__transition_speed_verified__') && !(timeFilterOnly && error instanceof Error && error.message === '__time_filter_verified__') && !(animationSpeedOnly && error instanceof Error && error.message === '__animation_speed_verified__') && !(prismContentOnly && error instanceof Error && error.message === '__prism_content_verified__') && !(scaleCompositionOnly && error instanceof Error && error.message === '__scale_composition_verified__') && !(uploadErrorOnly && error instanceof Error && error.message === '__upload_error_verified__') && !(latestUploadOnly && error instanceof Error && error.message === '__latest_upload_verified__') && !(shadowOffsetOnly && error instanceof Error && error.message === '__shadow_offset_verified__')) throw error
+  if (!(indefiniteDurationOnly && error instanceof Error && error.message === '__indefinite_duration_verified__') && !(bounceEndOnly && error instanceof Error && error.message === '__bounce_end_verified__') && !(cutOnly && error instanceof Error && error.message === '__cut_effects_verified__') && !(transitionSoundOnly && error instanceof Error && error.message === '__transition_sound_verified__') && !(localeOnly && error instanceof Error && error.message === '__locale_verified__') && !(iteratedTextEffectsOnly && error instanceof Error && error.message === '__iterated_text_effects_verified__') && !(wedgeIterationOnly && error instanceof Error && error.message === '__wedge_iteration_verified__') && !(subTimeAfterEffectOnly && error instanceof Error && error.message === '__subtime_after_effect_verified__') && !(subTimeSoundOnly && error instanceof Error && error.message === '__subtime_sound_verified__') && !(transitionSpeedOnly && error instanceof Error && error.message === '__transition_speed_verified__') && !(timeFilterOnly && error instanceof Error && error.message === '__time_filter_verified__') && !(animationSpeedOnly && error instanceof Error && error.message === '__animation_speed_verified__') && !(prismContentOnly && error instanceof Error && error.message === '__prism_content_verified__') && !(scaleCompositionOnly && error instanceof Error && error.message === '__scale_composition_verified__') && !(uploadErrorOnly && error instanceof Error && error.message === '__upload_error_verified__') && !(latestUploadOnly && error instanceof Error && error.message === '__latest_upload_verified__') && !(shadowOffsetOnly && error instanceof Error && error.message === '__shadow_offset_verified__') && !(timeNodeTriggersOnly && error instanceof Error && error.message === '__time_node_triggers_verified__')) throw error
 } finally {
   await Promise.race([closeBrowser(), delay(1_000)])
   socket?.close()
@@ -8589,6 +8640,6 @@ try {
     await rm(runtimeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 }
-if (!inputPptx && !captureOnly && !indefiniteDurationOnly && !bounceEndOnly && !cutOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !themeBackgroundOnly && !transitionSoundOnly && !localeOnly && !iteratedTextEffectsOnly && !wedgeIterationOnly && !subTimeAfterEffectOnly && !subTimeSoundOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !prismContentOnly && !uploadErrorOnly && !latestUploadOnly) {
+if (!inputPptx && !captureOnly && !indefiniteDurationOnly && !bounceEndOnly && !cutOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !themeBackgroundOnly && !transitionSoundOnly && !localeOnly && !iteratedTextEffectsOnly && !wedgeIterationOnly && !subTimeAfterEffectOnly && !subTimeSoundOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !prismContentOnly && !uploadErrorOnly && !latestUploadOnly && !timeNodeTriggersOnly) {
   console.log('Volume-HLC and volume-OHLC stock chart secondary-axis verification passed.')
 }
