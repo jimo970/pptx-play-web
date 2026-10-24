@@ -6161,13 +6161,25 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode.presetclass?view=openxml-3.0.1
     const hasPresetClass = (timeNode: Element) => Boolean(trimXmlWhitespace(timeNode.getAttribute('presetClass')))
     const groupType = (timeNode: Element) => timeNode.getAttribute('nodeType') || (hasPresetClass(timeNode) ? 'clickEffect' : '')
-    const isClickBuildWait = (timeNode: Element, type: string | null | undefined) => {
+    const hasOnlyIndefiniteDelayCondition = (timeNode: Element) => {
         const conditions = children(child(timeNode, 'stCondLst'), 'cond')
-        return startsOnClick(type)
-            && conditions.length === 1
+        return conditions.length === 1
             && conditions[0]?.getAttribute('delay') === 'indefinite'
             && Array.from(conditions[0].attributes).every(attribute => attribute.localName === 'delay')
             && conditions[0].children.length === 0
+    }
+    const isClickBuildWait = (timeNode: Element, type: string | null | undefined) => {
+        return startsOnClick(type) && hasOnlyIndefiniteDelayCondition(timeNode)
+    }
+    const isWrappedClickBuildWait = (timeNode: Element, group: Element) => {
+        // Some PowerPoint files put the clickEffect under a main-sequence wrapper whose
+        // lone indefinite delay represents the same click boundary, despite having no nodeType.
+        // Restrict this to the direct group wrapper and require a nested click node so unrelated
+        // indefinite starts keep their existing semantics.
+        return child(group, 'cTn') === timeNode
+            && !startsOnClick(groupType(timeNode))
+            && hasOnlyIndefiniteDelayCondition(timeNode)
+            && descendants(child(timeNode, 'childTnLst'), 'cTn').some(node => startsOnClick(groupType(node)))
     }
     const sceneTree = firstDescendant(slideRoot, 'spTree')
     const elementsById = new Map<string, PptxElement>()
@@ -10355,12 +10367,13 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
         let resolvedGroupStartMs = precedingEnd
         for (const parentTimeNode of parentTimeNodes.reverse()) {
             // Main-sequence clickEffect/clickPar nodes use a lone indefinite delay as the
-            // click-build activation sentinel. The player activates that build on user input,
-            // so nested withEffect nodes share the build boundary instead of inheriting Infinity.
-            // Keep unrelated indefinite conditions unresolved.
+            // click-build activation sentinel. Some files put a wrapper without nodeType around
+            // that click node; only its direct main-group wrapper shares the click boundary.
+            // The player activates the build on user input, while unrelated indefinite starts
+            // remain unresolved.
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timenodevalues?view=openxml-3.0.1
             // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.startconditionlist?view=openxml-3.0.1
-            const startMs = isClickBuildWait(parentTimeNode, groupType(parentTimeNode))
+            const startMs = isClickBuildWait(parentTimeNode, groupType(parentTimeNode)) || isWrappedClickBuildWait(parentTimeNode, group)
                 ? resolvedGroupStartMs
                 : subTimeEventStartTime(parentTimeNode, resolvedGroupStartMs, eventTimeNodeSources)
             if (startMs === undefined) {
