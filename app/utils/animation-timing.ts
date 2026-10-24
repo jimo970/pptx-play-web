@@ -70,23 +70,37 @@ function filterProgress(filter: NonNullable<TimingCurve['timeFilter']>, mapped: 
   return before.output + (after.output - before.output) * (mapped - before.input) / (after.input - before.input)
 }
 
-function inverseFilterProgress(filter: NonNullable<TimingCurve['timeFilter']>, progress: number): number {
+function inverseFilterProgress(
+  filter: NonNullable<TimingCurve['timeFilter']>,
+  progress: number,
+  reverse = false,
+  reverseDirection: 'up' | 'down' = 'down'
+): number {
   if (filter.length < 2) return progress
-  // A child offset that the parent has already reached at local time zero is ready immediately.
-  // This also accounts for filters whose first authored t value is greater than zero, since
-  // filterProgress holds the first output before that point.
-  if (filterProgress(filter, 0) >= progress) return 0
-  for (let index = 0; index < filter.length - 1; index++) {
+  const initialProgress = filterProgress(filter, reverse ? 1 : 0)
+  const alreadyReachedFromStart = reverseDirection === 'up'
+    ? initialProgress >= progress
+    : initialProgress <= progress
+  if (alreadyReachedFromStart) return 0
+
+  const authoredDirection = reverse
+    ? reverseDirection === 'up' ? 'down' : 'up'
+    : reverseDirection
+  for (let step = 0; step < filter.length - 1; step++) {
+    const index = reverse ? filter.length - 2 - step : step
     const before = filter[index]!
     const after = filter[index + 1]!
-    // A child becomes eligible when the warped parent time first reaches its offset.
-    // For a non-monotonic filter, ignore downward crossings and keep the earliest upward one.
-    if (before.output < progress && after.output >= progress) {
+    // Traverse control points in wall-clock order. Include threshold equality at either end,
+    // but require actual movement so a flat threshold segment is not treated as a crossing.
+    const crosses = authoredDirection === 'up'
+      ? before.output < after.output && before.output <= progress && after.output >= progress
+      : before.output > after.output && before.output >= progress && after.output <= progress
+    if (crosses) {
       const fraction = (progress - before.output) / (after.output - before.output)
       return before.input + (after.input - before.input) * fraction
     }
   }
-  // The parent never reaches this child offset; placing it at the end would invent a start.
+  // The parent never reaches this child offset in the selected playback direction.
   return Number.POSITIVE_INFINITY
 }
 
@@ -123,9 +137,9 @@ export function timingProgress(curve: TimingCurve, progress: number): number {
   return 1 + 0.15 * Math.exp(-5 * bounceProgress) * Math.sin(4 * Math.PI * bounceProgress)
 }
 
-export function inverseTimingProgress(curve: TimingCurve, progress: number): number {
+export function inverseTimingProgress(curve: TimingCurve, progress: number, reverse = false, reverseDirection: 'up' | 'down' = 'down'): number {
   const filter = curve.timeFilter
   if (!filter) return inverseMonotonicTimingProgress(curve, progress)
-  const mappedProgress = inverseFilterProgress(filter, progress)
+  const mappedProgress = inverseFilterProgress(filter, progress, reverse, reverseDirection)
   return inverseMonotonicTimingProgress({...curve, timeFilter: undefined}, mappedProgress)
 }

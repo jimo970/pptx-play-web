@@ -362,6 +362,7 @@ export interface PptxSlide {
         nextAction?: 'none' | 'seek'
         advancesOnNext?: boolean
         rewindsOnPrevious?: boolean
+        previousStepIndex?: number
     } | undefined>
     triggeredAnimations?: {
         conditions: PptxAnimationTriggerCondition[]
@@ -501,7 +502,6 @@ export interface PptxAnimation {
     slideFrom?: 'left' | 'right' | 'top' | 'bottom' | 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
     wheelSpokes?: 1 | 2 | 3 | 4 | 8
     scaleFrom?: [number, number]
-    scaleFromCurrent?: boolean
     scaleTo?: [number, number]
     scaleAxis?: 'x' | 'y'
     scaleOrigin?: [number, number]
@@ -513,7 +513,6 @@ export interface PptxAnimation {
     scaleKeyframeMode?: 'lin' | 'discrete'
     scaleAccumulate?: boolean
     rotationFrom?: number
-    rotationFromCurrent?: boolean
     rotationTo?: number
     rotationAxis?: 'x' | 'y'
     rotationKeyframes?: Array<{offset: number; value: number}>
@@ -598,6 +597,8 @@ export interface PptxAnimation {
     opacityFormulaSamples?: Array<{offset: number; value: number}>
     opacityAccumulate?: boolean
     mediaCommand?: 'play' | 'pause' | 'togglePause' | 'stop' | 'stopAudio'
+    /** A non-durational p:cmd command that fires at its begin instant. */
+    mediaIsInstantCommand?: boolean
     mediaSourceUrl?: string
     mediaActionKey?: string
     mediaDurationMs?: number

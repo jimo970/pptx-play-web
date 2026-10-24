@@ -609,8 +609,10 @@ function previousSlide() {
   if (animationStep.value > 0) {
     const slide = currentSlide.value
     const stepSequence = slide?.animationStepSequences?.[animationStep.value - 1]
-    if (currentSlide.value?.animationSequence?.rewindsOnPrevious === false && stepSequence?.rewindsOnPrevious !== true) return
-    let targetStep = animationStep.value - 1
+    if (stepSequence?.rewindsOnPrevious === false || (slide?.animationSequence?.rewindsOnPrevious === false && stepSequence?.rewindsOnPrevious !== true)) return
+    let targetStep = stepSequence?.previousStepIndex !== undefined
+      ? stepSequence.previousStepIndex + 1
+      : animationStep.value - 1
     if (slide && slide.animationSequence?.previousAction === 'skipTimed' && deck.value?.showSettings?.useTimings !== false) {
       // bldP@advAuto starts the next build step by time; skip such intermediate steps while rewinding.
       // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.buildparagraph?view=openxml-3.0.1
@@ -621,7 +623,12 @@ function previousSlide() {
         targetStep--
       }
     }
-    animationStep.value = targetStep
+    if (targetStep >= 0) {
+      animationStep.value = targetStep
+    } else if (deck.value && previousShownSlideIndex.value !== undefined) {
+      currentIndex.value = previousShownSlideIndex.value
+      animationStep.value = animationCount.value
+    }
   }
   else if (deck.value && previousShownSlideIndex.value !== undefined) {
     currentIndex.value = previousShownSlideIndex.value
@@ -1098,12 +1105,10 @@ function scheduleSlideAdvance() {
     || slideTimelineReadyKey.value !== timelineKey) return
   const slideIndex = currentIndex.value
   const now = Date.now()
-  const entryTransition = transitionPlayback.value?.slideId === slide.id ? transitionPlayback.value : null
-  const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  const transitionEndAt = entryTransition && !reducedMotion && entryTransition.transition.effect !== 'cut'
-    ? entryTransition.startedAtEpoch + entryTransition.transition.durationMs
-    : now
-  const dueAt = Math.max(now, transitionEndAt) + delayMs
+  // OOXML advTm schedules when the slide transition starts; p14:dur controls the
+  // transition's own duration and must not be added to the auto-advance delay.
+  // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.transition?view=openxml-3.0.1
+  const dueAt = now + delayMs
   const advance = () => {
     const remaining = dueAt - Date.now()
     if (remaining > 0) {

@@ -1672,9 +1672,14 @@ const iterationSpanMs = (action: PptxAnimation) => {
   const rangeCount = action.iteration?.ranges.length || 0
   return rangeCount > 1 ? iterationStaggerMs(action, rangeCount - 1) : 0
 }
-const animationDuration = (action: PptxAnimation) => Math.min(action.durationMs === 0
-  ? 0
-  : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity), parentDuration(action))
+const animationDuration = (action: PptxAnimation) => {
+  const localDuration = action.durationMs === 0
+    ? 0
+    : Math.min(action.durationMs * (action.autoReverse ? 2 : 1) * (action.repeatCount ?? 1), action.repeatDurationMs ?? Infinity)
+  // A warped child's elapsed value is already expressed in its local timeline. Its parent's
+  // shorter wall-clock duration is applied by timingWarpChildElapsed and must not truncate it again.
+  return action.timingWarp ? localDuration : Math.min(localDuration, parentDuration(action))
+}
 function hasUnboundedRepeat(action: PptxAnimation): boolean {
   return action.effect !== 'media'
     && !action.timingWarp
@@ -1963,11 +1968,13 @@ function syncExclusiveMediaPlayback(now: number) {
     if (activeGroups.length && !belongsToEveryActiveGroup) {
       if (!media.paused && !exclusivePausedMedia.has(media)) {
         const endAt = Number(media.dataset.mediaActionEndAt)
+        const actionKey = activeMediaActions.get(mediaId)?.action.mediaActionKey
         exclusivePausedMedia.set(media, {
           remainingMs: Number.isFinite(endAt) ? endAt - now : undefined,
-          actionKey: activeMediaActions.get(mediaId)?.action.mediaActionKey,
+          actionKey,
           pausedAt: now
         })
+        if (actionKey) clearMediaActionEnd(actionKey)
       }
       if (exclusivePausedMedia.has(media) && !media.paused) media.pause()
       continue
@@ -1982,7 +1989,12 @@ function syncExclusiveMediaPlayback(now: number) {
       && activePlayback.startedAt >= (pausedPlayback?.pausedAt ?? Infinity)
     const pausedActionCompleted = pausedPlayback?.actionKey && completedMediaActions.has(pausedPlayback.actionKey)
     if (playbackRestartedWhilePaused || pausedActionCompleted) continue
-    if (pausedPlayback?.remainingMs !== undefined) media.dataset.mediaActionEndAt = String(now + Math.max(0, pausedPlayback.remainingMs))
+    if (pausedPlayback?.remainingMs !== undefined) {
+      media.dataset.mediaActionEndAt = String(now + Math.max(0, pausedPlayback.remainingMs))
+      if (activePlayback && activePlayback.action.mediaActionKey === pausedPlayback.actionKey) {
+        scheduleMediaActionEnd(activePlayback.action, media, Math.max(0, pausedPlayback.remainingMs), now)
+      }
+    }
     void media.play().catch(error => {
       if (error instanceof DOMException && error.name === 'NotAllowedError' && mediaId && !blockedMediaPlaybackIds.value.includes(mediaId)) {
         blockedMediaPlaybackIds.value = [...blockedMediaPlaybackIds.value, mediaId]
@@ -3999,9 +4011,14 @@ function runTimedMediaActions() {
     const startedAt = timelineStart(action)
     const stoppedAt = timelineEnd(action)
     const actionNow = timelineNow(action)
-    if (stoppedAt !== undefined && startedAt !== undefined && startedAt + action.delayMs >= timelineTimeAt(action, stoppedAt)) return
-    const parentEndAt = timelineParentEndAt(action)
-    if (parentEndAt !== undefined && startedAt !== undefined && startedAt + action.delayMs >= parentEndAt) return
+    const actionStartAt = startedAt === undefined ? undefined : startedAt + action.delayMs
+    const startsOutsideEnd = (endAt: number) => actionStartAt !== undefined
+      && (actionStartAt > endAt || actionStartAt === endAt && !action.mediaIsInstantCommand)
+    if (stoppedAt !== undefined && startsOutsideEnd(timelineTimeAt(action, stoppedAt))) return
+    const parentEndAt = action.mediaIsInstantCommand && action.parentEndMs !== undefined
+      ? (timelineBaseStart(action) ?? 0) + action.parentEndMs
+      : timelineParentEndAt(action)
+    if (parentEndAt !== undefined && startsOutsideEnd(parentEndAt)) return
     if (startedAt === undefined || startedAt === Number.NEGATIVE_INFINITY || timelineIsPaused(action, animationClock.value) || actionNow < startedAt + action.delayMs) return
     executedMediaActions.add(index)
     if (action.mediaActionKey) scheduledMediaActions.set(action.mediaActionKey, animationClock.value)
@@ -4305,8 +4322,7 @@ function animationScale(element: PptxElement): [number, number] {
       continue
     }
     if (!action.scaleFrom || !action.scaleTo) continue
-    const currentScale = action.scaleLayer === 'dimensions' ? layers.dimensions : layers.transform
-    const animatedScale = animationScaleValue(action, progress, undefined, action.scaleFromCurrent ? currentScale : undefined)
+    const animatedScale = animationScaleValue(action, progress)
     applyAnimationScaleLayer(layers, action, animatedScale)
   }
   return composedAnimationScale(layers)
@@ -4320,8 +4336,8 @@ function animationScaleOrigin(element: PptxElement): [number, number] | undefine
   return origin
 }
 
-function animationScaleValue(action: RenderAnimation, progress: number, iterationIndex?: number, currentScale?: [number, number]): [number, number] {
-  const [fromX, fromY] = currentScale && action.scaleFromCurrent ? currentScale : action.scaleFrom!
+function animationScaleValue(action: RenderAnimation, progress: number, iterationIndex?: number): [number, number] {
+  const [fromX, fromY] = action.scaleFrom!
   const [toX, toY] = action.scaleTo!
   const completedRepeats = action.scaleAccumulate
     ? completedAnimationRepeats(action, iterationIndex) * (action.reversePlayback ? -1 : 1)
@@ -4368,7 +4384,7 @@ function animationRotation(element: PptxElement): number {
       continue
     }
     if (action.rotationFrom === undefined || action.rotationTo === undefined) continue
-    const rotation = animationRotationValue(action, progress, value)
+    const rotation = animationRotationValue(action, progress)
     value = action.rotationRelative || action.rotationAdditive ? value + rotation : rotation
   }
   return value
@@ -4397,14 +4413,14 @@ function animationRotation3d(element: PptxElement, paragraphIndex?: number, char
       continue
     }
     if (action.rotationFrom === undefined || action.rotationTo === undefined) continue
-    const rotation = animationRotationValue(action, progress, values[axis], iterationIndex)
+    const rotation = animationRotationValue(action, progress, iterationIndex)
     values[axis] = action.rotationRelative || action.rotationAdditive ? values[axis] + rotation : rotation
   }
   return values
 }
 
-function animationRotationValue(action: RenderAnimation, progress: number, currentRotation: number, iterationIndex?: number): number {
-  const from = action.rotationFromCurrent ? currentRotation : action.rotationFrom!
+function animationRotationValue(action: RenderAnimation, progress: number, iterationIndex?: number): number {
+  const from = action.rotationFrom!
   const delta = action.rotationTo! - from
   const repeatOffset = delta * (action.reversePlayback ? -1 : 1) * completedAnimationRepeats(action, iterationIndex)
   const value = action.rotationKeyframes?.length
@@ -4874,12 +4890,11 @@ function textTransformAnimationStyle(element: PptxElement, paragraphIndex: numbe
       continue
     }
     if ((action.effect === 'scale' || action.effect === 'zoom' || action.effect === 'spiral') && action.scaleFrom && action.scaleTo) {
-      const currentScale = action.scaleLayer === 'dimensions' ? scaleLayers.dimensions : scaleLayers.transform
-      const animatedScale = animationScaleValue(action, progress, iterationIndexFor(action, characterStart, characterEnd), action.scaleFromCurrent ? currentScale : undefined)
+      const animatedScale = animationScaleValue(action, progress, iterationIndexFor(action, characterStart, characterEnd))
       applyAnimationScaleLayer(scaleLayers, action, animatedScale)
     }
     if ((action.effect === 'rotation' || action.effect === 'spiral') && !action.rotationAxis && action.rotationFrom !== undefined && action.rotationTo !== undefined) {
-      const angle = animationRotationValue(action, progress, rotation, iterationIndexFor(action, characterStart, characterEnd))
+      const angle = animationRotationValue(action, progress, iterationIndexFor(action, characterStart, characterEnd))
       rotation = action.rotationRelative || action.rotationAdditive ? rotation + angle : angle
     }
   }
@@ -5097,7 +5112,8 @@ function animationWipe(element: PptxElement, paragraphIndex?: number, characterS
     progress = action.direction === 'in' ? phase * 100 : (1 - phase) * 100
   }
   if (reset) return {}
-  const mask = `linear-gradient(to ${direction}, #000 var(--wipe-progress), transparent var(--wipe-progress))`
+  const cssDirection = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : direction
+  const mask = `linear-gradient(to ${cssDirection}, #000 var(--wipe-progress), transparent var(--wipe-progress))`
   return { '--wipe-progress': `${progress}%`, maskImage: mask, WebkitMaskImage: mask } as CSSProperties
 }
 

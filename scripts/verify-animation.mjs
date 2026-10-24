@@ -37,6 +37,9 @@ const themeBackgroundOnly = process.env.DECKLINE_VERIFY_THEME_BACKGROUND === '1'
 const notesOnly = process.env.DECKLINE_VERIFY_NOTES === '1'
 const performanceOnly = process.env.DECKLINE_VERIFY_PERFORMANCE === '1'
 const timeNodeTriggersOnly = process.env.DECKLINE_VERIFY_TIME_NODE_TRIGGERS === '1'
+const commonBehaviorMotionOnly = process.env.DECKLINE_VERIFY_COMMON_BEHAVIOR_MOTION === '1'
+const exclusiveMediaOnly = process.env.DECKLINE_VERIFY_EXCLUSIVE_MEDIA === '1'
+const zoomPresetOnly = process.env.DECKLINE_VERIFY_ZOOM_PRESET === '1'
 const transitionSoundOnly = process.env.DECKLINE_VERIFY_TRANSITION_SOUND === '1'
 const localeOnly = process.env.DECKLINE_VERIFY_LOCALE_ONLY === '1'
 const iteratedTextEffectsOnly = process.env.DECKLINE_VERIFY_ITERATED_TEXT_EFFECTS === '1'
@@ -187,7 +190,7 @@ const simpleFilterPresetCases = [
   ['Preset random bars default', 8218, 14, 'in', 'entr', 'randomBars', 'horizontal'],
   ['Preset random bars canonical subtype', 8219, 14, 'in', 'entr', 'randomBars', 'horizontal', 10],
   ['Preset strips default', 8220, 18, 'in', 'entr', 'strips', 'downRight'],
-  ['Preset strips canonical subtype', 8221, 18, 'in', 'entr', 'strips', 'downRight', 12],
+  ['Preset strips canonical subtype', 8221, 18, 'in', 'entr', 'strips', 'downRight', 6],
 ]
 
 if (!browserPath) throw new Error('Set DECKLINE_BROWSER to an Edge or Chrome executable.')
@@ -416,8 +419,13 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const curveMotionEffect = `<p:par><p:cTn id="33" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animMotion origin="layout" path="M 0 0 C 0.1 0 0.15 0.2 0.25 0.2 c 0.1 0 0.15 -0.2 0.25 -0.2 Z E"><p:cBhvr><p:cTn id="34" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="29"/></p:tgtEl></p:cBhvr></p:animMotion></p:childTnLst></p:cTn></p:par>`
   const rotationEffect = `<p:par><p:cTn id="75" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animRot by="5400000"><p:cBhvr><p:cTn id="76" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot><p:anim calcmode="lin" valueType="num"><p:cBhvr additive="sum"><p:cTn id="76001" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="8"/></p:tgtEl><p:attrNameLst><p:attrName>style.rotation</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0" fmla="$+4500000*sin(pi*($/-2700000))"><p:val><p:fltVal val="0"/></p:val></p:tav><p:tav tm="100000"><p:val><p:fltVal val="-2700000"/></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const triggeredRotation = `<p:par><p:cTn id="73" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animRot by="3000000"><p:cBhvr><p:cTn id="74" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="9"/></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot></p:childTnLst></p:cTn></p:par>`
-  const shadowColorEffect = colorEffect(87, 3, 'shadow.color', '000000', 'ff0000').replace('<a:srgbClr val="000000"/>', '<a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr>').replace('<a:srgbClr val="ff0000"/>', '<a:srgbClr val="ff0000"><a:alpha val="50000"/></a:srgbClr>')
-  const characterRangeShadowColorEffect = colorEffect(13006, 132, 'shadow.color', '000000', 'ff0000').replace('<p:spTgt spid="132"></p:spTgt>', '<p:spTgt spid="132"><p:txEl><p:charRg st="0" end="10"/></p:txEl></p:spTgt>')
+  // PowerPoint p:animClr only supports fillcolor/style.color/stroke.color; animate shadow.color with p:anim valueType="clr".
+  const shadowColorEffect = `<p:par><p:cTn id="87" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="lin" valueType="clr"><p:cBhvr><p:cTn id="88" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="3"/></p:tgtEl><p:attrNameLst><p:attrName>shadow.color</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:clrVal><a:srgbClr val="000000"><a:alpha val="50000"/></a:srgbClr></p:clrVal></p:val></p:tav><p:tav tm="100000"><p:val><p:clrVal><a:srgbClr val="ff0000"><a:alpha val="50000"/></a:srgbClr></p:clrVal></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
+  // MS-OI29500 §19.5.2 restricts PowerPoint p:animClr to style.color, fillcolor, and stroke.color;
+  // shadow.color is a generic p:anim target and supports valueType="clr" per §19.5.1.
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/9636f7f3-58e3-408d-9880-d0799fb26b0f
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/e9355b93-5184-4ffe-8428-63a08858da2f
+  const characterRangeShadowColorEffect = `<p:par><p:cTn id="13006" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:anim calcmode="lin" valueType="clr"><p:cBhvr><p:cTn id="13007" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="132"><p:txEl><p:charRg st="0" end="10"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>shadow.color</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"><p:val><p:clrVal><a:srgbClr val="000000"/></p:clrVal></p:val></p:tav><p:tav tm="100000"><p:val><p:clrVal><a:srgbClr val="ff0000"/></p:clrVal></p:val></p:tav></p:tavLst></p:anim></p:childTnLst></p:cTn></p:par>`
   const relativeColorEffect = (id, target, colorSpace, relativeColor) => `<p:par><p:cTn id="${id}" dur="indefinite" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animClr clrSpc="${colorSpace}"><p:cBhvr><p:cTn id="${id + 1}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>fillcolor</p:attrName></p:attrNameLst></p:cBhvr><p:by>${relativeColor}</p:by></p:animClr></p:childTnLst></p:cTn></p:par>`
   const relativeHslColorEffect = relativeColorEffect(29880, 29890, 'hsl', '<p:hsl h="7200000" s="100000" l="50000"/>')
   const relativeRgbColorEffect = relativeColorEffect(29882, 29891, 'rgb', '<p:rgb r="100000" g="0" b="0"/>')
@@ -682,13 +690,14 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   assert(timingWithWordStrips !== timingWithLetterWipe, 'The by-word strips fixture must be included in slide timing.')
   const timingWithOnOff = timingWithWordStrips.replace(onOffTimingClose, `${onOffTriggered}${onOffTimingClose}`)
   assert(timingWithOnOff !== timing, 'The appearance toggle trigger must be included in slide timing.')
-  const relativeMotion = `<p:animMotion origin="parent"><p:cBhvr><p:cTn id="153" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="92"/></p:tgtEl></p:cBhvr><p:by x="25000" y="0"/></p:animMotion>`
+  const relativeMotion = `<p:animMotion origin="parent"><p:cBhvr by="(#ppt_w, 0)"><p:cTn id="153" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="92"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const fromToMotion = `<p:animMotion origin="layout"><p:cBhvr><p:cTn id="245" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="93"/></p:tgtEl></p:cBhvr><p:from x="25%" y="0%"/><p:to x="50000" y="0"/></p:animMotion>`
   const fromByMotion = `<p:animMotion origin="layout"><p:cBhvr><p:cTn id="246" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="94"/></p:tgtEl></p:cBhvr><p:from x="10000" y="0"/><p:by x="25000" y="0"/></p:animMotion>`
   const toMotion = `<p:animMotion origin="layout"><p:cBhvr><p:cTn id="247" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="95"/></p:tgtEl></p:cBhvr><p:to x="40000" y="0"/></p:animMotion>`
   const rotatedMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" rAng="5400000" path="M 0.5 0.5 L 0.55 0.5 E"><p:cBhvr><p:cTn id="249" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="97"/></p:tgtEl></p:cBhvr><p:rCtr x="50000" y="50000"/></p:animMotion>`
   const formulaMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" path="M (#ppt_x #ppt_y) L (#ppt_x+#ppt_w*1.5, #ppt_y+sin(pi/2)*#ppt_h*0.5) E"><p:cBhvr><p:cTn id="250" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="122"/></p:tgtEl></p:cBhvr></p:animMotion>`
-  const dynamicFormulaMotionPath = `<p:animMotion origin="layout" pathEditMode="fixed" path="M (#ppt_x-sin(pi*$)/3, #ppt_y) L (#ppt_x, #ppt_y) E"><p:cBhvr><p:cTn id="251" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="123"/></p:tgtEl></p:cBhvr></p:animMotion>`
+  // #ppt_x/#ppt_y are target slide coordinates, so parent origin keeps this formula path in slide space.
+  const dynamicFormulaMotionPath = `<p:animMotion origin="parent" pathEditMode="fixed" path="M (#ppt_x-sin(pi*$)/3, #ppt_y) L (#ppt_x, #ppt_y) E"><p:cBhvr><p:cTn id="251" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="123"/></p:tgtEl></p:cBhvr></p:animMotion>`
   const coordinateAnimation = (id, property, start, end, formula = '') => `<p:anim calcmode="lin" valueType="num"><p:cBhvr additive="base"><p:cTn id="${id}" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="150"/></p:tgtEl><p:attrNameLst><p:attrName>${property}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst><p:tav tm="0"${formula ? ` fmla="${formula}"` : ''}><p:val><p:strVal val="${start}"/></p:val></p:tav><p:tav tm="100000"><p:val><p:strVal val="${end}"/></p:val></p:tav></p:tavLst></p:anim>`
   const genericCoordinateAnimations = `${coordinateAnimation(28100, 'ppt_x', '1+#ppt_h/2', '#ppt_x')}${coordinateAnimation(28101, 'ppt_y', '0', '1', '#ppt_y+0.2*(1-$)')}`
   const dynamicMotionClick = `<p:par><p:cTn id="278" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst><p:childTnLst>${dynamicFormulaMotionPath}${genericCoordinateAnimations}</p:childTnLst></p:cTn></p:par>`
@@ -1268,7 +1277,7 @@ const plainTextShape = (id, name, x, y, text, outline = '', geometry = 'rect') =
   const textScale = `<p:animScale><p:cBhvr><p:cTn id="671" dur="800" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="0" end="2"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr><p:by x="160000" y="125000"/></p:animScale>`
   const textRotation = `<p:animRot by="1800000"><p:cBhvr><p:cTn id="672" dur="800" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>r</p:attrName></p:attrNameLst></p:cBhvr></p:animRot><p:animMotion origin="layout" path="M 0 0 L 0.12 0.05 E" pathEditMode="relative"><p:cBhvr><p:cTn id="676" dur="800" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="0" end="1"/></p:txEl></p:spTgt></p:tgtEl><p:attrNameLst><p:attrName>ppt_x</p:attrName><p:attrName>ppt_y</p:attrName></p:attrNameLst></p:cBhvr></p:animMotion>`
   const nestedPresetScale = `<p:par><p:cTn id="681" dur="indefinite" nodeType="withEffect" presetClass="emph" presetID="6" presetSubtype="0"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animScale><p:cBhvr><p:cTn id="682" dur="300" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="2" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr><p:by x="130000" y="130000"/></p:animScale></p:childTnLst></p:cTn></p:par>`
-  const presetZoomEntrance = `<p:par><p:cTn id="91001" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="23" presetSubtype="0"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="vendorZoomFallback"><p:cBhvr><p:cTn id="91002" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="91005"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
+  const presetZoomEntrance = `<p:par><p:cTn id="91001" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="23" presetSubtype="16"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="vendorZoomFallback"><p:cBhvr><p:cTn id="91002" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="91005"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const presetZoomExit = `<p:par><p:cTn id="91003" dur="indefinite" nodeType="withEffect" presetClass="exit" presetID="23" presetSubtype="32"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="out" filter="vendorZoomFallback"><p:cBhvr><p:cTn id="91004" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="91006"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const characterBlinds = `<p:par><p:cTn id="683" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="blinds(horizontal)"><p:cBhvr><p:cTn id="684" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="670"><p:txEl><p:charRg st="1" end="3"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
   const paragraphBlinds = `<p:par><p:cTn id="685" dur="indefinite" nodeType="withEffect" presetClass="entr" presetID="22"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:animEffect transition="in" filter="blinds(vertical)"><p:cBhvr><p:cTn id="686" dur="500" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="687"><p:txEl><p:pRg st="0" end="0"/></p:txEl></p:spTgt></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par>`
@@ -2651,7 +2660,7 @@ try {
     console.log('Transition sound start, loop, end, and rejected-playback checks passed.')
     throw new Error('__transition_sound_verified__')
   }
-  if (!inputPptx && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly) {
+  if (!inputPptx && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly && !commonBehaviorMotionOnly && !exclusiveMediaOnly && !zoomPresetOnly) {
     const fallbackArchive = await JSZip.loadAsync(await readFile(fixturePath))
     const fallbackPresentation = await fallbackArchive.file('ppt/presentation.xml').async('string')
     const slideList = /<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/.exec(fallbackPresentation)?.[1]
@@ -2680,7 +2689,7 @@ try {
     assert(fallbackLoaded && !fallbackState.error && fallbackState.shapes.length > 0 && fallbackState.warnings.some(warning => warning.includes('parsing worker could not start')),
       `A valid deck must still parse locally when worker construction fails, with a visible main-thread fallback warning: ${JSON.stringify({ fallbackName, title: fallbackState.title, shapes: fallbackState.shapes.length, warnings: fallbackState.warnings, error: fallbackState.error })}`)
   }
-  if (!captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly) {
+  if (!captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !latestUploadOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly && !commonBehaviorMotionOnly && !exclusiveMediaOnly && !zoomPresetOnly) {
     const corruptArchivePath = join(runtimeDir, 'damaged.pptx')
     await writeFile(corruptArchivePath, Buffer.from('not a zip archive'))
     const uploadedCorruptName = await uploadPath(corruptArchivePath)
@@ -2745,7 +2754,7 @@ try {
     await uploadPath(excessiveSlidesPath)
     assert((await waitForError('more than 500 slides')).includes('Couldn’t open this presentation'), 'A presentation with more than 500 slide IDs must display the slide-count safety-limit error.')
   }
-  if (latestUploadOnly || (!inputPptx && !captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly)) {
+  if (latestUploadOnly || (!inputPptx && !captureOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !textOutlineRangeOnly && !themeBackgroundOnly && !narrationOnly && !iteratedTextEffectsOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !subTimeAfterEffectOnly && !prismContentOnly && !subTimeSoundOnly && !timeNodeTriggersOnly && !commonBehaviorMotionOnly && !exclusiveMediaOnly && !zoomPresetOnly)) {
     const latestFilePath = join(runtimeDir, 'latest-wins.pptx')
     await copyFile(fixturePath, latestFilePath)
     await evaluate(`globalThis.__decklineWorkerDelayMs = 700; globalThis.__decklineDelayNextWorkerPost = true`)
@@ -2816,6 +2825,75 @@ try {
       })()`)
     }
     if ((captureOnly || themeBackgroundOnly) ? initial.slide && !initial.error : strokeWidthOnly ? initial.shapes.some(element => element.name === 'Stroke weight animation') : shadowOffsetOnly ? initial.shapes.some(element => element.name === 'Shadow offset target') : iteratedTextEffectsOnly ? initial.shapes.some(element => element.name === 'Text shadow color p:set range') : wedgeIterationOnly ? initial.shapes.some(element => element.name === 'By letter wedge') : initial.shapes.length === FIXTURE_FIRST_SLIDE_SHAPE_COUNT) break
+  }
+  if (zoomPresetOnly) {
+    await evaluate(`for (const key of ['6', '7', 'Enter']) window.dispatchEvent(new KeyboardEvent('keydown', {key}))`)
+    for (let attempt = 0; attempt < 100 && Number((await state()).slide?.split('/')[0].trim()) !== 67; attempt++) await delay(20)
+    const before = await state()
+    const preState = await evaluate(`(() => { const find = title => document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + ']'); return ['Zoom preset entrance target', 'Zoom preset exit target'].map(title => { const element = find(title); const style = getComputedStyle(element); const matrix = new DOMMatrix(style.transform); return {title, visibility: style.visibility, opacity: Number(style.opacity), scaleX: Math.hypot(matrix.a, matrix.b)} }) })()`)
+    await evaluate(`document.querySelector('.deck-toolbar button[aria-label="Next animation step or slide"]')?.click()`)
+    await delay(180)
+    const during = await evaluate(`(() => { const shell = document.querySelector('.stage-shell'); const page = shell?.__vueParentComponent?.setupState; const stage = shell?.querySelector('.slide-frame')?.__vueParentComponent?.setupState; const read = title => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + ']'); const style = getComputedStyle(element); const matrix = new DOMMatrix(style.transform); return {visibility: style.visibility, opacity: Number(style.opacity), scaleX: Math.hypot(matrix.a, matrix.b)} }; const summarize = action => ({targetId: action.targetId, step: action.step, effect: action.effect, delayMs: String(action.delayMs), durationMs: action.durationMs, parentEndMs: String(action.parentEndMs), sourceTimeNodeId: action.sourceTimeNodeId, timingWarp: action.timingWarp}); return {animationStep: page?.animationStep, animationCount: page?.animationCount, stepStartedAt: [...stage?.stepStartedAt || []], animationClock: stage?.animationClock, entrance: read('Zoom preset entrance target'), exit: read('Zoom preset exit target'), animationSteps: page?.currentSlide?.animationSteps?.map((actions, step) => ({step, actions: actions.filter(action => ['91005', '91006'].includes(String(action.targetId))).map(summarize)})), timelineActions: stage?.timelineActions?.filter(action => ['91005', '91006'].includes(String(action.targetId))).map(summarize), warnings: page?.currentSlide?.warnings} })()`)
+    assert(during.animationStep === 1 && during.entrance.visibility === 'visible' && during.entrance.scaleX > 0.05 && during.entrance.scaleX < 0.95 && during.exit.visibility === 'visible' && during.exit.scaleX > 0.05 && during.exit.scaleX < 0.95, `Preset Zoom in/out must start at the click-build boundary and interpolate: ${JSON.stringify(during)}`)
+    console.log(`Zoom preset isolated probe: ${JSON.stringify({slide: before.slide, preState, during})}`)
+    throw new Error('__zoom_preset_verified__')
+  }
+  if (exclusiveMediaOnly) {
+    await evaluate(`window.__decklineMediaCalls = []; window.__decklineMediaPauses = []; window.__decklineMockedMedia = new Set(); window.__decklineOriginalPlay = HTMLMediaElement.prototype.play; window.__decklineOriginalPause = HTMLMediaElement.prototype.pause; HTMLMediaElement.prototype.play = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaCalls.push({id: this.dataset.mediaId, at: performance.now()}); Object.defineProperty(this, 'paused', {configurable: true, value: false}); Object.defineProperty(this, 'ended', {configurable: true, value: false}); return Promise.resolve() }; HTMLMediaElement.prototype.pause = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaPauses.push(this.dataset.mediaId); Object.defineProperty(this, 'paused', {configurable: true, value: true}) }; for (const key of ['1', '5', 'Enter']) window.dispatchEvent(new KeyboardEvent('keydown', {key}))`)
+    for (let attempt = 0; attempt < 100 && await evaluate(`Number(document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber) !== 15`); attempt++) await delay(25)
+    assert(await evaluate(`Number(document.querySelector('.stage-shell > .slide-host')?.dataset.slideNumber) === 15`), 'The isolated exclusive-media fixture must open slide 15.')
+    const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell')?.click(); return started })()`)
+    for (let attempt = 0; attempt < 100 && !(await evaluate(`window.__decklineMediaCalls.some(call => call.id === '5')`)); attempt++) await delay(10)
+    assert(await evaluate(`window.__decklineMediaCalls.some(call => call.id === '5')`), 'The p:subTnLst audio action must begin for the exclusive-media fixture.')
+    await evaluate(`document.querySelector('video[data-media-id="2"]')?.pause()`)
+    let exclusiveTiming
+    for (let attempt = 0; attempt < 100; attempt++) {
+      exclusiveTiming = await evaluate(`(() => { const state = document.querySelector('.stage-shell .slide-frame')?.__vueParentComponent?.setupState; return state?.exclusiveTimelineRanges?.find(range => range.id === 'excl-1') })()`)
+      if (exclusiveTiming && await evaluate(`document.querySelector('audio[data-media-id="5"]')?.paused`)) break
+      await delay(10)
+    }
+    const exclusivePauseDebug = await evaluate(`(() => { const frame = document.querySelector('.stage-shell .slide-frame'); const stage = frame?.__vueParentComponent?.setupState; const media = document.querySelector('audio[data-media-id="5"]'); return {now: performance.now(), ranges: stage?.exclusiveTimelineRanges, media: media && {paused: media.paused, endAt: media.dataset.mediaActionEndAt}, started: [...stage?.startedMediaActions || []], completed: [...stage?.completedMediaActions || []], paused: [...stage?.exclusivePausedMedia || []].map(([item, state]) => ({id: item.dataset.mediaId, state})), timers: [...stage?.mediaActionEndTimers?.keys() || []], actions: stage?.timelineActions?.filter(action => action.targetId === '5' && action.effect === 'media').map(action => ({key: action.mediaActionKey, duration: action.mediaDurationMs, parentEndMs: action.parentEndMs}))} })()`)
+    assert(exclusiveTiming && await evaluate(`document.querySelector('audio[data-media-id="5"]')?.paused`) && await evaluate(`window.__decklineMediaPauses.includes('5')`), `p:excl must pause the active audio before resuming it: ${JSON.stringify({exclusiveTiming, exclusivePauseDebug, pauses: await evaluate(`window.__decklineMediaPauses`)})}`)
+    const resumeDeadline = exclusiveTiming.endAt + 250
+    for (let attempt = 0; attempt < 100 && !(await evaluate(`performance.now() >= ${resumeDeadline}`)); attempt++) await delay(10)
+    const resumedCalls = await evaluate(`window.__decklineMediaCalls.filter(call => call.id === '5' && call.at >= ${exclusiveTiming.endAt - 50})`)
+    const exclusiveResumeDebug = await evaluate(`(() => { const shell = document.querySelector('.stage-shell'); const frame = shell?.querySelector('.slide-frame'); const stage = frame?.__vueParentComponent?.setupState; const media = document.querySelector('audio[data-media-id="5"]'); return {now: performance.now(), animationClock: stage?.animationClock, ranges: stage?.exclusiveTimelineRanges, media: media && {paused: media.paused, ended: media.ended, currentTime: media.currentTime, readyState: media.readyState, actionEndAt: media.dataset.mediaActionEndAt}, mediaActions: stage?.timelineActions?.filter(action => action.effect === 'media' && action.targetId === '5').map(action => ({step: action.step, automatic: action.automatic, mediaCommand: action.mediaCommand, mediaActionKey: action.mediaActionKey, exclusiveGroups: action.exclusiveGroups, delayMs: action.delayMs, durationMs: action.durationMs, mediaDurationMs: action.mediaDurationMs})), executedMediaActions: [...stage?.executedMediaActions || []], startedMediaActions: [...stage?.startedMediaActions || []], completedMediaActions: [...stage?.completedMediaActions || []], exclusivePausedMedia: [...stage?.exclusivePausedMedia || []].map(([item, state]) => ({id: item.dataset.mediaId, state})), mediaActionEndTimers: [...stage?.mediaActionEndTimers?.keys() || []], calls: window.__decklineMediaCalls.filter(call => call.id === '5'), pauses: window.__decklineMediaPauses.filter(id => id === '5')} })()`)
+    assert(resumedCalls.length > 0, `Media paused by p:excl must resume after the exclusive range: ${JSON.stringify({clickStartedAt, exclusiveTiming, resumedCalls, exclusiveResumeDebug})}`)
+    assert(await evaluate(`document.querySelector('video[data-media-id="2"]')?.paused`), 'A media element manually paused before p:excl must remain paused.')
+    console.log('Isolated p:excl media pause/resume verification passed.')
+    throw new Error('__exclusive_media_verified__')
+  }
+  if (commonBehaviorMotionOnly) {
+    const relativeMotionStart = shape(initial, 'Relative position motion')?.frameRect
+    assert(relativeMotionStart, 'The cBhvr@by motion target must render before its animation starts.')
+    const initialLeft = relativeMotionStart.left / relativeMotionStart.frameWidth
+    const clickStartedAt = await evaluate(`(() => { const started = performance.now(); document.querySelector('.stage-shell')?.click(); return started })()`)
+    const earlyClickState = await stateAtElapsed(clickStartedAt, 50)
+    const clickFlowState = await evaluate(`(() => {
+      const state = document.querySelector('.stage-shell')?.__vueParentComponent?.setupState
+      const summarize = action => ({ targetId: action.targetId, effect: action.effect, step: action.step, delayMs: action.delayMs, durationMs: action.durationMs, triggerSequence: action.triggerSequence })
+      return {
+        animationStep: state?.animationStep,
+        animationCount: state?.animationCount,
+        suppressClick: state?.suppressClick,
+        screenOverlay: state?.screenOverlay,
+        clickActions: state?.currentSlide?.animationSteps?.map((step, index) => ({index, actions: step.filter(action => ['2', '3'].includes(String(action.targetId))).map(summarize)})).filter(step => step.actions.length),
+        automaticActions: state?.currentSlide?.automaticAnimations?.filter(action => ['2', '3'].includes(String(action.targetId))).map(summarize),
+      }
+    })()`)
+    assert(shape(earlyClickState, 'Click fade')?.visibility === 'visible' && shape(earlyClickState, 'With previous')?.visibility === 'hidden',
+      `The main click build must activate its clickEffect before the delayed withEffect: ${JSON.stringify({clickFlowState, click: shape(earlyClickState, 'Click fade'), delayed: shape(earlyClickState, 'With previous')})}`)
+    const delayedWithEffectState = await stateAtElapsed(clickStartedAt, 150)
+    assert(shape(delayedWithEffectState, 'With previous')?.visibility === 'visible',
+      `The withEffect delay must expire inside the same click build: ${JSON.stringify({delayed: shape(delayedWithEffectState, 'With previous')})}`)
+    const completed = await stateAtElapsed(clickStartedAt, 1_600)
+    const relativeMotionEnd = shape(completed, 'Relative position motion')?.frameRect
+    const finalLeft = relativeMotionEnd && relativeMotionEnd.left / relativeMotionEnd.frameWidth
+    const expectedOffset = relativeMotionStart.width / relativeMotionStart.frameWidth
+    assert(Number.isFinite(finalLeft) && Math.abs(finalLeft - initialLeft - expectedOffset) < 0.01,
+      `The Microsoft-documented parent-origin cBhvr@by 2D-point formula must add #ppt_w to the target's x position: ${JSON.stringify({initialLeft, finalLeft, expectedOffset, warnings: completed.warnings.filter(warning => /motion/i.test(warning))})}`)
+    console.log('Microsoft cBhvr@by 2D-point formula motion verification passed.')
+    throw new Error('__common_behavior_motion_verified__')
   }
   if (timeNodeTriggersOnly) {
     await delay(50)
@@ -2996,7 +3074,76 @@ try {
       && Number(speedIterationSample.second.opacity) > 0.05 && Number(speedIterationSample.second.opacity) < 0.9
       && !speedIterationSample.warnings.some(warning => warning.includes('time-container timing curve or repeat without a finite positive duration')),
     `An iterated parent with spd and child-derived duration must scale both effect duration and tmAbs spacing: ${JSON.stringify(speedIterationSample)}`)
-    console.log('Percent-suffixed animation cTn@spd runtime verification passed.')
+    const reverseModel = await evaluate(`(() => {
+      const app = document.querySelector('.stage-shell')?.__vueParentComponent?.setupState
+      const slide = app?.currentSlide
+      const sequenceIndex = slide?.triggeredAnimations?.findIndex(sequence => sequence.conditions.some(condition => condition.type === 'shape' && condition.id === '112')) ?? -1
+      const sequence = sequenceIndex >= 0 ? slide.triggeredAnimations[sequenceIndex] : undefined
+      return {
+        sequenceIndex,
+        conditions: sequence?.conditions,
+        actions: sequence?.steps.flatMap((step, stepIndex) => step.filter(action => String(action.targetId) === '113').map(action => ({stepIndex, effect: action.effect, delayMs: action.delayMs, durationMs: action.durationMs, playbackSpeed: action.playbackSpeed, reversePlayback: action.reversePlayback, timingWarp: action.timingWarp}))),
+        targetActions: slide?.triggeredAnimations?.flatMap((candidate, index) => candidate.steps.flatMap((step, stepIndex) => step.filter(action => String(action.targetId) === '113').map(action => ({index, stepIndex, conditions: candidate.conditions, effect: action.effect, delayMs: action.delayMs, durationMs: action.durationMs, playbackSpeed: action.playbackSpeed, reversePlayback: action.reversePlayback, timingWarp: action.timingWarp}))))
+      }
+    })()`)
+    const reverseTrace = await evaluate(`new Promise(resolve => {
+      const trigger = document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent reverse speed trigger"]')
+      const target = document.querySelector('.stage-shell > .slide-host .slide-element[title="Parent reverse speed fade"]')
+      if (!trigger || !target) return resolve({passed: false, reason: 'negative-speed fixture shape missing'})
+      const trace = []
+      const checkpoints = [0, 50, 125, 150, 200, 275, 350]
+      let nextCheckpoint = 0
+      let clickEvents = 0
+      const startedAt = performance.now()
+      trigger.addEventListener('click', () => clickEvents++, {once: true})
+      trigger.click()
+      const sample = () => {
+        const style = getComputedStyle(target)
+        const stage = target.__vueParentComponent?.setupState
+        const liveActions = (stage?.timelineActions || []).filter(action => String(action.targetId) === '113').map(action => ({
+          triggerSequence: action.triggerSequence,
+          triggerStep: action.triggerStep,
+          step: action.step,
+          effect: action.effect,
+          delayMs: action.delayMs,
+          durationMs: action.durationMs,
+          reversePlayback: action.reversePlayback,
+          effectProgress: action.effectProgress,
+          timingWarp: action.timingWarp,
+          startedAt: action.triggerSequence === undefined ? undefined : stage?.triggerStartedAt?.get(String(action.triggerSequence) + ':' + String(action.triggerStep)),
+          progress: stage?.animationProgress?.(action)
+        }))
+        const elapsed = performance.now() - startedAt
+        while (nextCheckpoint < checkpoints.length && elapsed >= checkpoints[nextCheckpoint]) {
+          trace.push({
+            elapsed,
+            opacity: Number(style.opacity),
+            visibility: style.visibility,
+            animationClock: stage?.animationClock,
+            triggerStartedAt: stage?.triggerStartedAt?.get('12:0'),
+          liveActions: liveActions.map(action => ({triggerSequence: action.triggerSequence, triggerStep: action.triggerStep, step: action.step, effect: action.effect, delayMs: action.delayMs, durationMs: action.durationMs, reversePlayback: action.reversePlayback, effectProgress: action.effectProgress, startedAt: action.startedAt, timelineStart: stage?.timelineStart?.(action), timelineNow: stage?.timelineNow?.(action), childElapsed: action.timingWarp ? stage?.timingWarpChildElapsed?.(action, action.startedAt) : undefined, timingWarp: action.timingWarp, progress: action.progress}))
+          })
+          nextCheckpoint++
+        }
+        if (elapsed >= 380) return resolve({passed: true, clickEvents, trace})
+        requestAnimationFrame(sample)
+      }
+      requestAnimationFrame(sample)
+    })`)
+    const reverseEarly = reverseTrace.trace?.[0]
+    const reverseMiddle = reverseTrace.trace?.find(sample => sample.elapsed >= 120 && sample.elapsed <= 200)
+    const reverseEnd = reverseTrace.trace?.at(-1)
+    const reversePlaybackState = await evaluate(`document.querySelector('.stage-shell')?.__vueParentComponent?.setupState?.triggerPlayback`)
+    assert(reverseModel.sequenceIndex >= 0 && reverseModel.actions?.length === 1
+      && reverseModel.actions[0].reversePlayback === false
+      && reverseModel.actions[0].timingWarp?.groupReversePlayback === true
+      && reversePlaybackState?.some(playback => playback.sequence === reverseModel.sequenceIndex && playback.step === 0),
+    `The negative cTn@spd interactive sequence must parse and start with a reverse parent clock: ${JSON.stringify({model: reverseModel, triggerPlayback: reversePlaybackState})}`)
+    assert(reverseTrace.passed && reverseTrace.clickEvents === 1 && Number(reverseEarly?.opacity) > 0.8
+      && Number(reverseMiddle?.opacity) > 0.25 && Number(reverseMiddle?.opacity) < 0.75
+      && Number(reverseEnd?.opacity) < 0.1,
+    `A -200% parent clock must reverse a 600 ms child fade over 300 ms: ${JSON.stringify({trace: reverseTrace, model: reverseModel, triggerPlayback: reversePlaybackState})}`)
+    console.log('Percent-suffixed and negative animation cTn@spd runtime verification passed.')
     throw new Error('__animation_speed_verified__')
   }
   if (subTimeAfterEffectOnly) {
@@ -4782,8 +4929,11 @@ try {
         `A first to-only rotation track must interpolate from 0 degrees: ${JSON.stringify({firstRotationAngle, warnings: firstRotationTrack.warnings.filter(warning => /rotation/i.test(warning))})}`)
       const secondRotationTrack = await stateAtElapsed(rotationStartedAt, 450)
       const secondRotationAngle = rotation(shape(secondRotationTrack, 'Rotation composition'))
-      assert(secondRotationAngle > 50 && secondRotationAngle < 70,
-        `A delayed base-additive to-only rotation must interpolate from the previously held 30-degree track toward 90 degrees: ${JSON.stringify({secondRotationAngle, warnings: secondRotationTrack.warnings.filter(warning => /rotation/i.test(warning))})}`)
+      // MS-OI29500 §19.5.5(b) says to-only rotation starts at 0; PowerPoint's default AddBase mode does not combine it with a prior animation.
+      // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/39903f1a-fcb4-4aee-81e2-66f4fc7493fd
+      // https://learn.microsoft.com/en-us/office/vba/api/powerpoint.animationbehavior.additive
+      assert(secondRotationAngle > 35 && secondRotationAngle < 55,
+        `A delayed base-additive to-only rotation must interpolate from 0 toward 90 degrees instead of combining with the previous track: ${JSON.stringify({secondRotationAngle, warnings: secondRotationTrack.warnings.filter(warning => /rotation/i.test(warning))})}`)
       const rotationComplete = await stateAtElapsed(rotationStartedAt, 630)
       const completedRotationAngle = rotation(shape(rotationComplete, 'Rotation composition'))
       assert(Math.abs(completedRotationAngle - 90) < 2,
@@ -5402,6 +5552,11 @@ try {
   const toMotionStart = shape(initial, 'To-only motion').frameRect.left / shape(initial, 'To-only motion').frameRect.frameWidth
   const invalidOriginMotionStart = shape(initial, 'Automatic fade').frameRect
   const fixedMotionStart = shape(initial, 'Fixed motion path').frameRect.left / shape(initial, 'Fixed motion path').frameRect.frameWidth
+  // MS-OE376 §4.8.29: PowerPoint treats origin="layout" as the target object's layout center.
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/a94c52e0-eb04-42b7-8b57-966bbd1f6061
+  const fixedMotionStartRect = shape(initial, 'Fixed motion path').frameRect
+  const fixedMotionStartCenterX = (fixedMotionStartRect.left + fixedMotionStartRect.width / 2) / fixedMotionStartRect.frameWidth
+  const fixedMotionStartCenterY = (fixedMotionStartRect.top + fixedMotionStartRect.height / 2) / fixedMotionStartRect.frameHeight
   const rotatedMotionStart = shape(initial, 'Rotated fixed motion path').frameRect
   const curveStart = shape(initial, 'Curved motion path').frameRect
   const formulaMotionStart = shape(initial, 'Formula fixed motion path').frameRect
@@ -5532,7 +5687,7 @@ try {
   const motionAtStart = shape(afterStart, 'Motion path').frameRect.left / shape(afterStart, 'Motion path').frameRect.frameWidth
   assert(motionAtStart > motionStart + 0.2 && motionAtStart < motionStart + 0.25, `A later motion-path M must snap to its new subpath and continue interpolating there: ${motionAtStart - motionStart}`)
   const fixedMotionDuring = shape(afterStart, 'Fixed motion path').frameRect
-  assert(Math.abs((fixedMotionDuring.top + fixedMotionDuring.height / 2) / fixedMotionDuring.frameHeight - 0.1) < 0.01, `A lowercase motion-path m must offset its point while anchoring the shape center: ${JSON.stringify(fixedMotionDuring)}`)
+  assert(Math.abs((fixedMotionDuring.top + fixedMotionDuring.height / 2) / fixedMotionDuring.frameHeight - fixedMotionStartCenterY - 0.1) < 0.01, `A lowercase motion-path m must offset its point relative to the layout-origin object center: ${JSON.stringify({fixedMotionDuring, fixedMotionStartCenterY})}`)
   const curveAtStart = shape(afterStart, 'Curved motion path').frameRect
   assert(curveAtStart.top / curveAtStart.frameHeight > curveStart.top / curveStart.frameHeight + 0.01, 'A cubic Bezier path must interpolate along its curved y-coordinate.')
   assert(shape(afterStart, 'Exit after previous').visibility === 'visible', 'The after-effect must wait for preceding effects.')
@@ -5579,16 +5734,27 @@ try {
   assert(shape(afterChain, 'Action time-node end target').visibility === 'visible', 'An end-triggered interactive sequence must resolve the referenced action cTn ID and fire at that action node’s end time.')
   assert(Math.abs(shape(afterChain, 'Motion path').frameRect.left / shape(afterChain, 'Motion path').frameRect.frameWidth - motionStart - 0.25) < 0.01, 'A straight layout-origin motion path must end at its OOXML slide-size offset.')
   const relativeMotionEnd = shape(afterChain, 'Relative position motion').frameRect.left / shape(afterChain, 'Relative position motion').frameRect.frameWidth
-  assert(Math.abs(relativeMotionEnd - relativeMotionStart - 0.25) < 0.01, 'A parent-origin by-only motion must add its ST_Percentage offset to the object position.')
+  assert(Math.abs(relativeMotionEnd - relativeMotionStart - shape(initial, 'Relative position motion').frameRect.width / shape(initial, 'Relative position motion').frameRect.frameWidth) < 0.01, 'A parent-origin cBhvr by-only formula motion must add its #ppt_w offset to the object position.')
   assert(Math.abs(shape(afterChain, 'From/to motion').frameRect.left / shape(afterChain, 'From/to motion').frameRect.frameWidth - fromToMotionStart - 0.5) < 0.01, 'A from/to motion must end at its slide-percentage coordinate and accept percent-string attributes.')
   assert(Math.abs(shape(afterChain, 'From/by motion').frameRect.left / shape(afterChain, 'From/by motion').frameRect.frameWidth - fromByMotionStart - 0.35) < 0.01, 'A from/by motion must add the relative offset to its supplied start coordinate.')
   assert(Math.abs(shape(afterChain, 'To-only motion').frameRect.left / shape(afterChain, 'To-only motion').frameRect.frameWidth - toMotionStart - 0.4) < 0.01, 'A to-only motion must interpolate from the current layout position.')
   const fixedMotionEnd = shape(afterChain, 'Fixed motion path').frameRect
-  assert(Math.abs((fixedMotionEnd.left + fixedMotionEnd.width / 2) / fixedMotionEnd.frameWidth - 0.3) < 0.01 && Math.abs((fixedMotionEnd.top + fixedMotionEnd.height / 2) / fixedMotionEnd.frameHeight - 0.1) < 0.01 && fixedMotionStart > 0.3, `A fixed path's relative M must offset from the preceding absolute point at the slide-anchored shape center: ${JSON.stringify(fixedMotionEnd)}`)
+  assert(Math.abs((fixedMotionEnd.left + fixedMotionEnd.width / 2) / fixedMotionEnd.frameWidth - fixedMotionStartCenterX - 0.3) < 0.01 && Math.abs((fixedMotionEnd.top + fixedMotionEnd.height / 2) / fixedMotionEnd.frameHeight - fixedMotionStartCenterY - 0.1) < 0.01 && fixedMotionStart > 0.3, `A layout-origin fixed path must finish relative to the target object's layout center: ${JSON.stringify({fixedMotionEnd, fixedMotionStartCenterX, fixedMotionStartCenterY})}`)
   const rotatedMotionEnd = shape(afterChain, 'Rotated fixed motion path').frameRect
-  assert(Math.abs((rotatedMotionEnd.left + rotatedMotionEnd.width / 2) / rotatedMotionEnd.frameWidth - 0.5) < 0.01 && Math.abs((rotatedMotionEnd.top + rotatedMotionEnd.height / 2) / rotatedMotionEnd.frameHeight - (0.5 + 0.05 * rotatedMotionEnd.frameWidth / rotatedMotionEnd.frameHeight)) < 0.01 && rotatedMotionStart.left / rotatedMotionStart.frameWidth > 0.3, `rAng must rotate a fixed layout path clockwise around its rCtr slide point: ${JSON.stringify({ start: rotatedMotionStart, end: rotatedMotionEnd })}`)
+  const rotatedStartCenterX = (rotatedMotionStart.left + rotatedMotionStart.width / 2) / rotatedMotionStart.frameWidth
+  const rotatedStartCenterY = (rotatedMotionStart.top + rotatedMotionStart.height / 2) / rotatedMotionStart.frameHeight
+  const expectedRotatedCenterX = 0.5 - rotatedStartCenterY * rotatedMotionEnd.frameHeight / rotatedMotionEnd.frameWidth
+  const expectedRotatedCenterY = 0.5 + (rotatedStartCenterX + 0.55 - 0.5) * rotatedMotionEnd.frameWidth / rotatedMotionEnd.frameHeight
+  assert(Math.abs((rotatedMotionEnd.left + rotatedMotionEnd.width / 2) / rotatedMotionEnd.frameWidth - expectedRotatedCenterX) < 0.01 && Math.abs((rotatedMotionEnd.top + rotatedMotionEnd.height / 2) / rotatedMotionEnd.frameHeight - expectedRotatedCenterY) < 0.01 && rotatedMotionStart.left / rotatedMotionStart.frameWidth > 0.3, `rAng must rotate the layout-origin path around its slide-space rCtr: ${JSON.stringify({ start: rotatedMotionStart, end: rotatedMotionEnd, expectedRotatedCenterX, expectedRotatedCenterY })}`)
   const formulaMotionEnd = shape(afterChain, 'Formula fixed motion path').frameRect
-  assert(Math.abs(formulaMotionEnd.left / formulaMotionEnd.frameWidth - formulaMotionStart.left / formulaMotionStart.frameWidth - (2600000 / 12192000) * 1.5) < 0.01 && Math.abs(formulaMotionEnd.top / formulaMotionEnd.frameHeight - formulaMotionStart.top / formulaMotionStart.frameHeight - (2500000 / 6858000) * 0.5) < 0.01, `Static motion formulas must resolve target x/y/width/height and evaluate deterministic functions: ${JSON.stringify({ start: formulaMotionStart, end: formulaMotionEnd })}`)
+  // MS-OE376 §4.8.29: origin="layout" places path coordinates relative to the target object's layout center.
+  const expectedFormulaEndLeft = (formulaMotionStart.left + formulaMotionStart.width / 2) / formulaMotionStart.frameWidth
+    + formulaMotionStart.left / formulaMotionStart.frameWidth
+    + formulaMotionStart.width / formulaMotionStart.frameWidth * 1.5
+  const expectedFormulaEndTop = (formulaMotionStart.top + formulaMotionStart.height / 2) / formulaMotionStart.frameHeight
+    + formulaMotionStart.top / formulaMotionStart.frameHeight
+    + formulaMotionStart.height / formulaMotionStart.frameHeight * 0.5
+  assert(Math.abs(formulaMotionEnd.left / formulaMotionEnd.frameWidth - expectedFormulaEndLeft) < 0.01 && Math.abs(formulaMotionEnd.top / formulaMotionEnd.frameHeight - expectedFormulaEndTop) < 0.01, `Static motion formulas must resolve target x/y/width/height, evaluate deterministic functions, and use the layout-center origin: ${JSON.stringify({ start: formulaMotionStart, end: formulaMotionEnd, expectedFormulaEndLeft, expectedFormulaEndTop })}`)
   const parentMotionEnd = shape(afterChain, 'Parent origin grouped motion path').frameRect
   assert(Math.abs((parentMotionEnd.left + parentMotionEnd.width / 2) / parentMotionEnd.frameWidth - 0.026404199475) < 0.01 && Math.abs((parentMotionEnd.top + parentMotionEnd.height / 2) / parentMotionEnd.frameHeight - 0.029160688247) < 0.01, `A parent-origin path in a grouped shape must reach its final slide-space point: ${JSON.stringify({ start: parentMotionStart, end: parentMotionEnd })}`)
   const nestedParentMotionEnd = shape(afterChain, 'Nested group child').frameRect
@@ -5632,11 +5798,11 @@ try {
   assert(Math.abs(rotation(shape(scaleComplete, 'Scale emphasis')) - 45) < 2, `A by-only p:animRot and additive style.rotation p:anim keyframe must compose their final angles: ${JSON.stringify({ angle: rotation(shape(scaleComplete, 'Scale emphasis')), transform: shape(scaleComplete, 'Scale emphasis').transform })}`)
   for (const direction of ['right', 'left', 'up', 'down']) {
     const wipe = shape(scaleComplete, `Wipe ${direction}`)
-    const cssDirection = direction === 'up' ? 'bottom' : direction === 'down' ? 'top' : direction
+    const cssDirection = direction === 'up' ? 'top' : direction === 'down' ? 'bottom' : direction
     const directionMatches = cssDirection === 'bottom'
-      ? !/linear-gradient\(to (top|left|right)/.test(wipe.maskImage)
+      ? wipe.maskImage.startsWith('linear-gradient(') && !/linear-gradient\(to (top|left|right)/.test(wipe.maskImage)
       : wipe.maskImage.includes(`to ${cssDirection}`)
-    assert(wipe.visibility === 'visible' && wipe.opacity === '1' && wipe.wipeProgress === '100%' && directionMatches, `The ${direction} wipe entrance must reveal with a mask in its OOXML direction and no fade: ${JSON.stringify(wipe)}`)
+    assert(wipe.visibility === 'visible' && wipe.opacity === '1' && wipe.wipeProgress === '100%' && directionMatches, `The ${direction} wipe entrance must finish fully revealed using its valid CSS mask direction without fading: ${JSON.stringify(wipe)}`)
   }
 
   await evaluate(`document.querySelector('.player-controls button:first-child').click()`)
@@ -6647,7 +6813,7 @@ try {
   assert(shape(wheelBack, 'Click fade').visibility === 'hidden', 'Wheel up must undo the current build.')
 
   await evaluate(`window.__decklineBlockNextMediaPlay = true`)
-  await evaluate(`window.__decklineMediaCalls = []; window.__decklineMediaPauses = []; window.__decklineMockedMedia = new Set(); window.__decklineOriginalPlay = HTMLMediaElement.prototype.play; window.__decklineOriginalPause = HTMLMediaElement.prototype.pause; HTMLMediaElement.prototype.play = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaCalls.push({ id: this.dataset.mediaId, currentTime: this.currentTime, volume: this.volume, muted: this.muted }); if (window.__decklineBlockNextMediaPlay) { delete window.__decklineBlockNextMediaPlay; return Promise.reject(new DOMException('Autoplay blocked', 'NotAllowedError')) }; Object.defineProperty(this, 'paused', { configurable: true, value: false }); return Promise.resolve() }; HTMLMediaElement.prototype.pause = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaPauses.push(this.dataset.mediaId); Object.defineProperty(this, 'paused', { configurable: true, value: true }) }; window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
+  await evaluate(`window.__decklineMediaCalls = []; window.__decklineMediaPauses = []; window.__decklineMockedMedia = new Set(); window.__decklineOriginalPlay = HTMLMediaElement.prototype.play; window.__decklineOriginalPause = HTMLMediaElement.prototype.pause; HTMLMediaElement.prototype.play = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaCalls.push({ id: this.dataset.mediaId, at: performance.now(), currentTime: this.currentTime, volume: this.volume, muted: this.muted }); if (window.__decklineBlockNextMediaPlay) { delete window.__decklineBlockNextMediaPlay; return Promise.reject(new DOMException('Autoplay blocked', 'NotAllowedError')) }; Object.defineProperty(this, 'paused', { configurable: true, value: false }); return Promise.resolve() }; HTMLMediaElement.prototype.pause = function () { window.__decklineMockedMedia.add(this); window.__decklineMediaPauses.push(this.dataset.mediaId); Object.defineProperty(this, 'paused', { configurable: true, value: true }) }; window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: '5' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))`)
   await delay(300)
   const embeddedMedia = await state()
   assert(embeddedMedia.slide?.startsWith('15 / 68') && embeddedMedia.media.videos.length === 1 && embeddedMedia.media.audios.length === 3 && embeddedMedia.slideTransition?.clipKeyframes?.length === 5 && embeddedMedia.slideTransition.clipPath.startsWith('path('), `Embedded media and the OOXML dissolve transition must render on their source slide: ${JSON.stringify({ slide: embeddedMedia.slide, media: embeddedMedia.media, transition: embeddedMedia.slideTransition })}`)
@@ -6775,6 +6941,11 @@ try {
       assert(startedMedia.some(call => call.id === '5') && startedMedia.some(call => call.id === '2'), `Media actions must start before the delayed p:excl: ${JSON.stringify(startedMedia)}`)
       await evaluate(`document.querySelector('video[data-media-id="2"]').pause()`)
       const manualPauseCount = (await evaluate(`window.__decklineMediaPauses`)).length
+      const mediaPlayCountBeforeExclusiveResume = (await evaluate(`window.__decklineMediaCalls.filter(call => call.id === '5')`)).length
+      const exclusiveEndAt = await evaluate(`(() => {
+        const state = document.querySelector('.stage-shell .slide-frame')?.__vueParentComponent?.setupState
+        return state?.exclusiveTimelineRanges?.find(range => range.id === 'excl-1')?.endAt
+      })()`)
       await delay(90)
       const exclusiveStart = await state()
       assert(await evaluate(`document.querySelector('audio[data-media-id="5"]').paused`), 'p:excl must automatically pause audio already playing on another timeline.')
@@ -6788,8 +6959,30 @@ try {
       const exclusiveParallel = ['Parallel subtime A', 'Parallel subtime B'].map(target => Number(shape(exclusiveLater, target).opacity))
       const parallelAtExclusiveStart = ['Parallel subtime A', 'Parallel subtime B'].map(target => Number(shape(exclusiveStart, target).opacity))
       assert(exclusiveParallel.every((opacity, index) => Math.abs(opacity - parallelAtExclusiveStart[index]) < 0.002), `Parallel timelines must retain their progress during p:excl: ${JSON.stringify(exclusiveParallel)}`)
-      await delay(190)
-      assert(!(await evaluate(`document.querySelector('audio[data-media-id="5"]').paused`)), 'Media automatically paused by p:excl must resume when it ends.')
+      let resumedCalls = []
+      for (let attempt = 0; attempt < 120 && !resumedCalls.length; attempt++) {
+        const newPlayCalls = await evaluate(`window.__decklineMediaCalls.filter(call => call.id === '5').slice(${mediaPlayCountBeforeExclusiveResume})`)
+        resumedCalls = newPlayCalls.filter(call => call.at >= exclusiveEndAt - 50)
+        if (!resumedCalls.length) await delay(15)
+      }
+      const exclusiveResumeDebug = await evaluate(`(() => {
+        const shell = document.querySelector('.stage-shell')
+        const frame = shell?.querySelector('.slide-frame')
+        const page = shell?.__vueParentComponent?.setupState
+        const stage = frame?.__vueParentComponent?.setupState
+        const media = document.querySelector('audio[data-media-id="5"]')
+        return {
+          now: performance.now(),
+          animationClock: stage?.animationClock,
+          animationStep: page?.animationStep,
+          ranges: stage?.exclusiveTimelineRanges,
+          media: media && {paused: media.paused, ended: media.ended, currentTime: media.currentTime, readyState: media.readyState, actionEndAt: media.dataset.mediaActionEndAt},
+          mediaActions: stage?.timelineActions?.filter(action => action.effect === 'media' && action.targetId === '5').map(action => ({step: action.step, automatic: action.automatic, mediaCommand: action.mediaCommand, mediaActionKey: action.mediaActionKey, exclusiveGroups: action.exclusiveGroups, delayMs: action.delayMs, durationMs: action.durationMs, mediaDurationMs: action.mediaDurationMs})),
+          calls: window.__decklineMediaCalls.filter(call => call.id === '5'),
+          pauses: window.__decklineMediaPauses.filter(id => id === '5')
+        }
+      })()`)
+      assert(resumedCalls.length > 0, `Media automatically paused by p:excl must resume when it ends: ${JSON.stringify({exclusiveEndAt, resumedCalls, exclusiveResumeDebug})}`)
       assert(await evaluate(`document.querySelector('video[data-media-id="2"]').paused`), 'Media manually paused before p:excl must not be resumed.')
       const resumed = await state()
       await delay(100)
@@ -6804,8 +6997,13 @@ try {
         `The 2x outer p:par speed must propagate through both nested p:par groups: ${JSON.stringify(nestedParallelSpeedProbe)}`)
       assert(secondExclusiveBeforeOpacity === 0, `The second p:excl child must wait for its authored start time: ${JSON.stringify({ elapsed: beforeSecondExclusive.now - clickStartedAt, captureDuration: beforeSecondExclusive.captureEndedAt - beforeSecondExclusive.now, opacity: secondExclusiveBeforeOpacity })}`)
       assert(await evaluate(`document.querySelector('audio[data-media-id="5"]').paused`), 'The timed audio action must finish after the first exclusive pause.')
-      await delay(200)
-      await delay(25)
+      const secondExclusiveTiming = await evaluate(`(() => {
+        const state = document.querySelector('.stage-shell .slide-frame')?.__vueParentComponent?.setupState
+        const range = state?.exclusiveTimelineRanges?.find(item => item.id === 'excl-2')
+        return range && {startAt: range.startAt, endAt: range.endAt}
+      })()`)
+      const secondExclusiveWaitMs = await evaluate(`Math.max(0, ${secondExclusiveTiming.startAt} - performance.now() + 50)`)
+      await delay(secondExclusiveWaitMs)
       const secondExclusiveStart = await state()
       assert(Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity) > 0 && Number(shape(secondExclusiveStart, 'Second exclusive subtime target').opacity) < 1, 'A second independent p:excl child must run during its own interval.')
        await delay(1)
@@ -6816,7 +7014,8 @@ try {
        const exclusiveTargetLater = Number(shape(secondExclusiveLater, 'Second exclusive subtime target').opacity)
        assert(Math.abs(sequenceOpacityDuringExclusive - sequenceOpacityAtExclusiveStart) < 0.002, `A second p:excl group must freeze timelines outside its own membership: ${JSON.stringify({elapsedMs: secondExclusiveStart.now - clickStartedAt, sampleGapMs: secondExclusiveLater.now - secondExclusiveStart.now, start: sequenceOpacityAtExclusiveStart, later: sequenceOpacityDuringExclusive})}`)
        assert(exclusiveTargetLater > exclusiveTargetAtStart && exclusiveTargetLater < 1, `The second p:excl child must keep progressing inside its exclusive interval: ${JSON.stringify({elapsedMs: secondExclusiveStart.now - clickStartedAt, sampleGapMs: secondExclusiveLater.now - secondExclusiveStart.now, start: exclusiveTargetAtStart, later: exclusiveTargetLater})}`)
-      await delay(120)
+      const secondResumeWaitMs = await evaluate(`Math.max(0, ${secondExclusiveTiming.endAt} - performance.now() + 5)`)
+      await delay(secondResumeWaitMs)
       const secondExclusiveResumed = await state()
       const secondSequenceDuringExclusive = Number(shape(secondExclusiveLater, 'Sequence subtime second').opacity)
       const secondSequenceAfterExclusive = Number(shape(secondExclusiveResumed, 'Sequence subtime second').opacity)
@@ -6875,7 +7074,7 @@ try {
   const stageAudioIds = await evaluate(`[...document.querySelectorAll('.stage-shell .slide-audio')].map(audio => audio.dataset.mediaId)`)
   assert(stageAudioIds.length === 3 && stageAudioIds.every(id => stopAudioPauseIds.includes(id)), `The onstopaudio event must stop every audio element on the slide: ${JSON.stringify({ stageAudioIds, stopAudioPauseIds })}`)
   assert(shape(stopAudioState, 'Stop audio trigger').visibility === 'visible', `The slide-targeted onStopAudio sequence must run when type=evt cmd=onstopaudio fires: ${JSON.stringify(shape(stopAudioState, 'Stop audio trigger'))}`)
-  await evaluate(`for (const media of window.__decklineMockedMedia) delete media.paused; HTMLMediaElement.prototype.play = window.__decklineOriginalPlay; HTMLMediaElement.prototype.pause = window.__decklineOriginalPause; delete window.__decklineOriginalPlay; delete window.__decklineOriginalPause; delete window.__decklineMockedMedia; delete window.__decklineMediaCalls; delete window.__decklineMediaPauses`)
+  await evaluate(`for (const media of window.__decklineMockedMedia) delete media.paused; HTMLMediaElement.prototype.play = window.__decklineOriginalPlay; HTMLMediaElement.prototype.pause = window.__decklineOriginalPause; delete window.__decklineOriginalPlay; delete window.__decklineOriginalPause; delete window.__decklineMockedMedia; delete window.__decklineMediaCalls; delete window.__decklineMediaPauses; delete window.__decklineMediaPauseDetails`)
 
   await evaluate(`document.querySelector('[data-tool=pen]').click(); (() => { const layer = document.querySelector('.ink-layer'); const rect = layer.getBoundingClientRect(); const event = (type, x, y, buttons) => layer.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 21, pointerType: 'mouse', clientX: rect.left + x, clientY: rect.top + y, buttons })); event('pointerdown', 30, 30, 1); event('pointermove', 90, 80, 1); event('pointerup', 90, 80, 0) })()`)
   await delay(20)
@@ -6968,7 +7167,24 @@ try {
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }))`)
   await delay(80)
   const nestedSequenceRewound = await state()
-  assert(shape(nestedSequenceRewound, 'Nested sequence third').visibility === 'visible', `A nested p:seq prevCondLst must permit rewinding even when the main sequence blocks onPrev: ${JSON.stringify(shape(nestedSequenceRewound, 'Nested sequence third'))}`)
+  const nestedSequenceDebug = await evaluate(`(() => {
+    const shell = document.querySelector('.stage-shell')
+    const page = shell?.__vueParentComponent?.setupState
+    const frame = shell?.querySelector('.slide-frame')
+    const slide = frame?.__vueParentComponent?.setupState
+    const mediaActions = slide?.timelineActions?.filter(action => action.effect === 'media')
+    return {
+      animationStep: page?.animationStep,
+      triggerPlayback: page?.triggerPlayback,
+      slide: page?.currentSlide?.id,
+      animationSequence: page?.currentSlide?.animationSequence,
+      animationStepSequences: page?.currentSlide?.animationStepSequences,
+      triggeredAnimations: page?.currentSlide?.triggeredAnimations,
+      slideActions: slide?.timelineActions?.map(action => ({targetId: action.targetId, effect: action.effect, step: action.step, triggerSequence: action.triggerSequence, triggerStep: action.triggerStep, delayMs: action.delayMs, durationMs: action.durationMs, parentEndMs: action.parentEndMs})),
+      mediaActionCount: mediaActions?.length,
+    }
+  })()`)
+  assert(shape(nestedSequenceRewound, 'Nested sequence third').visibility === 'visible', `A nested p:seq prevCondLst must permit rewinding even when the main sequence blocks onPrev: ${JSON.stringify({nestedSequenceDebug, snapshot: shape(nestedSequenceRewound, 'Nested sequence third'), warnings: nestedSequenceRewound.warnings})}`)
   await delay(550)
   const loadNestedSequenceVariant = async (name, path) => {
     await uploadPath(path)
@@ -7924,7 +8140,21 @@ try {
   const flyOffsets = paragraphMasksDuring.flyOffsets
   const zoomInDuring = paragraphMasksDuring.zoomIn
   const zoomOutDuring = paragraphMasksDuring.zoomOut
-  assert(zoomInDuring.visibility === 'visible' && zoomInDuring.opacity > 0.99 && zoomInDuring.scaleX > 0.05 && zoomInDuring.scaleX < 0.95 && zoomOutDuring.visibility === 'visible' && zoomOutDuring.opacity > 0.99 && zoomOutDuring.scaleX > 0.05 && zoomOutDuring.scaleX < 0.95, `Preset Zoom in/out directions must scale while visible: ${JSON.stringify({zoomInDuring, zoomOutDuring})}`)
+  const zoomRuntimeDebug = await evaluate(`(() => {
+    const shell = document.querySelector('.stage-shell')
+    const page = shell?.__vueParentComponent?.setupState
+    const frame = shell?.querySelector('.slide-frame')
+    const stage = frame?.__vueParentComponent?.setupState
+    return {
+      locale: document.documentElement.lang,
+      animationStep: page?.animationStep,
+      animationCount: page?.animationCount,
+      nextButton: (() => { const button = document.querySelector('.deck-toolbar button[aria-label="Next animation step or slide"]'); return button && {disabled: button.disabled, label: button.getAttribute('aria-label')} })(),
+      animationSteps: page?.currentSlide?.animationSteps?.map((actions, step) => ({step, actions: actions.filter(action => action.targetId === '91005' || action.targetId === '91006').map(action => ({effect: action.effect, direction: action.direction, scaleFrom: action.scaleFrom, scaleTo: action.scaleTo}))})),
+      timelineActions: stage?.timelineActions?.filter(action => action.targetId === '91005' || action.targetId === '91006').map(action => ({targetId: action.targetId, step: action.step, effect: action.effect, direction: action.direction, scaleFrom: action.scaleFrom, scaleTo: action.scaleTo, delayMs: action.delayMs, durationMs: action.durationMs}))
+    }
+  })()`)
+  assert(zoomInDuring.visibility === 'visible' && zoomInDuring.opacity > 0.99 && zoomInDuring.scaleX > 0.05 && zoomInDuring.scaleX < 0.95 && zoomOutDuring.visibility === 'visible' && zoomOutDuring.opacity > 0.99 && zoomOutDuring.scaleX > 0.05 && zoomOutDuring.scaleX < 0.95, `Preset Zoom in/out directions must scale while visible: ${JSON.stringify({zoomInDuring, zoomOutDuring, zoomRuntimeDebug})}`)
   const zoomAfter = await evaluate(`new Promise(resolve => setTimeout(() => { const read = title => { const element = document.querySelector('.stage-shell > .slide-host .slide-element[title=' + JSON.stringify(title) + ']'); const style = getComputedStyle(element); const matrix = new DOMMatrix(style.transform); return {visibility: style.visibility, opacity: Number(style.opacity), scaleX: Math.hypot(matrix.a, matrix.b)} }; resolve({zoomIn: read('Zoom preset entrance target'), zoomOut: read('Zoom preset exit target')}) }, 600))`)
   assert(zoomAfter.zoomIn.visibility === 'visible' && zoomAfter.zoomIn.scaleX > 0.98 && zoomAfter.zoomOut.visibility === 'hidden' && zoomAfter.zoomOut.scaleX < 0.02, `Preset Zoom must retain its final entrance/exit state after playback: ${JSON.stringify(zoomAfter)}`)
   assert(flyOffsets.length === flyDirectionCases.length && flyDirectionCases.every(([name, , , , , xSign, ySign]) => {
@@ -8005,7 +8235,7 @@ try {
   const splitExitInset = Number(/^inset\(([\d.]+)%/.exec(textRangeFilterDuring.splitPresetOut)?.[1])
   assert(textRangeFilterDuring.splitPresetIn.startsWith('inset(0px') && textRangeFilterDuring.splitPresetOut.endsWith(' 0px)') && splitExitInset < 25, `Split preset metadata must use the default vertical entrance and mirror an explicit horizontal subtype for exits: ${JSON.stringify({sampleElapsed: textRangeMaskSampleElapsed, in: textRangeFilterDuring.splitPresetIn, out: textRangeFilterDuring.splitPresetOut})}`)
   const presetWipeProgress = Number.parseFloat(textRangeFilterDuring.presetWipe.progress)
-  assert(textRangeFilterDuring.presetFadeOpacity > 0.05 && textRangeFilterDuring.presetFadeOpacity < 0.95 && textRangeFilterDuring.presetWheelClip.startsWith('path(') && (textRangeFilterDuring.presetWheelClip.match(/M/g) || []).length === 8 && textRangeFilterDuring.presetWipe.mask.includes('to bottom') && presetWipeProgress > 0 && presetWipeProgress < 100, `Fade, eight-spoke wheel, and upward wipe presets must use their existing renderers when filter="none": ${JSON.stringify({fade: textRangeFilterDuring.presetFadeOpacity, wheel: textRangeFilterDuring.presetWheelClip.slice(0, 100), wipe: textRangeFilterDuring.presetWipe})}`)
+  assert(textRangeFilterDuring.presetFadeOpacity > 0.05 && textRangeFilterDuring.presetFadeOpacity < 0.95 && textRangeFilterDuring.presetWheelClip.startsWith('path(') && (textRangeFilterDuring.presetWheelClip.match(/M/g) || []).length === 8 && textRangeFilterDuring.presetWipe.mask.includes('to top') && presetWipeProgress > 0 && presetWipeProgress < 100, `Fade, eight-spoke wheel, and upward wipe presets must use their existing renderers when filter="none": ${JSON.stringify({fade: textRangeFilterDuring.presetFadeOpacity, wheelSpokes: (textRangeFilterDuring.presetWheelClip.match(/M/g) || []).length, wheel: textRangeFilterDuring.presetWheelClip.slice(0, 100), wipe: textRangeFilterDuring.presetWipe})}`)
   assert(textRangeSlide.warnings.filter(warning => warning.includes('unsupported object-effect filter was approximated as a fade.')).length === 1, `Only the unknown preset should use the warned fade fallback: ${JSON.stringify(textRangeSlide.warnings)}`)
   assert(textRangeFilterDuring.noneTransitionOpacity > 0.05 && textRangeFilterDuring.noneTransitionOpacity < 0.95 && !textRangeSlide.warnings.some(warning => warning.includes('none fade object animation is not rendered')), `PowerPoint interprets transition="none" as an entrance and must render its fade: ${JSON.stringify({opacity: textRangeFilterDuring.noneTransitionOpacity, warnings: textRangeSlide.warnings})}`)
   const fallbackObjectOpacityDuring = textRangeFilterDuring.fallbackObjectOpacity
@@ -8623,7 +8853,7 @@ try {
   }
   }
 } catch (error) {
-  if (!(indefiniteDurationOnly && error instanceof Error && error.message === '__indefinite_duration_verified__') && !(bounceEndOnly && error instanceof Error && error.message === '__bounce_end_verified__') && !(cutOnly && error instanceof Error && error.message === '__cut_effects_verified__') && !(transitionSoundOnly && error instanceof Error && error.message === '__transition_sound_verified__') && !(localeOnly && error instanceof Error && error.message === '__locale_verified__') && !(iteratedTextEffectsOnly && error instanceof Error && error.message === '__iterated_text_effects_verified__') && !(wedgeIterationOnly && error instanceof Error && error.message === '__wedge_iteration_verified__') && !(subTimeAfterEffectOnly && error instanceof Error && error.message === '__subtime_after_effect_verified__') && !(subTimeSoundOnly && error instanceof Error && error.message === '__subtime_sound_verified__') && !(transitionSpeedOnly && error instanceof Error && error.message === '__transition_speed_verified__') && !(timeFilterOnly && error instanceof Error && error.message === '__time_filter_verified__') && !(animationSpeedOnly && error instanceof Error && error.message === '__animation_speed_verified__') && !(prismContentOnly && error instanceof Error && error.message === '__prism_content_verified__') && !(scaleCompositionOnly && error instanceof Error && error.message === '__scale_composition_verified__') && !(uploadErrorOnly && error instanceof Error && error.message === '__upload_error_verified__') && !(latestUploadOnly && error instanceof Error && error.message === '__latest_upload_verified__') && !(shadowOffsetOnly && error instanceof Error && error.message === '__shadow_offset_verified__') && !(timeNodeTriggersOnly && error instanceof Error && error.message === '__time_node_triggers_verified__')) throw error
+  if (!(indefiniteDurationOnly && error instanceof Error && error.message === '__indefinite_duration_verified__') && !(bounceEndOnly && error instanceof Error && error.message === '__bounce_end_verified__') && !(cutOnly && error instanceof Error && error.message === '__cut_effects_verified__') && !(transitionSoundOnly && error instanceof Error && error.message === '__transition_sound_verified__') && !(localeOnly && error instanceof Error && error.message === '__locale_verified__') && !(iteratedTextEffectsOnly && error instanceof Error && error.message === '__iterated_text_effects_verified__') && !(wedgeIterationOnly && error instanceof Error && error.message === '__wedge_iteration_verified__') && !(subTimeAfterEffectOnly && error instanceof Error && error.message === '__subtime_after_effect_verified__') && !(subTimeSoundOnly && error instanceof Error && error.message === '__subtime_sound_verified__') && !(transitionSpeedOnly && error instanceof Error && error.message === '__transition_speed_verified__') && !(timeFilterOnly && error instanceof Error && error.message === '__time_filter_verified__') && !(animationSpeedOnly && error instanceof Error && error.message === '__animation_speed_verified__') && !(prismContentOnly && error instanceof Error && error.message === '__prism_content_verified__') && !(scaleCompositionOnly && error instanceof Error && error.message === '__scale_composition_verified__') && !(uploadErrorOnly && error instanceof Error && error.message === '__upload_error_verified__') && !(latestUploadOnly && error instanceof Error && error.message === '__latest_upload_verified__') && !(shadowOffsetOnly && error instanceof Error && error.message === '__shadow_offset_verified__') && !(timeNodeTriggersOnly && error instanceof Error && error.message === '__time_node_triggers_verified__') && !(commonBehaviorMotionOnly && error instanceof Error && error.message === '__common_behavior_motion_verified__') && !(exclusiveMediaOnly && error instanceof Error && error.message === '__exclusive_media_verified__') && !(zoomPresetOnly && error instanceof Error && error.message === '__zoom_preset_verified__')) throw error
 } finally {
   await Promise.race([closeBrowser(), delay(1_000)])
   socket?.close()
@@ -8640,6 +8870,6 @@ try {
     await rm(runtimeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 }
-if (!inputPptx && !captureOnly && !indefiniteDurationOnly && !bounceEndOnly && !cutOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !themeBackgroundOnly && !transitionSoundOnly && !localeOnly && !iteratedTextEffectsOnly && !wedgeIterationOnly && !subTimeAfterEffectOnly && !subTimeSoundOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !prismContentOnly && !uploadErrorOnly && !latestUploadOnly && !timeNodeTriggersOnly) {
+if (!inputPptx && !captureOnly && !indefiniteDurationOnly && !bounceEndOnly && !cutOnly && !grayscaleOnly && !scaleCompositionOnly && !strokeWidthOnly && !shadowOffsetOnly && !themeBackgroundOnly && !transitionSoundOnly && !localeOnly && !iteratedTextEffectsOnly && !wedgeIterationOnly && !subTimeAfterEffectOnly && !subTimeSoundOnly && !transitionSpeedOnly && !timeFilterOnly && !animationSpeedOnly && !prismContentOnly && !uploadErrorOnly && !latestUploadOnly && !timeNodeTriggersOnly && !commonBehaviorMotionOnly && !exclusiveMediaOnly && !zoomPresetOnly) {
   console.log('Volume-HLC and volume-OHLC stock chart secondary-axis verification passed.')
 }

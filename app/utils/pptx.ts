@@ -5845,6 +5845,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
         const rawSpeed = timeNode?.getAttribute('spd')
         const speed = parseAnimationSpeed(rawSpeed)
         // spd is a timing-rate percentage; retain zero so the local timeline stays at its start position.
+        // Microsoft defines a negative cTn@spd as reversed timing; use its magnitude for rate and retain its sign for direction.
         // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode?view=openxml-3.0.1
         const playbackSpeed = speed ?? 1
         if (speed === undefined) warnings.add(`${effect} animations with invalid speed are played at normal speed.`)
@@ -6051,8 +6052,32 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             wallStartMs = firstChildOffsetMs <= frozenGroupTimeMs ? 0 : Infinity
         } else {
             const scale = groupTiming.durationMs / groupTiming.playbackSpeed
-            const wallProgress = inverseTimingProgress(groupTiming, firstChildOffsetMs / groupTiming.durationMs)
-            wallStartMs = (groupTiming.reversePlayback ? 1 - wallProgress : wallProgress) * scale
+            if (groupTiming.timeFilter) {
+                const childStartProgress = childOffsetMs / groupTiming.durationMs
+                const childEndProgress = firstChildOffsetMs / groupTiming.durationMs
+                const reversePlayback = groupTiming.reversePlayback
+                const parentStartProgress = timingProgress(groupTiming, reversePlayback ? 1 : 0)
+                if (parentStartProgress >= childStartProgress && parentStartProgress <= childEndProgress) {
+                    // Either playback direction can begin inside the child's active interval.
+                    wallStartMs = 0
+                } else {
+                    // Enter from the interval boundary on the side the parent clock starts on.
+                    // tmFilter still describes the authored forward curve when cTn@spd is negative;
+                    // choose the first crossing in actual wall-clock order in either direction.
+                    // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode?view=openxml-3.0.1
+                    const entersFromAbove = parentStartProgress > childEndProgress
+                    const threshold = entersFromAbove ? childEndProgress : childStartProgress
+                    const reverseDirection = entersFromAbove ? 'down' : 'up'
+                    const parentProgress = inverseTimingProgress(groupTiming, threshold, reversePlayback, reverseDirection)
+                    const wallProgress = reversePlayback ? 1 - parentProgress : parentProgress
+                    wallStartMs = Number.isFinite(wallProgress) ? wallProgress * scale : Infinity
+                }
+            } else {
+                const wallProgress = inverseTimingProgress(groupTiming, firstChildOffsetMs / groupTiming.durationMs)
+                wallStartMs = Number.isFinite(wallProgress)
+                    ? (groupTiming.reversePlayback ? 1 - wallProgress : wallProgress) * scale
+                    : Infinity
+            }
         }
         return {
             ...action,
@@ -6136,6 +6161,14 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
     // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commontimenode.presetclass?view=openxml-3.0.1
     const hasPresetClass = (timeNode: Element) => Boolean(trimXmlWhitespace(timeNode.getAttribute('presetClass')))
     const groupType = (timeNode: Element) => timeNode.getAttribute('nodeType') || (hasPresetClass(timeNode) ? 'clickEffect' : '')
+    const isClickBuildWait = (timeNode: Element, type: string | null | undefined) => {
+        const conditions = children(child(timeNode, 'stCondLst'), 'cond')
+        return startsOnClick(type)
+            && conditions.length === 1
+            && conditions[0]?.getAttribute('delay') === 'indefinite'
+            && Array.from(conditions[0].attributes).every(attribute => attribute.localName === 'delay')
+            && conditions[0].children.length === 0
+    }
     const sceneTree = firstDescendant(slideRoot, 'spTree')
     const elementsById = new Map<string, PptxElement>()
     for (const element of elements) if (!elementsById.has(element.id)) elementsById.set(element.id, element)
@@ -6315,6 +6348,8 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 : intervalNode?.localName === 'tmAbs' ? (intervalValue <= MAX_TL_TIME_MS ? intervalValue : NaN)
                     : intervalNode?.localName === 'tmPct' ? (iterationDurationMs * intervalValue) / 100_000 : NaN
             const backwardsValue = iterate.getAttribute('backwards')
+            // PowerPoint clarifies that `backwards` chooses iteration from the target's end; it does not reverse each child effect.
+            // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/b0d3dac1-75dd-4212-8c7d-af9f432b5c24
             const backwards = backwardsValue === '1' || backwardsValue === 'true'
             if (intervalNodes.length !== 1 || (!indefiniteAbsoluteInterval && (!Number.isFinite(intervalValue) || intervalValue < 0 || intervalValue > MAX_TL_TIME_MS || !Number.isFinite(intervalMs) || intervalMs < 0))) {
                 warnings.add(elementIteration ? 'A shape iteration with an unsupported interval was rendered without staggering.' : 'A text iteration with unsupported type or interval was rendered as a single animation.')
@@ -6415,7 +6450,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 }
             })
         }
-        const addMediaAction = (node: Element, targetId: string, mediaCommand: NonNullable<PptxAnimation['mediaCommand']>, options: Pick<PptxAnimation, 'mediaStartSeconds' | 'mediaSourceUrl' | 'mediaVolume' | 'mediaMuted' | 'mediaDurationMs' | 'mediaSlideCount' | 'mediaWaitForEnd' | 'mediaIsNarration'> = {}) => {
+        const addMediaAction = (node: Element, targetId: string, mediaCommand: NonNullable<PptxAnimation['mediaCommand']>, options: Pick<PptxAnimation, 'mediaStartSeconds' | 'mediaSourceUrl' | 'mediaVolume' | 'mediaMuted' | 'mediaDurationMs' | 'mediaSlideCount' | 'mediaWaitForEnd' | 'mediaIsNarration' | 'mediaIsInstantCommand'> = {}) => {
             const element = elementsById.get(targetId)
             if (mediaCommand !== 'stopAudio' && !options.mediaSourceUrl && (!element || !['audio', 'video'].includes(element.kind))) {
                 warnings.add('A media timeline action without an embedded audio or video target was skipped.')
@@ -6554,7 +6589,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                     handledMediaActions.add(command)
                     continue
                 }
-                addMediaAction(command, '', 'stopAudio')
+                addMediaAction(command, '', 'stopAudio', {mediaIsInstantCommand: true})
                 continue
             }
             const mediaCommand = playFrom ? 'play' : normalizedCommand === 'togglepause' ? 'togglePause' : normalizedCommand === 'pause' ? 'pause' : normalizedCommand === 'stop' ? 'stop' : undefined
@@ -6569,7 +6604,9 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 handledMediaActions.add(command)
                 continue
             }
-            addMediaAction(command, animationTarget.targetId, mediaCommand, {mediaStartSeconds: startSeconds})
+            // p:cmd represents a non-durational command, so its begin instant remains meaningful at the parent end boundary.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.command?view=openxml-3.0.1
+            addMediaAction(command, animationTarget.targetId, mediaCommand, {mediaStartSeconds: startSeconds, mediaIsInstantCommand: true})
         }
         for (const [effectIndex, effect] of ownedDescendants('animEffect').entries()) {
             const animationTarget = target(effect)
@@ -6949,11 +6986,6 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 (byNode && !toNode && !by)
             )
             const scaleFrom = explicitFrom ?? (explicitTo ? ([0, 0] as [number, number]) : ([1, 1] as [number, number]))
-            // Keep the OOXML default (0, 0) as the raw from-value, but compose a base-additive
-            // to-only scale track from the currently rendered scale, including its first track.
-            // Native PowerPoint/WPS playback starts the Bounce landing from the shape's existing size.
-            const iteratedTextScale = ['lt', 'wd'].includes(iterate?.getAttribute('type') || '') && Boolean(element.paragraphs.length)
-            const scaleFromCurrent = iteratedTextScale && !explicitFrom && Boolean(explicitTo) && (scaleAdditive === null || scaleAdditive === 'base')
             const scaleTo = explicitTo ?? (by ? ([scaleFrom[0] * by[0], scaleFrom[1] * by[1]] as [number, number]) : undefined)
             // MS-OI29500 permits scale percentages up to 2,147,483,625 thousandths.
             const maximumScaleFactor = 2_147_483_625 / 100_000
@@ -6973,7 +7005,6 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 effect: 'scale',
                 direction: 'in',
                 scaleFrom,
-                scaleFromCurrent,
                 scaleTo,
                 scaleAdditive: scaleAdditive === 'sum',
                 scaleMultiplicative: scaleAdditive === 'mult',
@@ -7023,16 +7054,11 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 handledRotations.add(animation)
                 continue
             }
+            // MS-OI29500 §19.5.5(b): to_only and by_only rotation tracks start at 0.
+            // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/39903f1a-fcb4-4aee-81e2-66f4fc7493fd
             const rotationFrom = from ?? 0
             const rotationTo = to ?? rotationFrom + (by ?? 0)
             const rotationAdditive = behavior?.getAttribute('additive')
-            const rotationFromCurrent = rawFrom === null && to !== undefined && (rotationAdditive === null || rotationAdditive === 'base')
-                && [...actions.values()].some(action => action.effect === 'rotation'
-                    && action.targetId === animationTarget.targetId
-                    && (!action.paragraphRange || !animationTarget.paragraphRange
-                        || action.paragraphRange.start <= animationTarget.paragraphRange.end && animationTarget.paragraphRange.start <= action.paragraphRange.end)
-                    && (!action.characterRange || !animationTarget.characterRange
-                        || action.characterRange.start < animationTarget.characterRange.end && animationTarget.characterRange.start < action.characterRange.end))
             if (!timing) {
                 handledRotations.add(animation)
                 continue
@@ -7045,7 +7071,6 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 effect: 'rotation',
                 direction: 'in',
                 rotationFrom,
-                rotationFromCurrent,
                 rotationTo,
                 rotationRelative: from === undefined && to === undefined,
                 rotationAdditive: rotationAdditive === 'sum',
@@ -7142,18 +7167,23 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             // Its childStyle text-color track is present in OOXML but WPS leaves
             // the saved text color unchanged during playback.
             const element = elementsById.get(animationTarget.targetId)
-            const colorSpace = animation.getAttribute('clrSpc') || 'rgb'
-            const colorDirection = animation.getAttribute('dir') || 'cw'
+            const rawColorSpace = animation.getAttribute('clrSpc')
+            const rawColorDirection = animation.getAttribute('dir')
+            // Apply defaults only when omitted; present values must match the schema enums.
+            // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/9636f7f3-58e3-408d-9880-d0799fb26b0f
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.animatecolorspacevalues?view=openxml-3.0.1
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.animatecolordirectionvalues?view=openxml-3.0.1
+            const colorSpace = rawColorSpace === null ? 'rgb' : trimXmlWhitespace(rawColorSpace) ?? ''
+            const colorDirection = rawColorDirection === null ? 'cw' : trimXmlWhitespace(rawColorDirection) ?? ''
             const invalidTarget =
                 !element ||
                 animationTarget.hasUnsupportedTextRange ||
-                ((animationTarget.paragraphRange || animationTarget.characterRange) && !['style.color', 'shadow.color', 'stroke.color'].includes(property || '')) ||
+                ((animationTarget.paragraphRange || animationTarget.characterRange) && !['style.color', 'stroke.color'].includes(property || '')) ||
                 !hasValidTextRange(animationTarget, element) ||
                 (property === 'fillcolor' && (element?.kind !== 'shape' || /gradient\(/i.test(element.fill))) ||
                 (property === 'stroke.color' && (!['shape', 'line'].includes(element?.kind || '') || /gradient\(/i.test(element.stroke))) ||
-                (property === 'shadow.color' && (!element || !hasShadow(element))) ||
                 (property === 'style.color' && (!element?.paragraphs.length || (element.kind === 'table' && animationTarget.paragraphRange)))
-            if (!animationTarget.targetId || invalidTarget || !['fillcolor', 'style.color', 'stroke.color', 'shadow.color'].includes(property || '')) {
+            if (!animationTarget.targetId || invalidTarget || !['fillcolor', 'style.color', 'stroke.color'].includes(property || '')) {
                 warnings.add('A color animation with an unsupported target or property was skipped.')
                 handledColors.add(animation)
                 continue
@@ -8573,6 +8603,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             const timeNode = firstDescendant(animation, 'cTn')
             const element = elementsById.get(animationTarget.targetId)
             const path = animation.getAttribute('path')?.trim() || ''
+            const behavior = child(animation, 'cBhvr')
             const rawOrigin = animation.getAttribute('origin')
             // PowerPoint defaults origin to parent only when the attribute is omitted; an explicit empty value is invalid.
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/498c3cfa-652c-49b3-a82c-33fd94468af8
@@ -8580,7 +8611,12 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             const fromNode = child(animation, 'from')
             const toNode = child(animation, 'to')
             const byNode = child(animation, 'by')
-            const hasPosition = Boolean(fromNode || toNode || byNode)
+            const hasChildPosition = Boolean(fromNode || toNode || byNode)
+            const behaviorFrom = behavior?.getAttribute('from') ?? null
+            const behaviorTo = behavior?.getAttribute('to') ?? null
+            const behaviorBy = behavior?.getAttribute('by') ?? null
+            const hasBehaviorPosition = behaviorFrom !== null || behaviorTo !== null || behaviorBy !== null
+            const hasPosition = hasChildPosition || hasBehaviorPosition
             const timing = animationTiming(timeNode, 'Motion')
             const preserveMotionTiming = () => preserveTimingOnly(animationTarget.targetId, timeNode, timing)
             if (!animationTarget.targetId) {
@@ -8603,7 +8639,13 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 continue
             }
             if (path && hasPosition) {
-                warnings.add('A motion animation combining a path with from/to/by position children was skipped.')
+                warnings.add('A motion animation combining a path with from/to/by position values was skipped.')
+                preserveMotionTiming()
+                handledMotions.add(animation)
+                continue
+            }
+            if (hasChildPosition && hasBehaviorPosition) {
+                warnings.add('A motion animation combining common-behavior from/to/by values with position children was skipped.')
                 preserveMotionTiming()
                 handledMotions.add(animation)
                 continue
@@ -8614,7 +8656,12 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 handledMotions.add(animation)
                 continue
             }
-            const behavior = child(animation, 'cBhvr')
+            if (hasBehaviorPosition && origin !== 'parent') {
+                warnings.add('Common-behavior motion values with a non-parent origin are not rendered yet.')
+                preserveMotionTiming()
+                handledMotions.add(animation)
+                continue
+            }
             const additive = behavior?.getAttribute('additive')
             if (additive !== null && additive !== undefined && !['base', 'sum'].includes(additive)) {
                 warnings.add('A motion animation with an unsupported additive mode was skipped.')
@@ -8682,6 +8729,37 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             const motionGeometry = element ? animationGeometryVariables(element, slideWidth, slideHeight) : undefined
             const formulaVariables: Record<'ppt_x' | 'ppt_y' | 'ppt_w' | 'ppt_h', number> =
                 motionGeometry || {ppt_x: Number.NaN, ppt_y: Number.NaN, ppt_w: Number.NaN, ppt_h: Number.NaN}
+            const readBehaviorPoint = (raw: string | null): [number, number] | {formulas: [string, string]} | undefined => {
+                const value = trimXmlWhitespace(raw)
+                if (!value || value.length > 32_768) return undefined
+                const isFormulaPoint = value.startsWith('(') && value.endsWith(')')
+                const pair = isFormulaPoint ? value.slice(1, -1) : value
+                const commaSeparators: number[] = []
+                const spaceSeparators: number[] = []
+                let depth = 0
+                for (let index = 0; index < pair.length; index++) {
+                    if (pair[index] === '(') depth++
+                    else if (pair[index] === ')') depth--
+                    else if (depth === 0 && pair[index] === ',') commaSeparators.push(index)
+                    else if (depth === 0 && /\s/.test(pair[index] || '') && (index === 0 || !/\s/.test(pair[index - 1] || ''))) spaceSeparators.push(index)
+                }
+                const separators = commaSeparators.length ? commaSeparators : spaceSeparators
+                for (const separator of separators) {
+                    const xFormula = pair.slice(0, separator).trim()
+                    const yFormula = pair.slice(separator + 1).trim()
+                    if (!xFormula || !yFormula || xFormula.length > 16_384 || yFormula.length > 16_384) continue
+                    const variables = {...formulaVariables, $: 0.5}
+                    const x = parseOfficeAnimationNumber(xFormula) ?? evaluateMotionFormula(xFormula, variables)
+                    const y = parseOfficeAnimationNumber(yFormula) ?? evaluateMotionFormula(yFormula, variables)
+                    if (x === undefined || y === undefined || !Number.isFinite(x) || !Number.isFinite(y)) continue
+                    if (xFormula.includes('$') || yFormula.includes('$')) {
+                        dynamicFormula = true
+                        return {formulas: [xFormula, yFormula]}
+                    }
+                    return [x, y]
+                }
+                return undefined
+            }
             const motionCoordinateBaselines = motionCoordinateProperties.map(property => formulaVariables[property])
             const rotateMotionOffset = (x: number, y: number): [number, number] => {
                 if (rotationAngle === 0 || !rotationCenter || !motionGeometry) return [x, y]
@@ -8718,22 +8796,41 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             let unsupportedFormula = false
             let dynamicFormula = false
             if (hasPosition) {
-                const hasFrom = Boolean(fromNode)
-                const hasTo = Boolean(toNode)
-                const hasBy = Boolean(byNode)
+                // MS-OI29500 §19.5.22 defines cBhvr@from/to/by motion values as 2D points,
+                // including parenthesized formulas. These are relative to the target's current position.
+                // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/b9a20a78-6401-4a8b-8ca9-b31ead409132
+                const hasFrom = hasBehaviorPosition ? behaviorFrom !== null : Boolean(fromNode)
+                const hasTo = hasBehaviorPosition ? behaviorTo !== null : Boolean(toNode)
+                const hasBy = hasBehaviorPosition ? behaviorBy !== null : Boolean(byNode)
                 const positionsAreValid = hasValidAnimateValueCombination(hasFrom, hasTo, hasBy)
-                const from = hasFrom ? readPosition(fromNode) : [0, 0] as [number, number]
+                type MotionPoint = [number, number] | {formulas: [string, string]}
+                const parsePoint = (node: Element | undefined, raw: string | null): MotionPoint | undefined => hasBehaviorPosition
+                    ? readBehaviorPoint(raw)
+                    : readPosition(node)
+                const from: MotionPoint | undefined = hasFrom
+                    ? parsePoint(fromNode, behaviorFrom)
+                    : [0, 0]
+                const by: MotionPoint | undefined = hasBy && !hasTo ? parsePoint(byNode, behaviorBy) : undefined
+                const addPoints = (left: MotionPoint, right: MotionPoint): MotionPoint => {
+                    if (Array.isArray(left) && Array.isArray(right)) return [left[0] + right[0], left[1] + right[1]]
+                    const leftValues = Array.isArray(left) ? left.map(String) as [string, string] : left.formulas
+                    const rightValues = Array.isArray(right) ? right.map(String) as [string, string] : right.formulas
+                    return {formulas: [`(${leftValues[0]})+(${rightValues[0]})`, `(${leftValues[1]})+(${rightValues[1]})`]}
+                }
                 // When both to and by are present, PowerPoint uses to and ignores by.
-                const to = hasTo
-                    ? readPosition(toNode)
-                    : hasBy && from
-                        ? (() => {
-                            const by = readPosition(byNode)
-                            return by ? [from[0] + by[0], from[1] + by[1]] as [number, number] : undefined
-                        })()
+                const to: MotionPoint | undefined = hasTo
+                    ? parsePoint(toNode, behaviorTo)
+                    : by && from
+                        ? addPoints(from, by)
                         : undefined
-                const withinPowerPointRange = (position: [number, number] | undefined) => Boolean(position
-                    && position.every(value => Number.isFinite(value) && value >= -2_147_483_625 && value <= 2_147_483_625))
+                const pointValues = (position: MotionPoint): [number, number] => Array.isArray(position)
+                    ? position
+                    : [
+                          evaluateMotionFormula(position.formulas[0], {...formulaVariables, $: 0.5}) ?? Number.NaN,
+                          evaluateMotionFormula(position.formulas[1], {...formulaVariables, $: 0.5}) ?? Number.NaN
+                      ]
+                const withinPowerPointRange = (position: MotionPoint | undefined) => Boolean(position
+                    && pointValues(position).every(value => Number.isFinite(value) && value >= -2_147_483_625 && value <= 2_147_483_625))
                 if (!positionsAreValid || !from || !to || !withinPowerPointRange(from) || !withinPowerPointRange(to)) {
                     invalidPathSyntax = true
                 } else {
@@ -8742,11 +8839,17 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                     // preserve the same pacing, repeats, rotation, and additive behavior.
                     // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/0ce2da92-a863-43f5-be08-8a600f8ba222
                     // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/f8515cce-689b-42c6-aaa1-816d25c1fd7b
-                    const relativeLayoutPath = origin === 'layout'
-                    const toPathCoordinates = (position: [number, number]): [number, number] => relativeLayoutPath
-                        ? position
-                        : [position[0] + motionCoordinateBaselines[0]!, position[1] + motionCoordinateBaselines[1]!]
-                    tokens.push('M', {coordinates: toPathCoordinates(from)}, 'L', {coordinates: toPathCoordinates(to)}, 'E')
+                    const toPathCoordinates = (position: MotionPoint): MotionPoint => {
+                        if (!hasBehaviorPosition && origin === 'layout') return position
+                        if (Array.isArray(position)) return [position[0] + motionCoordinateBaselines[0]!, position[1] + motionCoordinateBaselines[1]!]
+                        return {formulas: [
+                            `(${position.formulas[0]})+(${motionCoordinateBaselines[0]})`,
+                            `(${position.formulas[1]})+(${motionCoordinateBaselines[1]})`
+                        ]}
+                    }
+                    const pathPoint = (position: MotionPoint): {coordinates: [number, number]} | {formulas: [string, string]} =>
+                        Array.isArray(position) ? {coordinates: position} : {formulas: position.formulas}
+                    tokens.push('M', pathPoint(toPathCoordinates(from)), 'L', pathPoint(toPathCoordinates(to)), 'E')
                 }
             }
             while (!hasPosition && scan < path.length && !invalidPathSyntax) {
@@ -9629,7 +9732,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             ? ownedDescendants('cTn').reduce((duration, timeNode) => Math.max(duration, timelineTime(timeNode.getAttribute('dur'), 0)), 0)
             : 0)
         let groupedActions = [...actions.entries()].flatMap(([actionKey, action], actionIndex) => {
-            const mediaActionKey = action.effect === 'media' ? `${sequenceKey}:${sequenceOrder}:${actionIndex}:${action.targetId}` : undefined
+            const mediaActionKey = action.effect === 'media' ? `${sequenceKey}:${sequenceOrder}:${actionIndex}:${action.targetId}:${mediaTimeNodeIds.get(actionKey) ?? actionKey}` : undefined
             const mediaTimeNodeId = mediaTimeNodeIds.get(actionKey)
             if (mediaTimeNodeId && mediaActionKey) {
                 if (sequenceKey === 'main') {
@@ -9782,7 +9885,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
         return timedActions
     }
 
-    const conditionalSequencePlans: Array<{step: PptxAnimation[]; actions: PptxAnimation[][]; concurrent: boolean; nextAction: 'none' | 'seek'}> = []
+    const conditionalSequencePlans: Array<{step: PptxAnimation[]; actions: PptxAnimation[][]; concurrent: boolean; nextAction: 'none' | 'seek'; rewindsOnPrevious: boolean}> = []
     const appendSubTimeEntry = (
         entry: Element,
         ownerGroup: Element,
@@ -9799,15 +9902,19 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             // any matching condition advances or rewinds the sequence.
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/a5b47f26-9eb6-4d45-acd6-e7183453307a
             // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/31d28bcd-cca2-42ea-95af-eb32b797e869
-            return conditions.length > 0 && conditions.every(condition =>
+            const isSupported = (condition: Element) =>
                 condition.getAttribute('evt') === eventName
                 && (!condition.hasAttribute('delay') || (isFiniteTimelineTime(condition.getAttribute('delay')) && timelineTime(condition.getAttribute('delay'), Number.NaN) === 0))
                 && condition.children.length === 1
                 && condition.children[0]?.localName === 'tgtEl'
                 && Boolean(firstDescendant(condition, 'sldTgt'))
-            )
+            const hasSupportedAlternative = conditions.some(isSupported)
+            if (hasSupportedAlternative && conditions.some(condition => !isSupported(condition))) {
+                warnings.add(`Some ${listName} alternatives in a nested p:seq are unsupported; immediate slide-target navigation alternatives are applied.`)
+            }
+            return hasSupportedAlternative
         }
-        const supportsConditionalSequence = (sequenceNode: Element, timeNode: Element, childCount: number) => {
+        const supportsConditionalSequence = (sequenceNode: Element, timeNode: Element, childCount: number, advancesOnNext: boolean) => {
             const concurrent = sequenceNode.getAttribute('concurrent')
             const nextAction = sequenceNode.getAttribute('nextAc')
             const previousAction = sequenceNode.getAttribute('prevAc')
@@ -9821,8 +9928,7 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                 && !['accel', 'decel', 'tmFilter', 'spd', 'repeatCount', 'repeatDur', 'autoRev'].some(attribute => timeNode.hasAttribute(attribute))
                 && !descendants(sequenceNode, 'subTnLst').length
                 && !descendants(sequenceNode, 'seq').some(nested => nested !== sequenceNode && (child(nested, 'nextCondLst') || child(nested, 'prevCondLst')))
-                && hasImmediateSlideCondition(sequenceNode, 'nextCondLst', 'onNext')
-                && hasImmediateSlideCondition(sequenceNode, 'prevCondLst', 'onPrev')
+                && advancesOnNext
         }
         const append = (
             node: Element,
@@ -9893,12 +9999,18 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             }
             if (depth > 0 && timeNode.hasAttribute('masterRel')) warnings.add('A nested p:subTnLst masterRel value is ignored; only the root entry relation is applied.')
             const sequenceControlsPresent = node.localName === 'seq' && (child(node, 'nextCondLst') || child(node, 'prevCondLst') || (node.hasAttribute('concurrent') && !['0', 'false'].includes(node.getAttribute('concurrent') || '')) || (node.hasAttribute('nextAc') && node.getAttribute('nextAc') !== 'none') || (node.hasAttribute('prevAc') && node.getAttribute('prevAc') !== 'none'))
+            const conditionalNavigation = sequenceControlsPresent
+                ? {
+                      advancesOnNext: hasImmediateSlideCondition(node, 'nextCondLst', 'onNext'),
+                      rewindsOnPrevious: hasImmediateSlideCondition(node, 'prevCondLst', 'onPrev')
+                  }
+                : undefined
             const conditionalSequence = depth === 0
                 && node === entry
                 && sequenceKey === 'main'
                 && steps.indexOf(sequence) >= 0
                 && sequence.length === 0
-                && supportsConditionalSequence(node, timeNode, childTimeNodes.length)
+                && supportsConditionalSequence(node, timeNode, childTimeNodes.length, conditionalNavigation?.advancesOnNext === true)
             if (sequenceControlsPresent && !conditionalSequence) {
                 warnings.add('Some navigation, concurrency, or seek/skip behavior on a nested p:seq is not applied.')
             }
@@ -10079,7 +10191,8 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
                         step: sequence,
                         actions: childSteps,
                         concurrent: concurrentValue === '1' || concurrentValue === 'true',
-                        nextAction: node.getAttribute('nextAc') === 'seek' ? 'seek' : 'none'
+                        nextAction: node.getAttribute('nextAc') === 'seek' ? 'seek' : 'none',
+                        rewindsOnPrevious: conditionalNavigation?.rewindsOnPrevious === true
                     })
                 } else {
                     sequence.push(...conditionalChildActions.flatMap(({actions}) => actions))
@@ -10224,7 +10337,14 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
         }
         const sequence = currentStep || automaticAnimations
         const mediaWaitForEndKeys = [...new Set(sequence.flatMap(action => (action.mediaWaitForEnd && action.mediaActionKey ? [action.mediaActionKey] : [])))]
-        const precedingEnd = followsPreviousGroup(type) ? sequence.reduce((end, action) => Math.max(end, action.delayMs + playbackDuration(action)), 0) : 0
+        const precedingEnd = followsPreviousGroup(type) ? sequence.reduce((end, action) => {
+            const duration = playbackDuration(action)
+            // An indefinite media node completes from its media event, represented by mediaWaitForEndKeys.
+            // Keep it out of the numeric offset so an afterEffect can be released when that event arrives.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.commonmedianode?view=openxml-3.0.1
+            if (action.effect === 'media' && action.mediaWaitForEnd && action.mediaActionKey && !Number.isFinite(duration)) return end
+            return Math.max(end, action.delayMs + duration)
+        }, 0) : 0
         const eventTimeNodeSources = eventTimeNodeSourcesForStep(timeNodeSources, currentStep ? steps.length - 1 : undefined)
         const parentTimeNodes: Element[] = []
         let parent: Element | null = timeNode
@@ -10234,7 +10354,15 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
         }
         let resolvedGroupStartMs = precedingEnd
         for (const parentTimeNode of parentTimeNodes.reverse()) {
-            const startMs = subTimeEventStartTime(parentTimeNode, resolvedGroupStartMs, eventTimeNodeSources)
+            // Main-sequence clickEffect/clickPar nodes use a lone indefinite delay as the
+            // click-build activation sentinel. The player activates that build on user input,
+            // so nested withEffect nodes share the build boundary instead of inheriting Infinity.
+            // Keep unrelated indefinite conditions unresolved.
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.timenodevalues?view=openxml-3.0.1
+            // https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.startconditionlist?view=openxml-3.0.1
+            const startMs = isClickBuildWait(parentTimeNode, groupType(parentTimeNode))
+                ? resolvedGroupStartMs
+                : subTimeEventStartTime(parentTimeNode, resolvedGroupStartMs, eventTimeNodeSources)
             if (startMs === undefined) {
                 warnings.add('An animation with event-based or invalid start conditions could not be activated.')
                 resolvedGroupStartMs = Number.POSITIVE_INFINITY
@@ -10461,7 +10589,12 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
             }
             let resolvedGroupStartMs = precedingEnd
             for (const parentTimeNode of parentTimeNodes.reverse()) {
-                const startMs = subTimeEventStartTime(parentTimeNode, resolvedGroupStartMs, eventTimeNodeSources)
+                // Interactive clickEffect/clickPar nodes are already dispatched by the shape
+                // trigger above; map a parent click node's lone indefinite activation sentinel
+                // to this step's local clock, including when parsing a nested withEffect child.
+                const startMs = isClickBuildWait(parentTimeNode, groupType(parentTimeNode))
+                    ? resolvedGroupStartMs
+                    : subTimeEventStartTime(parentTimeNode, resolvedGroupStartMs, eventTimeNodeSources)
                 if (startMs === undefined) {
                     warnings.add('An interactive animation with event-based or invalid start conditions could not be activated.')
                     resolvedGroupStartMs = Number.POSITIVE_INFINITY
@@ -10654,18 +10787,29 @@ async function parseAnimations(slideRoot: Element, slidePath: string, theme: Rec
         const expandedStepSequences: NonNullable<PptxSlide['animationStepSequences']> = []
         const remappedSteps = new Map<number, number>()
         for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
-            remappedSteps.set(stepIndex, expandedSteps.length)
+            const baseExpandedStepIndex = expandedSteps.length
+            remappedSteps.set(stepIndex, baseExpandedStepIndex)
             expandedSteps.push(steps[stepIndex]!)
             const plans = plansByStep.get(stepIndex) || []
             const childCount = Math.max(0, ...plans.map(plan => plan.actions.length))
             const sequenceMetadata = (childIndex: number) => {
                 const advancesOnNext = plans.some(plan => plan.actions.length > childIndex + 1)
-                const rewindsOnPrevious = childIndex > 0 && plans.some(plan => plan.actions.length > childIndex)
+                const hasPreviousBoundary = childIndex > 0 && plans.some(plan => plan.actions.length > childIndex)
+                const rewindsWithinSequence = hasPreviousBoundary && plans.some(plan => plan.rewindsOnPrevious && plan.actions.length > childIndex)
+                const rewindsToParentSequence = hasPreviousBoundary && !rewindsWithinSequence && animationSequence?.rewindsOnPrevious !== false
+                const rewindsOnPrevious = rewindsWithinSequence || rewindsToParentSequence
                 const advancingPlan = advancesOnNext ? plans.find(plan => plan.actions.length > childIndex + 1) : undefined
-                return advancesOnNext || rewindsOnPrevious
+                return advancesOnNext || hasPreviousBoundary
                     ? {
                           ...(advancesOnNext ? {concurrent: advancingPlan!.concurrent, nextAction: advancingPlan!.nextAction, advancesOnNext: true} : {}),
-                          ...(rewindsOnPrevious ? {rewindsOnPrevious: true} : {})
+                          ...(hasPreviousBoundary
+                              ? {
+                                    rewindsOnPrevious,
+                                    ...(rewindsOnPrevious
+                                        ? {previousStepIndex: rewindsWithinSequence ? baseExpandedStepIndex + childIndex - 1 : baseExpandedStepIndex - 1}
+                                        : {})
+                                }
+                              : {})
                       }
                     : undefined
             }
